@@ -63,6 +63,11 @@ class TripSerializer(serializers.ModelSerializer):
             "ota_source",
             "fare_amount",
             "notes",
+            "pickup_latitude",
+            "pickup_longitude",
+            "drop_latitude",
+            "drop_longitude",
+            "distance_km",
         ]
 
     def validate(self, attrs):
@@ -122,6 +127,8 @@ class TransitionTripSerializer(serializers.Serializer):
             elif trip.status in [TripStatus.COMPLETED, TripStatus.CANCELLED]:
                 trip.vehicle.status = VehicleStatus.IDLE
                 trip.vehicle.current_city = trip.drop_city
+            elif trip.status == TripStatus.ASSIGNED:
+                trip.vehicle.status = VehicleStatus.IDLE
             trip.vehicle.save()
 
         if trip.driver_id:
@@ -129,6 +136,8 @@ class TransitionTripSerializer(serializers.Serializer):
                 trip.driver.status = DriverStatus.ON_TRIP
             elif trip.status in [TripStatus.COMPLETED, TripStatus.CANCELLED]:
                 trip.driver.status = DriverStatus.AVAILABLE
+            elif trip.status == TripStatus.ASSIGNED:
+                trip.driver.status = DriverStatus.ASSIGNED
             trip.driver.save()
 
         return trip

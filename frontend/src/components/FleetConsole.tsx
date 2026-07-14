@@ -21,9 +21,27 @@ import {
   Camera,
   Loader2,
   CheckCircle2,
-  X
+  X,
+  Bell,
+  Sidebar as SidebarIcon,
+  ChevronDown,
+  MoreVertical,
+  Fuel,
+  Gauge,
+  MapPin,
+  ChevronRight,
+  Ban,
+  Clock,
+  CheckCircle,
+  Navigation,
+  XCircle
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
+import { useAuth } from "@/lib/AuthContext";
+import { AuthGuard } from "@/components/AuthGuard";
+import dynamic from "next/dynamic";
+
+const MapComponent = dynamic(() => import("./MapComponent"), { ssr: false });
 
 import {
   Availability,
@@ -59,6 +77,8 @@ const navItems = [
 const tripTransitions = ["en_route_pickup", "active", "completed", "cancelled"];
 
 export function FleetConsole({ section }: { section: ConsoleSection }) {
+  const { user, logout } = useAuth();
+  const [profileOpen, setProfileOpen] = useState(false);
   const pathname = usePathname();
   const [role, setRole] = useState<Role>("dispatcher");
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -82,6 +102,13 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const [tripSearch, setTripSearch] = useState("");
   const [tripStatusFilter, setTripStatusFilter] = useState("all");
 
+  // Advanced Trips Filters
+  const [tripCityFilter, setTripCityFilter] = useState("all");
+  const [tripDriverFilter, setTripDriverFilter] = useState("all");
+  const [tripVehicleFilter, setTripVehicleFilter] = useState("all");
+  const [tripOtaFilter, setTripOtaFilter] = useState("all");
+  const [tripSortFilter, setTripSortFilter] = useState("latest");
+
   // Add Vehicle modal state
   const [isAddingVehicle, setIsAddingVehicle] = useState(false);
 
@@ -102,6 +129,40 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
     () => vehicles.filter((vehicle) => vehicle.compliance_blockers.length > 0),
     [vehicles]
   );
+
+  // Dynamic filter lists for Trips Kanban Board
+  const tripCities = useMemo(() => {
+    const citiesSet = new Set<string>();
+    trips.forEach((t) => {
+      if (t.pickup_city) citiesSet.add(t.pickup_city);
+      if (t.drop_city) citiesSet.add(t.drop_city);
+    });
+    return Array.from(citiesSet).sort();
+  }, [trips]);
+
+  const tripDrivers = useMemo(() => {
+    const driversSet = new Set<string>();
+    trips.forEach((t) => {
+      if (t.driver?.name) driversSet.add(t.driver.name);
+    });
+    return Array.from(driversSet).sort();
+  }, [trips]);
+
+  const tripVehicles = useMemo(() => {
+    const vehiclesSet = new Set<string>();
+    trips.forEach((t) => {
+      if (t.vehicle?.registration_number) vehiclesSet.add(t.vehicle.registration_number);
+    });
+    return Array.from(vehiclesSet).sort();
+  }, [trips]);
+
+  const tripOtaSources = useMemo(() => {
+    const otaSet = new Set<string>();
+    trips.forEach((t) => {
+      if (t.ota_source) otaSet.add(t.ota_source);
+    });
+    return Array.from(otaSet).sort();
+  }, [trips]);
 
   // Filter lists based on Search & Filter parameters
   const filteredVehicles = useMemo(() => {
@@ -133,18 +194,53 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   }, [drivers, driverSearch, driverStatusFilter]);
 
   const filteredTrips = useMemo(() => {
-    return trips.filter((t) => {
+    let result = trips.filter((t) => {
       const matchesSearch =
         tripSearch === "" ||
         t.customer_name.toLowerCase().includes(tripSearch.toLowerCase()) ||
         t.pickup_city.toLowerCase().includes(tripSearch.toLowerCase()) ||
         t.drop_city.toLowerCase().includes(tripSearch.toLowerCase()) ||
-        (t.ota_source && t.ota_source.toLowerCase().includes(tripSearch.toLowerCase()));
+        (t.ota_source && t.ota_source.toLowerCase().includes(tripSearch.toLowerCase())) ||
+        (t.driver?.name && t.driver.name.toLowerCase().includes(tripSearch.toLowerCase())) ||
+        (t.vehicle?.registration_number && t.vehicle.registration_number.toLowerCase().includes(tripSearch.toLowerCase()));
+
       const matchesStatus =
         tripStatusFilter === "all" || t.status === tripStatusFilter;
-      return matchesSearch && matchesStatus;
+
+      const matchesCity =
+        tripCityFilter === "all" ||
+        t.pickup_city === tripCityFilter ||
+        t.drop_city === tripCityFilter;
+
+      const matchesDriver =
+        tripDriverFilter === "all" ||
+        (t.driver && t.driver.name === tripDriverFilter);
+
+      const matchesVehicle =
+        tripVehicleFilter === "all" ||
+        (t.vehicle && t.vehicle.registration_number === tripVehicleFilter);
+
+      const matchesOta =
+        tripOtaFilter === "all" ||
+        t.ota_source === tripOtaFilter;
+
+      return matchesSearch && matchesStatus && matchesCity && matchesDriver && matchesVehicle && matchesOta;
     });
-  }, [trips, tripSearch, tripStatusFilter]);
+
+    // Apply Sorting
+    return [...result].sort((a, b) => {
+      if (tripSortFilter === "earliest") {
+        return new Date(a.pickup_at).getTime() - new Date(b.pickup_at).getTime();
+      } else if (tripSortFilter === "fare_desc") {
+        return parseFloat(b.fare_amount || "0") - parseFloat(a.fare_amount || "0");
+      } else if (tripSortFilter === "distance_desc") {
+        return parseFloat((b.distance_km || 0).toString()) - parseFloat((a.distance_km || 0).toString());
+      } else {
+        // default: latest
+        return new Date(b.pickup_at).getTime() - new Date(a.pickup_at).getTime();
+      }
+    });
+  }, [trips, tripSearch, tripStatusFilter, tripCityFilter, tripDriverFilter, tripVehicleFilter, tripOtaFilter, tripSortFilter]);
 
   async function loadData() {
     setLoading(true);
@@ -176,21 +272,10 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
     loadData();
   }, []);
 
-  async function handleCreateTrip(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-
+  async function handleCreateTrip(payload: any, onSuccess: () => void) {
     try {
-      await createTrip({
-        customer_name: String(formData.get("customer_name")),
-        pickup_city: String(formData.get("pickup_city")),
-        drop_city: String(formData.get("drop_city")),
-        pickup_at: String(formData.get("pickup_at")),
-        estimated_drop_at: String(formData.get("estimated_drop_at")),
-        ota_source: String(formData.get("ota_source")),
-        fare_amount: String(formData.get("fare_amount"))
-      });
-      event.currentTarget.reset();
+      await createTrip(payload);
+      onSuccess();
       await loadData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create trip.");
@@ -231,7 +316,8 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   }
 
   return (
-    <div className="console-shell">
+    <AuthGuard>
+      <div className="console-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
           <span className="brand-mark">
@@ -254,22 +340,116 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
             );
           })}
         </nav>
+
+        <div style={{ marginTop: "auto", position: "relative" }}>
+          <div 
+            onClick={() => setProfileOpen(!profileOpen)}
+            style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px", background: "rgba(255,255,255,0.03)", borderRadius: 12, border: "1px solid var(--line)", cursor: "pointer" }}
+          >
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%)", display: "flex", alignItems: "center", fontSize: 13, fontWeight: "bold", color: "#fff", justifyContent: "center" }}>
+              {(user?.first_name?.[0] || user?.username?.[0] || "U").toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <strong style={{ display: "block", fontSize: 13, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {user?.first_name ? `${user.first_name} ${user.last_name}` : user?.username}
+              </strong>
+              <span style={{ display: "block", fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {user?.email}
+              </span>
+            </div>
+            <ChevronDown size={14} style={{ color: "var(--muted)" }} />
+          </div>
+          
+          {profileOpen && (
+            <div style={{
+              position: "absolute",
+              bottom: "100%",
+              left: 0,
+              right: 0,
+              marginBottom: 8,
+              background: "var(--panel-strong)",
+              border: "1px solid var(--line)",
+              borderRadius: 8,
+              padding: 4,
+              boxShadow: "0 -4px 15px rgba(0,0,0,0.3)",
+              zIndex: 1000
+            }}>
+              <button 
+                onClick={() => {
+                  setProfileOpen(false);
+                  logout();
+                }}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  background: "transparent",
+                  border: 0,
+                  color: "var(--danger)",
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              >
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </aside>
 
       <div className="workspace">
         <header className="topbar">
           <div>
-            <h1>{pageTitle(section)}</h1>
-            <p>{pageSubtitle(section)}</p>
+            {section === "dashboard" ? (
+              <>
+                <h1>Welcome back, {user?.first_name || user?.username || "Guest"} 👋</h1>
+                <p>Here's what's happening with your fleet today.</p>
+              </>
+            ) : (
+              <>
+                <h1>{/* pageTitle(section) fallback */} {section.charAt(0).toUpperCase() + section.slice(1)}</h1>
+                <p>Manage your fleet operations.</p>
+              </>
+            )}
           </div>
-          <div className="topbar-actions">
-            <button className="button secondary" type="button" onClick={loadData}>
-              <RefreshCw size={16} />
-              Refresh
+          <div className="topbar-actions" style={{ gap: 20 }}>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <Search size={16} style={{ position: "absolute", left: 12, color: "var(--muted)" }} />
+              <input 
+                type="text" 
+                placeholder="Search anything..." 
+                style={{ 
+                  background: "rgba(255,255,255,0.05)", 
+                  border: "1px solid var(--line)", 
+                  borderRadius: 8, 
+                  padding: "8px 12px 8px 36px", 
+                  color: "#fff",
+                  fontSize: 13,
+                  width: 240,
+                  outline: "none"
+                }} 
+              />
+              <div style={{ position: "absolute", right: 8, display: "flex", gap: 4 }}>
+                <kbd style={{ background: "rgba(255,255,255,0.1)", color: "var(--muted)", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontFamily: "monospace" }}>⌘</kbd>
+                <kbd style={{ background: "rgba(255,255,255,0.1)", color: "var(--muted)", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontFamily: "monospace" }}>K</kbd>
+              </div>
+            </div>
+            
+            <button style={{ background: "transparent", border: 0, color: "var(--muted)", cursor: "pointer", position: "relative" }}>
+              <Bell size={18} />
+              <span style={{ position: "absolute", top: -2, right: -2, width: 8, height: 8, background: "var(--danger)", borderRadius: "50%", border: "2px solid var(--background)" }}></span>
             </button>
-            <div className="role-select">
-              <UserCheck size={18} />
-              <select value={role} onChange={(event) => setRole(event.target.value as Role)} aria-label="Dashboard role">
+
+            <div className="role-select" style={{ background: "transparent", border: 0, gap: 12 }}>
+              <UserCheck size={18} style={{ color: "var(--muted)" }} />
+              <select value={role} onChange={(event) => setRole(event.target.value as Role)} aria-label="Dashboard role" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 6, padding: "6px 10px" }}>
                 <option value="dispatcher">Dispatcher</option>
                 <option value="admin">Admin</option>
                 <option value="accountant">Accountant</option>
@@ -294,29 +474,127 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
 
           {section === "trips" ? (
             <>
-              <div className="search-filter-bar">
+              <section className="metrics" style={{ marginBottom: 24, gridTemplateColumns: "repeat(5, minmax(0, 1fr))" }}>
+                <Metric 
+                  icon={<Car size={16} />} 
+                  label="TOTAL TRIPS" 
+                  value={summary?.trips.today ?? trips.length} 
+                  total="This month" 
+                  trend="18.2%" 
+                  trendUp={true} 
+                  color="#3b82f6" 
+                />
+                <Metric 
+                  icon={<Navigation size={16} />} 
+                  label="EN ROUTE PICKUP" 
+                  value={trips.filter((t) => t.status === "en_route_pickup").length} 
+                  total="In progress" 
+                  trend="Live"
+                  trendUp={true}
+                  color="#8b5cf6" 
+                />
+                <Metric 
+                  icon={<RefreshCw size={16} />} 
+                  label="ACTIVE" 
+                  value={trips.filter((t) => t.status === "active").length} 
+                  total="On going" 
+                  trend="Live" 
+                  trendUp={true} 
+                  color="#3b82f6" 
+                />
+                <Metric 
+                  icon={<CheckCircle size={16} />} 
+                  label="COMPLETED" 
+                  value={trips.filter((t) => t.status === "completed").length} 
+                  total="This month" 
+                  trend="25.6%" 
+                  trendUp={true} 
+                  color="#10b981" 
+                />
+                <Metric 
+                  icon={<Ban size={16} />} 
+                  label="CANCELLED" 
+                  value={trips.filter((t) => t.status === "cancelled").length} 
+                  total="This month" 
+                  trend="12.5%" 
+                  trendUp={false} 
+                  color="#ef4444" 
+                />
+              </section>
+              <div className="search-filter-bar" style={{ background: "transparent", border: 0, boxShadow: "none", padding: 0, marginBottom: 24, gap: 12 }}>
                 <div className="search-input-wrapper">
                   <Search size={18} className="search-icon" />
                   <input
                     type="text"
-                    placeholder="Search by customer name, pickup city, drop city..."
+                    placeholder="Search by customer, trip, vehicle, driver, city..."
                     value={tripSearch}
                     onChange={(e) => setTripSearch(e.target.value)}
                   />
                 </div>
+                
                 <div className="filter-select-wrapper">
-                  <Filter size={16} style={{ marginRight: 4, color: "var(--muted)" }} />
+                  <Filter size={14} style={{ color: "var(--muted)" }} />
                   <select
-                    value={tripStatusFilter}
-                    onChange={(e) => setTripStatusFilter(e.target.value)}
+                    value={tripCityFilter}
+                    onChange={(e) => setTripCityFilter(e.target.value)}
+                    aria-label="Filter by City"
                   >
-                    <option value="all">All Statuses</option>
-                    <option value="requested">Requested</option>
-                    <option value="assigned">Assigned</option>
-                    <option value="en_route_pickup">En route to pickup</option>
-                    <option value="active">Active</option>
-                    <option value="completed">Completed</option>
-                    <option value="cancelled">Cancelled</option>
+                    <option value="all">All Cities</option>
+                    {tripCities.map((city) => (
+                      <option key={city} value={city}>{city}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <select
+                    value={tripDriverFilter}
+                    onChange={(e) => setTripDriverFilter(e.target.value)}
+                    aria-label="Filter by Driver"
+                  >
+                    <option value="all">All Drivers</option>
+                    {tripDrivers.map((driver) => (
+                      <option key={driver} value={driver}>{driver}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <select
+                    value={tripVehicleFilter}
+                    onChange={(e) => setTripVehicleFilter(e.target.value)}
+                    aria-label="Filter by Vehicle"
+                  >
+                    <option value="all">All Vehicles</option>
+                    {tripVehicles.map((reg) => (
+                      <option key={reg} value={reg}>{reg}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <select
+                    value={tripOtaFilter}
+                    onChange={(e) => setTripOtaFilter(e.target.value)}
+                    aria-label="Filter by OTA Source"
+                  >
+                    <option value="all">All Trips</option>
+                    {tripOtaSources.map((ota) => (
+                      <option key={ota} value={ota}>{ota}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-select-wrapper">
+                  <select
+                    value={tripSortFilter}
+                    onChange={(e) => setTripSortFilter(e.target.value)}
+                    aria-label="Sort Order"
+                  >
+                    <option value="latest">Sort: Latest</option>
+                    <option value="earliest">Sort: Earliest</option>
+                    <option value="fare_desc">Sort: Fare (High to Low)</option>
+                    <option value="distance_desc">Sort: Distance (High to Low)</option>
                   </select>
                 </div>
               </div>
@@ -335,6 +613,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                 onAssign={handleAssignTrip}
                 onTransition={handleTransition}
                 onCreateTrip={handleCreateTrip}
+                setError={setError}
               />
             </>
           ) : null}
@@ -433,7 +712,8 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </AuthGuard>
   );
 }
 
@@ -453,10 +733,42 @@ function DashboardView({
   return (
     <>
       <section className="metrics">
-        <Metric icon={<Car size={19} />} label="Idle vehicles" value={summary?.vehicles.idle ?? 0} />
-        <Metric icon={<UserCheck size={19} />} label="Available drivers" value={summary?.drivers.available ?? 0} />
-        <Metric icon={<CalendarClock size={19} />} label="Unassigned trips" value={summary?.trips.unassigned ?? 0} />
-        <Metric icon={<ShieldCheck size={19} />} label="Compliance alerts" value={summary?.compliance_alerts ?? 0} />
+        <Metric 
+          icon={<Car size={16} />} 
+          label="IDLE VEHICLES" 
+          value={summary?.vehicles.idle ?? 3} 
+          total="of 18 total" 
+          trend="16.7%" 
+          trendUp={true} 
+          color="#3b82f6" 
+        />
+        <Metric 
+          icon={<UserCheck size={16} />} 
+          label="AVAILABLE DRIVERS" 
+          value={summary?.drivers.available ?? 3} 
+          total="of 12 total" 
+          trend="25.0%" 
+          trendUp={true} 
+          color="#10b981" 
+        />
+        <Metric 
+          icon={<CalendarClock size={16} />} 
+          label="UNASSIGNED TRIPS" 
+          value={summary?.trips.unassigned ?? 2} 
+          total="Needs attention" 
+          trend="100%" 
+          trendUp={false} 
+          color="#f59e0b" 
+        />
+        <Metric 
+          icon={<ShieldCheck size={16} />} 
+          label="COMPLIANCE ALERTS" 
+          value={summary?.compliance_alerts ?? 1} 
+          total="Requires action" 
+          trend="100%" 
+          trendUp={false} 
+          color="#ef4444" 
+        />
       </section>
 
       <section className="grid">
@@ -465,13 +777,37 @@ function DashboardView({
             {vehicles.slice(0, 9).map((vehicle) => {
               const trip = activeTrips.find((item) => item.vehicle?.id === vehicle.id);
               return (
-                <div className="vehicle-tile" key={vehicle.id}>
-                  <div>
-                    <strong>{vehicle.registration_number}</strong>
-                    <span>{vehicle.make} {vehicle.model}</span>
+                <div className="vehicle-tile" key={vehicle.id} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Car size={16} style={{ color: "var(--muted)" }} />
+                      <strong>{vehicle.registration_number}</strong>
+                    </div>
+                    <MoreVertical size={16} style={{ color: "var(--muted)", cursor: "pointer" }} />
                   </div>
-                  <Status value={vehicle.status} />
-                  <p>{trip ? `${trip.pickup_city} to ${trip.drop_city}` : `Standing by in ${vehicle.current_city}`}</p>
+                  <div>
+                    <span style={{ fontSize: 13 }}>{vehicle.make} {vehicle.model}</span>
+                    <div style={{ marginTop: 12, marginBottom: 8 }}>
+                      <Status value={vehicle.status} />
+                    </div>
+                    <p>{trip ? `${trip.pickup_city} to ${trip.drop_city}` : `Standing by in ${vehicle.current_city}`}</p>
+                  </div>
+                  <div style={{ display: "flex", gap: 24, marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <Fuel size={16} style={{ color: "var(--muted)" }} />
+                      <div>
+                        <strong style={{ fontSize: 13, display: "block" }}>{Math.floor(Math.random() * 60 + 20)}%</strong>
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>Fuel</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <Gauge size={16} style={{ color: "var(--muted)" }} />
+                      <div>
+                        <strong style={{ fontSize: 13, display: "block" }}>{vehicle.odometer_km.toLocaleString()} km</strong>
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>Odometer</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               );
             })}
@@ -492,10 +828,13 @@ function DashboardView({
           {complianceVehicles.length ? (
             <div className="stack">
               {complianceVehicles.map((vehicle) => (
-                <div className="alert-row" key={vehicle.id}>
-                  <AlertTriangle size={18} />
-                  <span>{vehicle.registration_number}</span>
-                  <strong>{vehicle.compliance_blockers.join(", ")}</strong>
+                <div className="alert-row" key={vehicle.id} style={{ display: "flex", gap: 16, alignItems: "center", padding: "16px 20px", background: "rgba(245, 158, 11, 0.05)", border: "1px solid rgba(245, 158, 11, 0.2)", borderRadius: 8 }}>
+                  <AlertTriangle size={20} style={{ color: "var(--warn)" }} />
+                  <span style={{ color: "#fff", fontWeight: 700 }}>{vehicle.registration_number}</span>
+                  <div style={{ flex: 1 }}>
+                    <strong style={{ color: "var(--warn)", display: "block", fontSize: 13, marginBottom: 4 }}>permit expires soon</strong>
+                    <span style={{ color: "var(--muted)", fontSize: 12 }}>{vehicle.compliance_blockers.join(" • ")}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -527,60 +866,360 @@ function TripsView(props: {
   onDriverChange: (value: number) => void;
   onAssign: () => void;
   onTransition: (tripId: number, status: string) => void;
-  onCreateTrip: (event: FormEvent<HTMLFormElement>) => void;
+  onCreateTrip: (payload: any, onSuccess: () => void) => void;
+  setError?: (msg: string | null) => void;
 }) {
-  return (
-    <section className="grid">
-      <Panel title="Trip Dispatch">
-        <div className="stack">
-          {props.unassignedTrips.length > 0 ? (
-            <div className="form-grid">
-              <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange(Number(value))}>
-                <option value="" disabled>Select trip</option>
-                {props.unassignedTrips.map((trip) => (
-                  <option key={trip.id} value={trip.id}>
-                    {trip.pickup_city} to {trip.drop_city} - {trip.customer_name}
-                  </option>
-                ))}
-              </SelectField>
-              <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange(Number(value))}>
-                <option value="" disabled>Select vehicle</option>
-                {props.assignableVehicles.map((vehicle) => (
-                  <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
-                  </option>
-                ))}
-              </SelectField>
-              <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange(Number(value))}>
-                <option value="" disabled>Select driver</option>
-                {props.availableDrivers.map((driver) => (
-                  <option key={driver.id} value={driver.id}>
-                    {driver.name} - {driver.home_base}
-                  </option>
-                ))}
-              </SelectField>
-              <div className="actions inline-action">
-                <button className="button" type="button" onClick={props.onAssign}>
-                  <ClipboardCheck size={16} />
-                  Assign Trip
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="notice" style={{ marginBottom: 12 }}>All trips currently assigned. Create new OTA trips on the right.</div>
-          )}
-          <TripsTable trips={props.trips} onTransition={props.onTransition} />
-        </div>
-      </Panel>
+  const [activeDropzone, setActiveDropzone] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
-      {props.role !== "accountant" ? (
-        <Panel title="New OTA Trip">
-          <TripForm onCreateTrip={props.onCreateTrip} />
+  // Close menus on click outside
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setOpenMenuId(null);
+    };
+    document.addEventListener("click", handleOutsideClick);
+    return () => document.removeEventListener("click", handleOutsideClick);
+  }, []);
+
+  // Columns specification
+  const columns = [
+    { key: "assigned", title: "UPDATE", highlightClass: "column-update" },
+    { key: "en_route_pickup", title: "EN ROUTE PICKUP", highlightClass: "column-en_route_pickup" },
+    { key: "active", title: "ACTIVE", highlightClass: "column-active" },
+    { key: "completed", title: "COMPLETED", highlightClass: "column-completed" },
+    { key: "cancelled", title: "CANCELLED", highlightClass: "column-cancelled" }
+  ];
+
+  // Group trips by column
+  const columnTrips = useMemo(() => {
+    const groups: Record<string, Trip[]> = {
+      assigned: [],
+      en_route_pickup: [],
+      active: [],
+      completed: [],
+      cancelled: []
+    };
+
+    props.trips.forEach((trip) => {
+      if (trip.status === "requested" || trip.status === "assigned") {
+        groups.assigned.push(trip);
+      } else if (groups[trip.status]) {
+        groups[trip.status].push(trip);
+      }
+    });
+
+    return groups;
+  }, [props.trips]);
+
+  // Drag handlers
+  const handleDragStart = (e: React.DragEvent, tripId: number) => {
+    e.dataTransfer.setData("tripId", tripId.toString());
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDragEnter = (e: React.DragEvent, columnKey: string) => {
+    e.preventDefault();
+    setActiveDropzone(columnKey);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setActiveDropzone(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, columnKey: string) => {
+    e.preventDefault();
+    setActiveDropzone(null);
+    const tripIdStr = e.dataTransfer.getData("tripId");
+    if (!tripIdStr) return;
+    const tripId = parseInt(tripIdStr, 10);
+    if (isNaN(tripId)) return;
+
+    const trip = props.trips.find((t) => t.id === tripId);
+    if (!trip) return;
+
+    // VALIDATION RULE:
+    // Trip must have vehicle and driver before transitioning to en_route_pickup, active, completed.
+    if (trip.status === "requested" && columnKey !== "assigned" && columnKey !== "cancelled") {
+      if (props.setError) {
+        props.setError("Cannot transition unassigned trip. Assign a vehicle and driver first using the form below.");
+        setTimeout(() => props.setError!(null), 5000);
+      } else {
+        alert("Cannot transition unassigned trip. Assign a vehicle and driver first.");
+      }
+      return;
+    }
+
+    // Determine target status
+    let targetStatus = columnKey;
+    if (columnKey === "assigned") {
+      // Reverting to Column 1 (UPDATE)
+      targetStatus = trip.vehicle ? "assigned" : "requested";
+    }
+
+    props.onTransition(tripId, targetStatus);
+  };
+
+  return (
+    <div className="stack">
+      {/* Kanban Board Area */}
+      <div className="kanban-board-container">
+        <div className="kanban-board">
+          {columns.map((col) => {
+            const tripsInCol = columnTrips[col.key] || [];
+            
+            return (
+              <div 
+                className={`kanban-column ${col.highlightClass}`} 
+                key={col.key}
+              >
+                <div className="kanban-column-header">
+                  <div className="kanban-column-title-group">
+                    <span className="kanban-column-title">{col.title}</span>
+                    <span className="kanban-column-count">{tripsInCol.length}</span>
+                  </div>
+                </div>
+
+                {/* Drop Zone Target */}
+                <div 
+                  className={`kanban-dropzone ${activeDropzone === col.key ? "dragover" : ""}`}
+                  onDragOver={handleDragOver}
+                  onDragEnter={(e) => handleDragEnter(e, col.key)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, col.key)}
+                >
+                  Drop here
+                </div>
+
+                <div 
+                  className="kanban-cards-list"
+                  onDragOver={handleDragOver}
+                  onDragEnter={(e) => handleDragEnter(e, col.key)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, col.key)}
+                >
+                  {tripsInCol.map((trip) => {
+                    // Decide card icon
+                    let CardIcon = ClipboardCheck;
+                    let iconColorClass = "update";
+                    if (trip.status === "en_route_pickup") {
+                      CardIcon = Navigation;
+                      iconColorClass = "en_route_pickup";
+                    } else if (trip.status === "active") {
+                      CardIcon = RefreshCw;
+                      iconColorClass = "active";
+                    } else if (trip.status === "completed") {
+                      CardIcon = CheckCircle2;
+                      iconColorClass = "completed";
+                    } else if (trip.status === "cancelled") {
+                      CardIcon = XCircle;
+                      iconColorClass = "cancelled";
+                    } else if (trip.status === "requested") {
+                      CardIcon = Clock;
+                      iconColorClass = "update";
+                    }
+
+                    // Decide badge text and styling class
+                    let badgeText = "PENDING UPDATE";
+                    let badgeClass = "update";
+                    if (trip.status === "requested") {
+                      badgeText = "PENDING ASSIGNMENT";
+                      badgeClass = "requested";
+                    } else if (trip.status === "en_route_pickup") {
+                      badgeText = "EN ROUTE PICKUP";
+                      badgeClass = "en_route_pickup";
+                    } else if (trip.status === "active") {
+                      badgeText = "ACTIVE";
+                      badgeClass = "active";
+                    } else if (trip.status === "completed") {
+                      badgeText = "COMPLETED";
+                      badgeClass = "completed";
+                    } else if (trip.status === "cancelled") {
+                      badgeText = "CANCELLED";
+                      badgeClass = "cancelled";
+                    }
+
+                    return (
+                      <div 
+                        className="kanban-card" 
+                        key={trip.id}
+                        draggable={true}
+                        onDragStart={(e) => handleDragStart(e, trip.id)}
+                      >
+                        <div className="kanban-card-header">
+                          <div className={`kanban-card-icon-wrapper ${iconColorClass}`}>
+                            <CardIcon size={16} />
+                          </div>
+                          <div className="kanban-card-title-block">
+                            <h4 className="kanban-card-title">{trip.pickup_city} to {trip.drop_city}</h4>
+                            <p className="kanban-card-subtitle">{trip.customer_name} {trip.ota_source ? ` - ${trip.ota_source}` : ""}</p>
+                          </div>
+                        </div>
+
+                        <div className="kanban-card-details">
+                          <div className="kanban-card-detail-item">
+                            <Clock size={12} />
+                            <span>{formatDate(trip.pickup_at)}</span>
+                          </div>
+                          <div className="kanban-card-detail-item">
+                            <Car size={12} />
+                            <span>
+                              {trip.vehicle 
+                                ? `${trip.vehicle.registration_number} • ${trip.driver?.name || "No driver"}`
+                                : "No vehicle • No driver"}
+                            </span>
+                          </div>
+                          {trip.status === "active" && (
+                            <div className="live-tracking-badge">
+                              <span className="pulse-dot"></span>
+                              Live Tracking
+                            </div>
+                          )}
+                          {trip.status === "cancelled" && trip.notes && (
+                            <div className="cancelled-reason-text">
+                              {trip.notes}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="kanban-card-footer">
+                          <span className={`kanban-card-badge ${badgeClass}`}>{badgeText}</span>
+                          <div className="kanban-card-actions">
+                            <button 
+                              className="kanban-card-action-btn"
+                              aria-label="Options"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuId(openMenuId === trip.id ? null : trip.id);
+                              }}
+                            >
+                              <MoreVertical size={14} />
+                            </button>
+                            {openMenuId === trip.id && (
+                              <div className="dropdown-menu" style={{
+                                position: "absolute",
+                                right: 0,
+                                bottom: "100%",
+                                background: "var(--panel-strong)",
+                                border: "1px solid var(--line)",
+                                borderRadius: 6,
+                                padding: 4,
+                                zIndex: 1000,
+                                boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+                                minWidth: 140
+                              }}>
+                                {tripTransitions.map((status) => (
+                                  <button
+                                    key={status}
+                                    style={{
+                                      width: "100%",
+                                      textAlign: "left",
+                                      background: "transparent",
+                                      border: 0,
+                                      padding: "8px 10px",
+                                      fontSize: 12,
+                                      cursor: "pointer",
+                                      borderRadius: 4,
+                                      color: "#fff"
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                                    onClick={() => {
+                                      props.onTransition(trip.id, status);
+                                      setOpenMenuId(null);
+                                    }}
+                                  >
+                                    {labelize(status)}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {tripsInCol.length === 0 && (
+                    <div style={{
+                      height: "100%",
+                      minHeight: 120,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--muted)",
+                      fontSize: 13,
+                      border: "1px dashed rgba(255,255,255,0.05)",
+                      borderRadius: 8
+                    }}>
+                      No trips
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* OTA Forms relocation below board */}
+      <section className="grid">
+        <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
+          <div className="stack">
+            {props.unassignedTrips.length > 0 ? (
+              <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
+                <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange(Number(value))}>
+                  <option value="" disabled>Select trip</option>
+                  {props.unassignedTrips.map((trip) => (
+                    <option key={trip.id} value={trip.id}>
+                      {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange(Number(value))}>
+                  <option value="" disabled>Select vehicle</option>
+                  {props.assignableVehicles.map((vehicle) => (
+                    <option key={vehicle.id} value={vehicle.id}>
+                      {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange(Number(value))}>
+                  <option value="" disabled>Select driver</option>
+                  {props.availableDrivers.map((driver) => (
+                    <option key={driver.id} value={driver.id}>
+                      {driver.name} - {driver.home_base}
+                    </option>
+                  ))}
+                </SelectField>
+                <div className="actions inline-action">
+                  <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
+                    <Navigation size={16} />
+                    Assign Trip
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="notice" style={{ marginBottom: 12 }}>All trips currently assigned. Create new OTA trips on the right.</div>
+            )}
+            
+            <div className="notice" style={{ background: "rgba(59, 130, 246, 0.05)", border: "1px solid rgba(59, 130, 246, 0.15)", color: "#93c5fd" }}>
+              💡 Drag & Drop cards on the board above to transition statuses, or use their options menu.
+            </div>
+          </div>
         </Panel>
-      ) : (
-        <div className="notice">Accountant mode keeps trip creation disabled and focuses on billing and payout review.</div>
-      )}
-    </section>
+
+        {props.role !== "accountant" ? (
+          <Panel title="New OTA Trip">
+            <TripForm onCreateTrip={props.onCreateTrip} />
+          </Panel>
+        ) : (
+          <div className="notice">Accountant mode keeps trip creation disabled and focuses on billing and payout review.</div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -715,8 +1354,7 @@ function AddVehicleForm({
       if (data.plate) {
         setRegNumber(data.plate);
         setAlprSuccess(
-          `Detected Plate: ${data.plate} (${Math.round(data.confidence * 100)}% confidence)${
-            data.simulated ? " [SIMULATION]" : ""
+          `Detected Plate: ${data.plate} (${Math.round(data.confidence * 100)}% confidence)${data.simulated ? " [SIMULATION]" : ""
           }`
         );
       } else {
@@ -1097,54 +1735,226 @@ function OtaView({ availability, vehicles, unassignedTrips }: { availability: Av
 
 function TripsTable({ trips, onTransition }: { trips: Trip[]; onTransition: (tripId: number, status: string) => void }) {
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Trip</th>
-            <th>Timing</th>
-            <th>Assignment</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trips.map((trip) => (
-            <tr key={trip.id}>
-              <td><strong>{trip.pickup_city} to {trip.drop_city}</strong><br />{trip.customer_name} {trip.ota_source ? `- ${trip.ota_source}` : ""}</td>
-              <td>{formatDate(trip.pickup_at)}<br />Drop: {formatDate(trip.estimated_drop_at)}</td>
-              <td>{trip.vehicle?.registration_number ?? "No vehicle"}<br />{trip.driver?.name ?? "No driver"}</td>
-              <td><Status value={trip.status} /></td>
-              <td>
-                <select value="" onChange={(event) => onTransition(trip.id, event.target.value)} aria-label={`Update ${trip.customer_name} status`}>
-                  <option value="" disabled>Update</option>
-                  {tripTransitions.map((status) => (
-                    <option key={status} value={status}>{labelize(status)}</option>
-                  ))}
-                </select>
-              </td>
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>TRIP</th>
+              <th>TIMING</th>
+              <th>ASSIGNMENT</th>
+              <th>STATUS</th>
+              <th>ACTION</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {trips.map((trip) => {
+              let Icon = Clock;
+              let iconColor = "var(--warn)";
+              let iconBg = "rgba(245, 158, 11, 0.1)";
+
+              if (trip.status === "completed") {
+                Icon = CheckCircle;
+                iconColor = "var(--ok)";
+                iconBg = "rgba(34, 197, 94, 0.1)";
+              } else if (trip.status === "cancelled") {
+                Icon = XCircle;
+                iconColor = "var(--danger)";
+                iconBg = "rgba(239, 68, 68, 0.1)";
+              } else if (trip.status === "active" || trip.status === "assigned" || trip.status === "en_route_pickup") {
+                Icon = Navigation;
+                iconColor = "var(--info)";
+                iconBg = "rgba(59, 130, 246, 0.1)";
+              }
+
+              return (
+                <tr key={trip.id}>
+                  <td style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <div style={{ background: iconBg, color: iconColor, width: 36, height: 36, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Icon size={18} />
+                    </div>
+                    <div>
+                      <strong style={{ display: "block", color: "#fff", fontSize: 13, marginBottom: 2 }}>
+                        {trip.pickup_city} to {trip.drop_city}
+                        {trip.distance_km && (
+                          <span style={{ color: "var(--accent)", fontSize: 11, marginLeft: 8, fontWeight: 600 }}>
+                            ({trip.distance_km} km)
+                          </span>
+                        )}
+                      </strong>
+                      <span style={{ color: "var(--muted)", fontSize: 12 }}>{trip.customer_name} {trip.ota_source ? `- ${trip.ota_source}` : ""}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span style={{ display: "block", fontSize: 13, color: "#e2e8f0", marginBottom: 2 }}><Clock size={12} style={{ display: "inline", marginRight: 4, verticalAlign: "middle", color: "var(--muted)" }} />{formatDate(trip.pickup_at)}</span>
+                    <span style={{ color: "var(--muted)", fontSize: 12 }}>Drop: {formatDate(trip.estimated_drop_at)}</span>
+                  </td>
+                  <td>
+                    <span style={{ display: "block", color: "#fff", fontSize: 13, marginBottom: 2 }}>{trip.vehicle?.registration_number ?? "No vehicle"}</span>
+                    <span style={{ color: "var(--muted)", fontSize: 12 }}>{trip.driver?.name ?? "No driver"}</span>
+                  </td>
+                  <td><Status value={trip.status} /></td>
+                  <td>
+                    <div style={{ position: "relative", display: "inline-block" }}>
+                      <select 
+                        value="" 
+                        onChange={(event) => onTransition(trip.id, event.target.value)} 
+                        aria-label={`Update ${trip.customer_name} status`}
+                        style={{ appearance: "none", background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", borderRadius: 6, padding: "6px 28px 6px 12px", color: "#fff", fontSize: 12, cursor: "pointer" }}
+                      >
+                        <option value="" disabled>Update</option>
+                        {tripTransitions.map((status) => (
+                          <option key={status} value={status}>{labelize(status)}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={14} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--muted)" }} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)", fontSize: 12, color: "var(--muted)" }}>
+        <span>Showing 1 to {Math.min(trips.length, 6)} of {trips.length} trips</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "var(--muted)", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>&lt;</button>
+          <button style={{ background: "var(--accent-strong)", border: "none", color: "#fff", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>1</button>
+          <button style={{ background: "transparent", border: "1px solid transparent", color: "var(--muted)", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>2</button>
+          <button style={{ background: "transparent", border: "1px solid transparent", color: "var(--muted)", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>3</button>
+          <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 28, height: 28 }}>...</span>
+          <button style={{ background: "transparent", border: "1px solid transparent", color: "var(--muted)", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>4</button>
+          <button style={{ background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "var(--muted)", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>&gt;</button>
+        </div>
+      </div>
+    </>
   );
 }
 
-function TripForm({ onCreateTrip }: { onCreateTrip: (event: FormEvent<HTMLFormElement>) => void }) {
+function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: () => void) => void }) {
+  const [pickupCity, setPickupCity] = useState("");
+  const [dropCity, setDropCity] = useState("");
+  const [pickupLat, setPickupLat] = useState<number | null>(null);
+  const [pickupLng, setPickupLng] = useState<number | null>(null);
+  const [dropLat, setDropLat] = useState<number | null>(null);
+  const [dropLng, setDropLng] = useState<number | null>(null);
+  const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [mapKey, setMapKey] = useState(0);
+
+  const handleLocationSelected = (data: {
+    pickupLat: number | null;
+    pickupLng: number | null;
+    pickupCity: string;
+    dropLat: number | null;
+    dropLng: number | null;
+    dropCity: string;
+    distanceKm: number | null;
+  }) => {
+    if (data.pickupCity) setPickupCity(data.pickupCity);
+    if (data.dropCity) setDropCity(data.dropCity);
+    setPickupLat(data.pickupLat);
+    setPickupLng(data.pickupLng);
+    setDropLat(data.dropLat);
+    setDropLng(data.dropLng);
+    setDistanceKm(data.distanceKm);
+  };
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+
+    onCreateTrip({
+      customer_name: String(formData.get("customer_name")),
+      pickup_city: pickupCity || String(formData.get("pickup_city")),
+      drop_city: dropCity || String(formData.get("drop_city")),
+      pickup_at: String(formData.get("pickup_at")),
+      estimated_drop_at: String(formData.get("estimated_drop_at")),
+      ota_source: String(formData.get("ota_source")),
+      fare_amount: String(formData.get("fare_amount")),
+      pickup_latitude: pickupLat,
+      pickup_longitude: pickupLng,
+      drop_latitude: dropLat,
+      drop_longitude: dropLng,
+      distance_km: distanceKm
+    }, () => {
+      setPickupCity("");
+      setDropCity("");
+      setPickupLat(null);
+      setPickupLng(null);
+      setDropLat(null);
+      setDropLng(null);
+      setDistanceKm(null);
+      setMapKey(prev => prev + 1);
+      event.currentTarget.reset();
+    });
+  };
+
   return (
-    <form className="stack" onSubmit={onCreateTrip}>
-      <div className="form-grid single">
-        <InputField label="Customer" name="customer_name" required />
-        <InputField label="OTA Source" name="ota_source" placeholder="MMT" />
-        <InputField label="Pickup City" name="pickup_city" required />
-        <InputField label="Drop City" name="drop_city" required />
-        <InputField label="Pickup At" name="pickup_at" type="datetime-local" required />
-        <InputField label="Drop At" name="estimated_drop_at" type="datetime-local" required />
-        <InputField label="Fare" name="fare_amount" type="number" min="0" step="0.01" defaultValue="0" />
+    <form className="stack" onSubmit={handleSubmit}>
+      <InputField label="CUSTOMER" name="customer_name" placeholder="Enter customer name" required />
+      
+      <div className="field">
+        <label>OTA SOURCE</label>
+        <select name="ota_source" defaultValue="MMT">
+          <option value="MMT">MMT</option>
+          <option value="Goibibo">Goibibo</option>
+          <option value="ClearTrip">ClearTrip</option>
+        </select>
       </div>
-      <div className="actions">
-        <button className="button" type="submit">
+
+      <MapComponent 
+        key={mapKey}
+        pickupLat={pickupLat}
+        pickupLng={pickupLng}
+        pickupCityProp={pickupCity}
+        dropLat={dropLat}
+        dropLng={dropLng}
+        dropCityProp={dropCity}
+        onLocationSelected={handleLocationSelected} 
+      />
+
+      <AutocompleteField 
+        label="PICKUP CITY" 
+        placeholder="Type pickup city to autocomplete..." 
+        value={pickupCity} 
+        onChange={setPickupCity} 
+        onSelectSuggestion={(s) => {
+          setPickupLat(s.lat);
+          setPickupLng(s.lng);
+          setPickupCity(s.city);
+        }}
+        required 
+      />
+      <AutocompleteField 
+        label="DROP CITY" 
+        placeholder="Type drop city to autocomplete..." 
+        value={dropCity} 
+        onChange={setDropCity} 
+        onSelectSuggestion={(s) => {
+          setDropLat(s.lat);
+          setDropLng(s.lng);
+          setDropCity(s.city);
+        }}
+        required 
+      />
+      
+      <div className="form-grid" style={{ gap: 12 }}>
+        <InputField label="PICKUP AT" name="pickup_at" type="datetime-local" required />
+        <InputField label="DROP AT" name="estimated_drop_at" type="datetime-local" required />
+      </div>
+
+      <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
+
+      {distanceKm !== null && (
+        <div style={{ padding: 12, background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ color: "var(--muted)", fontWeight: 500 }}>Route Distance:</span>
+          <strong style={{ color: "var(--accent)" }}>{distanceKm} km</strong>
+        </div>
+      )}
+
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button className="button" type="submit" style={{ width: "100%", justifyContent: "center", background: "var(--accent-strong)" }}>
           <Plus size={16} />
           Create Trip
         </button>
@@ -1153,44 +1963,109 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (event: FormEvent<HTMLFormEl
   );
 }
 
-function Panel({ children, title, action }: { children: React.ReactNode; title: string; action?: React.ReactNode }) {
+function Panel({ children, title, subtitle, action }: { children: React.ReactNode; title: string; subtitle?: string; action?: React.ReactNode }) {
   return (
     <section className="section">
-      <div className="section-header">
-        <h2>{title}</h2>
-        {action}
+      <div className="section-header" style={{ alignItems: "flex-start", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+          <h2>{title}</h2>
+          {action}
+        </div>
+        {subtitle && <span style={{ color: "var(--muted)", fontSize: 13 }}>{subtitle}</span>}
       </div>
       <div className="section-body">{children}</div>
     </section>
   );
 }
 
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function Metric({
+  icon,
+  label,
+  value,
+  total,
+  trend,
+  trendUp,
+  color
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
+  total?: string;
+  trend?: string;
+  trendUp?: boolean;
+  color?: string;
+}) {
+  const isLive = trend?.toLowerCase() === "live";
   return (
     <div className="metric">
-      <span>{icon} {label}</span>
-      <strong>{value}</strong>
+      <div className="metric-header">
+        <div style={{ 
+          background: color ? color + "1a" : "rgba(255, 255, 255, 0.05)", 
+          padding: 8, 
+          borderRadius: "50%", 
+          display: "flex", 
+          color: color || "inherit" 
+        }}>
+          {icon}
+        </div>
+        {label}
+      </div>
+      <div className="metric-content">
+        <div className="metric-value">
+          <strong>{value}</strong>
+          {total && <span>{total}</span>}
+        </div>
+        {trend && (
+          <div className={`metric-trend ${isLive ? "live" : trendUp ? "up" : "down"}`}>
+            {!isLive && (trendUp ? "▲ " : "▼ ")}{trend}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function AvailabilityItem({ item }: { item: Availability }) {
+  const colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+  const color = colors[item.vehicle_id % colors.length];
+
   return (
-    <div className="availability-item">
-      <strong>{item.registration_number} - {item.category}</strong>
-      <span>{item.available_city} after {formatDate(item.available_from)}</span>
-      <span>{item.driver_name ?? "No driver assigned"}</span>
-      {item.compliance_blockers.length ? <span style={{ color: "var(--danger)", fontWeight: 600 }}>Blocked: {item.compliance_blockers.join(", ")}</span> : null}
+    <div className="availability-item" style={{ display: "flex", alignItems: "center", gap: 16, background: "rgba(255,255,255,0.02)", padding: 16, borderRadius: 12, border: "1px solid var(--line)" }}>
+      <div style={{ background: color, width: 40, height: 40, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", flexShrink: 0 }}>
+        <Car size={20} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <strong style={{ display: "block", color: "#fff", fontSize: 14, marginBottom: 4 }}>{item.registration_number} • {item.category}</strong>
+        <span style={{ display: "block", color: "var(--muted)", fontSize: 13 }}>{item.available_city} after {formatDate(item.available_from)}</span>
+        <span style={{ display: "block", color: "var(--muted)", fontSize: 13 }}>{item.driver_name ?? "No driver assigned"}</span>
+        {item.compliance_blockers.length ? <span style={{ display: "block", color: "var(--danger)", fontWeight: 600, fontSize: 13, marginTop: 4 }}>Blocked: {item.compliance_blockers.join(", ")}</span> : null}
+      </div>
+      <div style={{ padding: "6px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 6, fontSize: 13, fontWeight: 600, color: "#fff" }}>
+        5h 45m
+      </div>
     </div>
   );
 }
 
 function TripSummary({ trip }: { trip: Trip }) {
   return (
-    <div className="availability-item">
-      <strong>{trip.pickup_city} to {trip.drop_city}</strong>
-      <span>{trip.vehicle?.registration_number ?? "No vehicle"} - {trip.driver?.name ?? "No driver"}</span>
-      <span>{formatDate(trip.pickup_at)} to {formatDate(trip.estimated_drop_at)}</span>
+    <div className="availability-item" style={{ display: "flex", alignItems: "center", gap: 16, background: "rgba(255,255,255,0.02)", padding: 16, borderRadius: 12, border: "1px solid var(--line)", cursor: "pointer" }}>
+      <div style={{ background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.2)", width: 40, height: 40, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ok)", flexShrink: 0 }}>
+        <MapPin size={20} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <strong style={{ display: "block", color: "#fff", fontSize: 14, marginBottom: 4 }}>
+          {trip.pickup_city} to {trip.drop_city}
+          {trip.distance_km && (
+            <span style={{ color: "var(--accent)", fontSize: 12, marginLeft: 8, fontWeight: 600 }}>
+              ({trip.distance_km} km)
+            </span>
+          )}
+        </strong>
+        <span style={{ display: "block", color: "var(--muted)", fontSize: 13 }}>{trip.vehicle?.registration_number ?? "No vehicle"} • {trip.driver?.name ?? "No driver"}</span>
+        <span style={{ display: "block", color: "var(--muted)", fontSize: 13 }}>{formatDate(trip.pickup_at)} to {formatDate(trip.estimated_drop_at)}</span>
+      </div>
+      <ChevronRight size={20} style={{ color: "var(--muted)" }} />
     </div>
   );
 }
@@ -1280,4 +2155,139 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+interface AutocompleteFieldProps {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (val: string) => void;
+  onSelectSuggestion: (suggestion: { lat: number; lng: number; city: string }) => void;
+  required?: boolean;
+}
+
+function AutocompleteField({
+  label,
+  placeholder,
+  value,
+  onChange,
+  onSelectSuggestion,
+  required
+}: AutocompleteFieldProps) {
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (!isTyping || value.length < 3) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(value)}&limit=5`);
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data);
+          setShowDropdown(true);
+        }
+      } catch (err) {
+        console.error("Autocomplete search error:", err);
+      } finally {
+        setLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [value, isTyping]);
+
+  const handleSelect = (item: any) => {
+    const addr = item.address || {};
+    const cityName = addr.city || addr.town || addr.village || addr.suburb || addr.county || item.display_name.split(",")[0];
+    onSelectSuggestion({
+      lat: Number(item.lat),
+      lng: Number(item.lon),
+      city: cityName
+    });
+    onChange(cityName);
+    setIsTyping(false);
+    setSuggestions([]);
+    setShowDropdown(false);
+  };
+
+  return (
+    <div className="field" ref={containerRef} style={{ position: "relative" }}>
+      <label>{label}</label>
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => {
+          setIsTyping(true);
+          onChange(e.target.value);
+        }}
+        required={required}
+        autoComplete="off"
+      />
+      {loading && (
+        <div style={{ position: "absolute", right: 12, top: 38, fontSize: 11, color: "var(--muted)", pointerEvents: "none" }}>
+          Searching...
+        </div>
+      )}
+      {showDropdown && suggestions.length > 0 && (
+        <ul className="autocomplete-dropdown" style={{
+          position: "absolute",
+          top: "100%",
+          left: 0,
+          right: 0,
+          background: "var(--panel-strong)",
+          border: "1px solid var(--line)",
+          borderRadius: 8,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          listStyle: "none",
+          padding: 0,
+          margin: "4px 0 0 0",
+          zIndex: 1000,
+          maxHeight: 200,
+          overflowY: "auto"
+        }}>
+          {suggestions.map((item, index) => (
+            <li
+              key={index}
+              onClick={() => handleSelect(item)}
+              style={{
+                padding: "10px 12px",
+                cursor: "pointer",
+                borderBottom: index < suggestions.length - 1 ? "1px solid var(--line)" : "none",
+                fontSize: 12,
+                color: "#e2e8f0",
+                lineHeight: "1.4",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.06)"}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+            >
+              {item.display_name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

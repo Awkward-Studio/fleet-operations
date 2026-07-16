@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "fleet",
     "accounts",
+    "makemytrip",
 ]
 
 MIDDLEWARE = [
@@ -95,4 +96,9 @@ AUTHENTICATION_BACKENDS = [
     "accounts.backends.EmailOrUsernameModelBackend",
     "django.contrib.auth.backends.ModelBackend",
 ]
+
+# MakeMyTrip (Incabs) API Settings
+MAKEMYTRIP_MOCK_SERVER_URL = "https://private-7902fd-incabsapipartnerdocumentationv3.apiary-mock.com/tracking/pp2"
+MAKEMYTRIP_HEADERS = {}
+
 

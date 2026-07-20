@@ -34,7 +34,10 @@ import {
   Clock,
   CheckCircle,
   Navigation,
-  XCircle
+  XCircle,
+  Pencil,
+  Trash2,
+  UserPlus
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
@@ -52,6 +55,11 @@ import {
   assignTrip,
   createTrip,
   createVehicle,
+  updateVehicle,
+  deleteVehicle,
+  createDriver,
+  updateDriver,
+  deleteDriver,
   getAvailability,
   getDrivers,
   getSummary,
@@ -61,11 +69,12 @@ import {
 } from "@/lib/api";
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota";
 
 const navItems = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/trips", section: "trips", label: "Trips", icon: Route },
+  { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
   { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned },
@@ -109,8 +118,13 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const [tripOtaFilter, setTripOtaFilter] = useState("all");
   const [tripSortFilter, setTripSortFilter] = useState("latest");
 
-  // Add Vehicle modal state
+  // Add & Edit Vehicle modal state
   const [isAddingVehicle, setIsAddingVehicle] = useState(false);
+  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+
+  // Add & Edit Driver modal state
+  const [isAddingDriver, setIsAddingDriver] = useState(false);
+  const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
 
   const unassignedTrips = useMemo(() => trips.filter((trip) => trip.status === "requested"), [trips]);
   const activeTrips = useMemo(
@@ -276,7 +290,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
     try {
       await createTrip(payload);
       onSuccess();
-      await loadData();
+      window.location.reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create trip.");
     }
@@ -289,6 +303,56 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
       await loadData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create vehicle.");
+    }
+  }
+
+  async function handleUpdateVehicleSubmit(id: number, payload: Parameters<typeof updateVehicle>[1]) {
+    try {
+      await updateVehicle(id, payload);
+      setEditingVehicle(null);
+      await loadData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to update vehicle.");
+    }
+  }
+
+  async function handleDeleteVehicle(id: number) {
+    if (!confirm("Are you sure you want to delete this vehicle?")) return;
+    try {
+      await deleteVehicle(id);
+      await loadData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to delete vehicle.");
+    }
+  }
+
+  async function handleCreateDriverSubmit(payload: Parameters<typeof createDriver>[0]) {
+    try {
+      await createDriver(payload);
+      setIsAddingDriver(false);
+      await loadData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to create driver.");
+    }
+  }
+
+  async function handleUpdateDriverSubmit(id: number, payload: Parameters<typeof updateDriver>[1]) {
+    try {
+      await updateDriver(id, payload);
+      setEditingDriver(null);
+      await loadData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to update driver.");
+    }
+  }
+
+  async function handleDeleteDriver(id: number) {
+    if (!confirm("Are you sure you want to delete this driver?")) return;
+    try {
+      await deleteDriver(id);
+      await loadData();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to delete driver.");
     }
   }
 
@@ -414,8 +478,8 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
               </>
             ) : (
               <>
-                <h1>{/* pageTitle(section) fallback */} {section.charAt(0).toUpperCase() + section.slice(1)}</h1>
-                <p>Manage your fleet operations.</p>
+                <h1>{pageTitle(section)}</h1>
+                <p>{pageSubtitle(section)}</p>
               </>
             )}
           </div>
@@ -601,21 +665,27 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
               <TripsView
                 role={role}
                 trips={filteredTrips}
-                unassignedTrips={unassignedTrips}
-                assignableVehicles={assignableVehicles}
-                availableDrivers={availableDrivers}
-                selectedTrip={selectedTrip}
-                selectedVehicle={selectedVehicle}
-                selectedDriver={selectedDriver}
-                onTripChange={setSelectedTrip}
-                onVehicleChange={setSelectedVehicle}
-                onDriverChange={setSelectedDriver}
-                onAssign={handleAssignTrip}
                 onTransition={handleTransition}
-                onCreateTrip={handleCreateTrip}
                 setError={setError}
               />
             </>
+          ) : null}
+
+          {section === "create-trip" ? (
+            <CreateTripView
+              role={role}
+              unassignedTrips={unassignedTrips}
+              assignableVehicles={assignableVehicles}
+              availableDrivers={availableDrivers}
+              selectedTrip={selectedTrip}
+              selectedVehicle={selectedVehicle}
+              selectedDriver={selectedDriver}
+              onTripChange={setSelectedTrip}
+              onVehicleChange={setSelectedVehicle}
+              onDriverChange={setSelectedDriver}
+              onAssign={handleAssignTrip}
+              onCreateTrip={handleCreateTrip}
+            />
           ) : null}
 
           {section === "vehicles" ? (
@@ -650,6 +720,8 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                 availability={availability}
                 trips={trips}
                 onAddClick={() => setIsAddingVehicle(true)}
+                onEditClick={(v) => setEditingVehicle(v)}
+                onDeleteClick={handleDeleteVehicle}
               />
             </>
           ) : null}
@@ -681,7 +753,13 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                   </select>
                 </div>
               </div>
-              <DriversView drivers={filteredDrivers} trips={trips} />
+              <DriversView 
+                drivers={filteredDrivers} 
+                trips={trips} 
+                onAddClick={() => setIsAddingDriver(true)}
+                onEditClick={(d) => setEditingDriver(d)}
+                onDeleteClick={handleDeleteDriver}
+              />
             </>
           ) : null}
 
@@ -692,21 +770,43 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
         </main>
       </div>
 
-      {/* Add Vehicle Modal Overlay */}
-      {isAddingVehicle && (
+      {/* Add / Edit Vehicle Modal Overlay */}
+      {(isAddingVehicle || editingVehicle) && (
         <div className="modal-overlay">
           <div className="modal-content">
             <div className="modal-header">
-              <h3>Add New Vehicle</h3>
-              <button className="modal-close-btn" onClick={() => setIsAddingVehicle(false)} aria-label="Close modal">
+              <h3>{editingVehicle ? "Edit Vehicle" : "Add New Vehicle"}</h3>
+              <button className="modal-close-btn" onClick={() => { setIsAddingVehicle(false); setEditingVehicle(null); }} aria-label="Close modal">
                 <X size={20} />
               </button>
             </div>
             <div className="modal-body">
               <AddVehicleForm
                 drivers={drivers}
-                onSubmit={handleCreateVehicleSubmit}
-                onCancel={() => setIsAddingVehicle(false)}
+                initialData={editingVehicle}
+                onSubmit={(payload) => editingVehicle ? handleUpdateVehicleSubmit(editingVehicle.id, payload) : handleCreateVehicleSubmit(payload)}
+                onCancel={() => { setIsAddingVehicle(false); setEditingVehicle(null); }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Driver Modal Overlay */}
+      {(isAddingDriver || editingDriver) && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h3>{editingDriver ? "Edit Driver" : "Add New Driver"}</h3>
+              <button className="modal-close-btn" onClick={() => { setIsAddingDriver(false); setEditingDriver(null); }} aria-label="Close modal">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <DriverForm
+                initialData={editingDriver}
+                onSubmit={(payload) => editingDriver ? handleUpdateDriverSubmit(editingDriver.id, payload) : handleCreateDriverSubmit(payload)}
+                onCancel={() => { setIsAddingDriver(false); setEditingDriver(null); }}
               />
             </div>
           </div>
@@ -855,18 +955,7 @@ function DashboardView({
 function TripsView(props: {
   role: Role;
   trips: Trip[];
-  unassignedTrips: Trip[];
-  assignableVehicles: Vehicle[];
-  availableDrivers: Driver[];
-  selectedTrip: number | null;
-  selectedVehicle: number | null;
-  selectedDriver: number | null;
-  onTripChange: (value: number) => void;
-  onVehicleChange: (value: number) => void;
-  onDriverChange: (value: number) => void;
-  onAssign: () => void;
   onTransition: (tripId: number, status: string) => void;
-  onCreateTrip: (payload: any, onSuccess: () => void) => void;
   setError?: (msg: string | null) => void;
 }) {
   const [activeDropzone, setActiveDropzone] = useState<string | null>(null);
@@ -1163,63 +1252,79 @@ function TripsView(props: {
           })}
         </div>
       </div>
-
-      {/* OTA Forms relocation below board */}
-      <section className="grid">
-        <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
-          <div className="stack">
-            {props.unassignedTrips.length > 0 ? (
-              <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
-                <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange(Number(value))}>
-                  <option value="" disabled>Select trip</option>
-                  {props.unassignedTrips.map((trip) => (
-                    <option key={trip.id} value={trip.id}>
-                      {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
-                    </option>
-                  ))}
-                </SelectField>
-                <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange(Number(value))}>
-                  <option value="" disabled>Select vehicle</option>
-                  {props.assignableVehicles.map((vehicle) => (
-                    <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
-                    </option>
-                  ))}
-                </SelectField>
-                <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange(Number(value))}>
-                  <option value="" disabled>Select driver</option>
-                  {props.availableDrivers.map((driver) => (
-                    <option key={driver.id} value={driver.id}>
-                      {driver.name} - {driver.home_base}
-                    </option>
-                  ))}
-                </SelectField>
-                <div className="actions inline-action">
-                  <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
-                    <Navigation size={16} />
-                    Assign Trip
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="notice" style={{ marginBottom: 12 }}>All trips currently assigned. Create new OTA trips on the right.</div>
-            )}
-            
-            <div className="notice" style={{ background: "rgba(59, 130, 246, 0.05)", border: "1px solid rgba(59, 130, 246, 0.15)", color: "#93c5fd" }}>
-              💡 Drag & Drop cards on the board above to transition statuses, or use their options menu.
-            </div>
-          </div>
-        </Panel>
-
-        {props.role !== "accountant" ? (
-          <Panel title="New OTA Trip">
-            <TripForm onCreateTrip={props.onCreateTrip} />
-          </Panel>
-        ) : (
-          <div className="notice">Accountant mode keeps trip creation disabled and focuses on billing and payout review.</div>
-        )}
-      </section>
     </div>
+  );
+}
+
+function CreateTripView(props: {
+  role: Role;
+  unassignedTrips: Trip[];
+  assignableVehicles: Vehicle[];
+  availableDrivers: Driver[];
+  selectedTrip: number | null;
+  selectedVehicle: number | null;
+  selectedDriver: number | null;
+  onTripChange: (value: number) => void;
+  onVehicleChange: (value: number) => void;
+  onDriverChange: (value: number) => void;
+  onAssign: () => void;
+  onCreateTrip: (payload: any, onSuccess: () => void) => void;
+}) {
+  return (
+    <section className="grid">
+      <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
+        <div className="stack">
+          {props.unassignedTrips.length > 0 ? (
+            <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
+              <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange(Number(value))}>
+                <option value="" disabled>Select trip</option>
+                {props.unassignedTrips.map((trip) => (
+                  <option key={trip.id} value={trip.id}>
+                    {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange(Number(value))}>
+                <option value="" disabled>Select vehicle</option>
+                {props.assignableVehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange(Number(value))}>
+                <option value="" disabled>Select driver</option>
+                {props.availableDrivers.map((driver) => (
+                  <option key={driver.id} value={driver.id}>
+                    {driver.name} - {driver.home_base}
+                  </option>
+                ))}
+              </SelectField>
+              <div className="actions inline-action">
+                <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
+                  <Navigation size={16} />
+                  Assign Trip
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="notice" style={{ marginBottom: 12 }}>All trips currently assigned. Create new OTA trips on the right.</div>
+          )}
+          
+          <div className="notice" style={{ background: "rgba(59, 130, 246, 0.05)", border: "1px solid rgba(59, 130, 246, 0.15)", color: "#93c5fd" }}>
+            💡 Manage active dispatches and status transitions on the Trips page board.
+          </div>
+        </div>
+      </Panel>
+
+      {props.role !== "accountant" ? (
+        <Panel title="New OTA Trip">
+          <TripForm onCreateTrip={props.onCreateTrip} />
+        </Panel>
+      ) : (
+        <div className="notice">Accountant mode keeps trip creation disabled and focuses on billing and payout review.</div>
+      )}
+    </section>
   );
 }
 
@@ -1227,12 +1332,16 @@ function VehiclesView({
   vehicles,
   availability,
   trips,
-  onAddClick
+  onAddClick,
+  onEditClick,
+  onDeleteClick
 }: {
   vehicles: Vehicle[];
   availability: Availability[];
   trips: Trip[];
   onAddClick: () => void;
+  onEditClick: (vehicle: Vehicle) => void;
+  onDeleteClick: (id: number) => void;
 }) {
   return (
     <Panel
@@ -1254,6 +1363,7 @@ function VehiclesView({
               <th>Status</th>
               <th>Next availability</th>
               <th>Current trip</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1268,6 +1378,16 @@ function VehiclesView({
                   <td><Status value={vehicle.status} /></td>
                   <td>{availabilityRecord ? `${availabilityRecord.available_city}, ${formatDate(availabilityRecord.available_from)}` : "Unknown"}</td>
                   <td>{activeTrip ? `${activeTrip.pickup_city} to ${activeTrip.drop_city}` : "None"}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="button secondary" style={{ padding: "4px 8px", fontSize: 12 }} onClick={() => onEditClick(vehicle)} title="Edit vehicle">
+                        <Pencil size={14} /> Edit
+                      </button>
+                      <button className="button secondary" style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }} onClick={() => onDeleteClick(vehicle.id)} title="Delete vehicle">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               );
             })}
@@ -1280,20 +1400,23 @@ function VehiclesView({
 
 function AddVehicleForm({
   drivers,
+  initialData,
   onSubmit,
   onCancel
 }: {
   drivers: Driver[];
+  initialData?: Vehicle | null;
   onSubmit: (payload: any) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [regNumber, setRegNumber] = useState("");
-  const [make, setMake] = useState("");
-  const [model, setModel] = useState("");
-  const [category, setCategory] = useState("Sedan");
-  const [currentCity, setCurrentCity] = useState("");
-  const [odometerKm, setOdometerKm] = useState(0);
-  const [assignedDriverId, setAssignedDriverId] = useState<number | null>(null);
+  const [regNumber, setRegNumber] = useState(initialData?.registration_number || "");
+  const [make, setMake] = useState(initialData?.make || "");
+  const [model, setModel] = useState(initialData?.model || "");
+  const [category, setCategory] = useState(initialData?.category || "Sedan");
+  const [currentCity, setCurrentCity] = useState(initialData?.current_city || "");
+  const [vehicleStatus, setVehicleStatus] = useState(initialData?.status || "idle");
+  const [odometerKm, setOdometerKm] = useState(initialData?.odometer_km || 0);
+  const [assignedDriverId, setAssignedDriverId] = useState<number | null>(initialData?.assigned_driver?.id || null);
 
   // Default dates (today + 1 year)
   const getFutureDate = (years: number) => {
@@ -1302,10 +1425,10 @@ function AddVehicleForm({
     return d.toISOString().split("T")[0];
   };
 
-  const [permitExp, setPermitExp] = useState(getFutureDate(1));
-  const [insuranceExp, setInsuranceExp] = useState(getFutureDate(1));
-  const [pollutionExp, setPollutionExp] = useState(getFutureDate(1));
-  const [fitnessExp, setFitnessExp] = useState(getFutureDate(1));
+  const [permitExp, setPermitExp] = useState(initialData?.permit_expires_on || getFutureDate(1));
+  const [insuranceExp, setInsuranceExp] = useState(initialData?.insurance_expires_on || getFutureDate(1));
+  const [pollutionExp, setPollutionExp] = useState(initialData?.pollution_expires_on || getFutureDate(1));
+  const [fitnessExp, setFitnessExp] = useState(initialData?.fitness_expires_on || getFutureDate(1));
 
   // ALPR OCR States
   const [alprFile, setAlprFile] = useState<File | null>(null);
@@ -1380,7 +1503,7 @@ function AddVehicleForm({
       model,
       category,
       current_city: currentCity,
-      status: "idle",
+      status: vehicleStatus,
       assigned_driver_id: assignedDriverId,
       permit_expires_on: permitExp,
       insurance_expires_on: insuranceExp,
@@ -1394,58 +1517,60 @@ function AddVehicleForm({
 
   return (
     <form onSubmit={handleSubmit} className="stack">
-      {/* ALPR scanner section */}
-      <div className="field">
-        <label>Scan License Plate Photo (ALPR)</label>
-        <div className={`alpr-scanner-box ${alprLoading ? 'scanning' : ''} ${alprSuccess ? 'success' : ''}`}>
-          {!alprPreviewUrl ? (
-            <label className="alpr-scanner-placeholder">
-              <Camera size={26} />
-              <strong>Upload Plate Photo</strong>
-              <span>Accepts JPG/PNG Indian license plates</span>
-              <input type="file" accept="image/*" onChange={handleFileChange} style={{ display: "none" }} />
-            </label>
-          ) : (
-            <div className="alpr-preview-container">
-              <img src={alprPreviewUrl} alt="Plate preview" className="alpr-preview-image" />
-              <div className="alpr-scanner-actions">
-                <button
-                  type="button"
-                  className="button secondary"
-                  onClick={() => {
-                    setAlprFile(null);
-                    setAlprPreviewUrl(null);
-                    setAlprSuccess(null);
-                    setAlprError(null);
-                  }}
-                >
-                  Remove
-                </button>
-                <button type="button" className="button" onClick={handleScanPlate} disabled={alprLoading}>
-                  {alprLoading ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <Camera size={16} />
-                      Scan Photo
-                    </>
-                  )}
-                </button>
+      {/* ALPR scanner section (shown on creation) */}
+      {!initialData && (
+        <div className="field">
+          <label>Scan License Plate Photo (ALPR)</label>
+          <div className={`alpr-scanner-box ${alprLoading ? 'scanning' : ''} ${alprSuccess ? 'success' : ''}`}>
+            {!alprPreviewUrl ? (
+              <label className="alpr-scanner-placeholder">
+                <Camera size={26} />
+                <strong>Upload Plate Photo</strong>
+                <span>Accepts JPG/PNG Indian license plates</span>
+                <input type="file" accept="image/*" onChange={handleFileChange} style={{ display: "none" }} />
+              </label>
+            ) : (
+              <div className="alpr-preview-container">
+                <img src={alprPreviewUrl} alt="Plate preview" className="alpr-preview-image" />
+                <div className="alpr-scanner-actions">
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={() => {
+                      setAlprFile(null);
+                      setAlprPreviewUrl(null);
+                      setAlprSuccess(null);
+                      setAlprError(null);
+                    }}
+                  >
+                    Remove
+                  </button>
+                  <button type="button" className="button" onClick={handleScanPlate} disabled={alprLoading}>
+                    {alprLoading ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        Scanning...
+                      </>
+                    ) : (
+                      <>
+                        <Camera size={16} />
+                        Scan Photo
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
+            )}
+          </div>
+          {alprError && <div className="error">{alprError}</div>}
+          {alprSuccess && (
+            <div className="scan-success-badge" style={{ alignSelf: "center", marginBottom: 12 }}>
+              <CheckCircle2 size={16} />
+              {alprSuccess}
             </div>
           )}
         </div>
-        {alprError && <div className="error">{alprError}</div>}
-        {alprSuccess && (
-          <div className="scan-success-badge" style={{ alignSelf: "center", marginBottom: 12 }}>
-            <CheckCircle2 size={16} />
-            {alprSuccess}
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Details Inputs */}
       <div className="form-grid">
@@ -1500,6 +1625,16 @@ function AddVehicleForm({
           />
         </div>
         <div className="field">
+          <label>Status</label>
+          <select value={vehicleStatus} onChange={(e) => setVehicleStatus(e.target.value)}>
+            <option value="idle">Idle</option>
+            <option value="en_route_pickup">En route to pickup</option>
+            <option value="active_trip">Active trip</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="offline">Offline</option>
+          </select>
+        </div>
+        <div className="field">
           <label>Odometer (KM)</label>
           <input
             type="number"
@@ -1508,7 +1643,7 @@ function AddVehicleForm({
             onChange={(e) => setOdometerKm(Number(e.target.value))}
           />
         </div>
-        <div className="field" style={{ gridColumn: "span 2" }}>
+        <div className="field">
           <label>Assigned Driver</label>
           <select
             value={assignedDriverId || ""}
@@ -1551,16 +1686,36 @@ function AddVehicleForm({
           Cancel
         </button>
         <button type="submit" className="button">
-          Save Vehicle
+          {initialData ? "Update Vehicle" : "Save Vehicle"}
         </button>
       </div>
     </form>
   );
 }
 
-function DriversView({ drivers, trips }: { drivers: Driver[]; trips: Trip[] }) {
+function DriversView({
+  drivers,
+  trips,
+  onAddClick,
+  onEditClick,
+  onDeleteClick
+}: {
+  drivers: Driver[];
+  trips: Trip[];
+  onAddClick: () => void;
+  onEditClick: (driver: Driver) => void;
+  onDeleteClick: (id: number) => void;
+}) {
   return (
-    <Panel title="Driver Roster">
+    <Panel 
+      title="Driver Roster"
+      action={
+        <button className="button" onClick={onAddClick}>
+          <UserPlus size={16} />
+          Add Driver
+        </button>
+      }
+    >
       <div className="table-wrap">
         <table>
           <thead>
@@ -1571,6 +1726,7 @@ function DriversView({ drivers, trips }: { drivers: Driver[]; trips: Trip[] }) {
               <th>Status</th>
               <th>Assigned trip</th>
               <th>Rating</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1584,6 +1740,16 @@ function DriversView({ drivers, trips }: { drivers: Driver[]; trips: Trip[] }) {
                   <td><Status value={driver.status} /></td>
                   <td>{activeTrip ? `${activeTrip.pickup_city} to ${activeTrip.drop_city}` : "None"}</td>
                   <td>{driver.rating}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="button secondary" style={{ padding: "4px 8px", fontSize: 12 }} onClick={() => onEditClick(driver)} title="Edit driver">
+                        <Pencil size={14} /> Edit
+                      </button>
+                      <button className="button secondary" style={{ padding: "4px 8px", fontSize: 12, color: "var(--danger)" }} onClick={() => onDeleteClick(driver.id)} title="Delete driver">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               );
             })}
@@ -1591,6 +1757,117 @@ function DriversView({ drivers, trips }: { drivers: Driver[]; trips: Trip[] }) {
         </table>
       </div>
     </Panel>
+  );
+}
+
+function DriverForm({
+  initialData,
+  onSubmit,
+  onCancel
+}: {
+  initialData?: Driver | null;
+  onSubmit: (payload: any) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initialData?.name || "");
+  const [phone, setPhone] = useState(initialData?.phone || "");
+  const [licenseNumber, setLicenseNumber] = useState(initialData?.license_number || "");
+  const [homeBase, setHomeBase] = useState(initialData?.home_base || "");
+  const [driverStatus, setDriverStatus] = useState(initialData?.status || "available");
+  const [rating, setRating] = useState(initialData?.rating || "4.5");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name || !phone || !licenseNumber || !homeBase) {
+      alert("Please fill in all required fields.");
+      return;
+    }
+
+    onSubmit({
+      name,
+      phone,
+      license_number: licenseNumber,
+      home_base: homeBase,
+      status: driverStatus,
+      rating: Number(rating)
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="stack">
+      <div className="form-grid">
+        <div className="field">
+          <label>Full Name *</label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. Ramesh Kumar"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>Phone Number *</label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. +91 9876543210"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>License Number *</label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. DL-1420110012345"
+            value={licenseNumber}
+            onChange={(e) => setLicenseNumber(e.target.value.toUpperCase())}
+          />
+        </div>
+        <div className="field">
+          <label>Home Base City *</label>
+          <input
+            type="text"
+            required
+            placeholder="e.g. Delhi"
+            value={homeBase}
+            onChange={(e) => setHomeBase(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>Status</label>
+          <select value={driverStatus} onChange={(e) => setDriverStatus(e.target.value)}>
+            <option value="available">Available</option>
+            <option value="assigned">Assigned</option>
+            <option value="on_trip">On trip</option>
+            <option value="off_duty">Off duty</option>
+            <option value="suspended">Suspended</option>
+          </select>
+        </div>
+        <div className="field">
+          <label>Rating (1.0 to 5.0)</label>
+          <input
+            type="number"
+            min="1"
+            max="5"
+            step="0.1"
+            value={rating}
+            onChange={(e) => setRating(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="actions">
+        <button type="button" className="button secondary" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="submit" className="button">
+          {initialData ? "Update Driver" : "Save Driver"}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -1920,8 +2197,8 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
         value={pickupCity} 
         onChange={setPickupCity} 
         onSelectSuggestion={(s) => {
-          setPickupLat(s.lat);
-          setPickupLng(s.lng);
+          setPickupLat(Number(s.lat.toFixed(6)));
+          setPickupLng(Number(s.lng.toFixed(6)));
           setPickupCity(s.city);
         }}
         required 
@@ -1932,8 +2209,8 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
         value={dropCity} 
         onChange={setDropCity} 
         onSelectSuggestion={(s) => {
-          setDropLat(s.lat);
-          setDropLng(s.lng);
+          setDropLat(Number(s.lat.toFixed(6)));
+          setDropLng(Number(s.lng.toFixed(6)));
           setDropCity(s.city);
         }}
         required 
@@ -2121,7 +2398,8 @@ function Status({ value }: { value: string }) {
 function pageTitle(section: ConsoleSection) {
   const titles: Record<ConsoleSection, string> = {
     dashboard: "Operations Dashboard",
-    trips: "Trip Dispatch",
+    trips: "Trip Dispatch Board",
+    "create-trip": "Create & Dispatch Trip",
     vehicles: "Vehicle Management",
     drivers: "Driver Management",
     tracking: "Vehicle Tracking",
@@ -2135,7 +2413,8 @@ function pageTitle(section: ConsoleSection) {
 function pageSubtitle(section: ConsoleSection) {
   const subtitles: Record<ConsoleSection, string> = {
     dashboard: "A live view of fleet capacity, dispatch load, and operational exceptions",
-    trips: "Create trips, assign vehicles and drivers, and move trips through their lifecycle",
+    trips: "View trip cards, filter dispatches, and transition trip statuses",
+    "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
     vehicles: "Review vehicle state, assignment, current city, and next operational slot",
     drivers: "Track driver availability, assignment, base city, and active work",
     tracking: "Monitor each car by status, active trip, city, and predicted next location",

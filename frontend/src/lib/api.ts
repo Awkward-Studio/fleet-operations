@@ -242,8 +242,68 @@ export function createVehicle(payload: {
 }
 
 
+export function updateVehicle(id: number, payload: Partial<{
+  registration_number: string;
+  make: string;
+  model: string;
+  category: string;
+  current_city: string;
+  status: string;
+  assigned_driver_id: number | null;
+  permit_expires_on: string;
+  insurance_expires_on: string;
+  pollution_expires_on: string;
+  fitness_expires_on: string;
+  odometer_km: number;
+}>) {
+  return request<Vehicle>(`/vehicles/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteVehicle(id: number) {
+  return request<void>(`/vehicles/${id}/`, {
+    method: "DELETE"
+  });
+}
+
 export function getDrivers() {
   return request<Driver[]>("/drivers/");
+}
+
+export function createDriver(payload: {
+  name: string;
+  phone: string;
+  license_number: string;
+  home_base: string;
+  status?: string;
+  rating?: string | number;
+}) {
+  return request<Driver>("/drivers/", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateDriver(id: number, payload: Partial<{
+  name: string;
+  phone: string;
+  license_number: string;
+  home_base: string;
+  status: string;
+  rating: string | number;
+}>) {
+  return request<Driver>(`/drivers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteDriver(id: number) {
+  return request<void>(`/drivers/${id}/`, {
+    method: "DELETE"
+  });
 }
 
 export function getTrips() {

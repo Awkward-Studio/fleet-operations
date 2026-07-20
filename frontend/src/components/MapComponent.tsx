@@ -168,12 +168,15 @@ export default function MapComponent({
       // 1. If no pickup, set pickup
       // 2. If pickup exists but no drop, set drop
       // 3. If both exist, reset and set new pickup (clear drop)
+      const rLat = Number(lat.toFixed(6));
+      const rLng = Number(lng.toFixed(6));
+
       if (!pickupMarkerRef.current) {
-        const cityName = await reverseGeocode(lat, lng);
-        setPickup({ lat, lng, city: cityName });
+        const cityName = await reverseGeocode(rLat, rLng);
+        setPickup({ lat: rLat, lng: rLng, city: cityName });
       } else if (pickupMarkerRef.current && !dropMarkerRef.current) {
-        const cityName = await reverseGeocode(lat, lng);
-        setDrop({ lat, lng, city: cityName });
+        const cityName = await reverseGeocode(rLat, rLng);
+        setDrop({ lat: rLat, lng: rLng, city: cityName });
       } else {
         // Reset both
         if (polylineRef.current) {
@@ -187,8 +190,8 @@ export default function MapComponent({
         setDrop(null);
         setDistance(null);
 
-        const cityName = await reverseGeocode(lat, lng);
-        setPickup({ lat, lng, city: cityName });
+        const cityName = await reverseGeocode(rLat, rLng);
+        setPickup({ lat: rLat, lng: rLng, city: cityName });
       }
       setLoading(false);
     });
@@ -218,9 +221,11 @@ export default function MapComponent({
       marker.on("dragend", async (e) => {
         const target = e.target as L.Marker;
         const { lat, lng } = target.getLatLng();
+        const rLat = Number(lat.toFixed(6));
+        const rLng = Number(lng.toFixed(6));
         setLoading(true);
-        const cityName = await reverseGeocode(lat, lng);
-        setPickup({ lat, lng, city: cityName });
+        const cityName = await reverseGeocode(rLat, rLng);
+        setPickup({ lat: rLat, lng: rLng, city: cityName });
         setLoading(false);
       });
 
@@ -262,9 +267,11 @@ export default function MapComponent({
       marker.on("dragend", async (e) => {
         const target = e.target as L.Marker;
         const { lat, lng } = target.getLatLng();
+        const rLat = Number(lat.toFixed(6));
+        const rLng = Number(lng.toFixed(6));
         setLoading(true);
-        const cityName = await reverseGeocode(lat, lng);
-        setDrop({ lat, lng, city: cityName });
+        const cityName = await reverseGeocode(rLat, rLng);
+        setDrop({ lat: rLat, lng: rLng, city: cityName });
         setLoading(false);
       });
 

@@ -70,6 +70,17 @@ class TripSerializer(serializers.ModelSerializer):
             "distance_km",
         ]
 
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = data.copy()
+            for field in ["pickup_latitude", "pickup_longitude", "drop_latitude", "drop_longitude"]:
+                if field in data and data[field] is not None and data[field] != "":
+                    try:
+                        data[field] = round(float(data[field]), 8)
+                    except (ValueError, TypeError):
+                        pass
+        return super().to_internal_value(data)
+
     def validate(self, attrs):
         if attrs["estimated_drop_at"] <= attrs["pickup_at"]:
             raise serializers.ValidationError("Estimated drop time must be after pickup time.")

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CalendarClock,
@@ -54,6 +54,7 @@ import {
   Vehicle,
   assignTrip,
   createTrip,
+  deleteTrip,
   createVehicle,
   updateVehicle,
   deleteVehicle,
@@ -89,6 +90,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const { user, logout } = useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const [role, setRole] = useState<Role>("dispatcher");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -99,6 +101,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [selectedDriver, setSelectedDriver] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Search & Filter States
@@ -290,7 +293,10 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
     try {
       await createTrip(payload);
       onSuccess();
-      window.location.reload();
+      await loadData();
+      setSuccessMsg("Trip created successfully!");
+      setTimeout(() => setSuccessMsg(null), 4000);
+      router.push("/trips");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create trip.");
     }
@@ -376,6 +382,18 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
       await loadData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to update trip status.");
+    }
+  }
+
+  async function handleDeleteTrip(tripId: number) {
+    if (!confirm("Are you sure you want to delete this trip?")) return;
+    try {
+      await deleteTrip(tripId);
+      await loadData();
+      setSuccessMsg("Trip deleted successfully!");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to delete trip.");
     }
   }
 
@@ -524,6 +542,17 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
 
         <main className="main">
           {error ? <div className="error">{error}</div> : null}
+          {successMsg && (
+            <div style={{
+              position: "fixed", bottom: 24, right: 24, background: "var(--ok)", color: "#fff", 
+              padding: "14px 20px", borderRadius: 8, boxShadow: "var(--card-shadow)", zIndex: 9999,
+              display: "flex", alignItems: "center", gap: 10, fontWeight: 500, fontSize: 14,
+              animation: "fadeInUp 0.3s ease-out"
+            }}>
+              <CheckCircle2 size={20} />
+              {successMsg}
+            </div>
+          )}
           {loading ? <div className="notice">Loading fleet data from Django API...</div> : null}
 
           {section === "dashboard" ? (
@@ -667,6 +696,17 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                 trips={filteredTrips}
                 onTransition={handleTransition}
                 setError={setError}
+                unassignedTrips={unassignedTrips}
+                assignableVehicles={assignableVehicles}
+                availableDrivers={availableDrivers}
+                selectedTrip={selectedTrip}
+                selectedVehicle={selectedVehicle}
+                selectedDriver={selectedDriver}
+                onTripChange={setSelectedTrip}
+                onVehicleChange={setSelectedVehicle}
+                onDriverChange={setSelectedDriver}
+                onAssign={handleAssignTrip}
+                onDelete={handleDeleteTrip}
               />
             </>
           ) : null}
@@ -674,16 +714,6 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
           {section === "create-trip" ? (
             <CreateTripView
               role={role}
-              unassignedTrips={unassignedTrips}
-              assignableVehicles={assignableVehicles}
-              availableDrivers={availableDrivers}
-              selectedTrip={selectedTrip}
-              selectedVehicle={selectedVehicle}
-              selectedDriver={selectedDriver}
-              onTripChange={setSelectedTrip}
-              onVehicleChange={setSelectedVehicle}
-              onDriverChange={setSelectedDriver}
-              onAssign={handleAssignTrip}
               onCreateTrip={handleCreateTrip}
             />
           ) : null}
@@ -957,13 +987,26 @@ function TripsView(props: {
   trips: Trip[];
   onTransition: (tripId: number, status: string) => void;
   setError?: (msg: string | null) => void;
+  unassignedTrips?: Trip[];
+  assignableVehicles?: Vehicle[];
+  availableDrivers?: Driver[];
+  selectedTrip?: number | null;
+  selectedVehicle?: number | null;
+  selectedDriver?: number | null;
+  onTripChange?: (value: number) => void;
+  onVehicleChange?: (value: number) => void;
+  onDriverChange?: (value: number) => void;
+  onAssign?: () => void;
+  onDelete?: (tripId: number) => void;
 }) {
   const [activeDropzone, setActiveDropzone] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
 
   // Close menus on click outside
   useEffect(() => {
-    const handleOutsideClick = () => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest(".kanban-card-actions")) return;
       setOpenMenuId(null);
     };
     document.addEventListener("click", handleOutsideClick);
@@ -1002,7 +1045,7 @@ function TripsView(props: {
 
   // Drag handlers
   const handleDragStart = (e: React.DragEvent, tripId: number) => {
-    e.dataTransfer.setData("tripId", tripId.toString());
+    e.dataTransfer.setData("text/plain", tripId.toString());
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1022,7 +1065,7 @@ function TripsView(props: {
   const handleDrop = (e: React.DragEvent, columnKey: string) => {
     e.preventDefault();
     setActiveDropzone(null);
-    const tripIdStr = e.dataTransfer.getData("tripId");
+    const tripIdStr = e.dataTransfer.getData("text/plain");
     if (!tripIdStr) return;
     const tripId = parseInt(tripIdStr, 10);
     if (isNaN(tripId)) return;
@@ -1054,6 +1097,43 @@ function TripsView(props: {
 
   return (
     <div className="stack">
+      {props.unassignedTrips && props.unassignedTrips.length > 0 && (
+        <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
+          <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
+            <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange?.(Number(value))}>
+              <option value="" disabled>Select trip</option>
+              {props.unassignedTrips.map((trip) => (
+                <option key={trip.id} value={trip.id}>
+                  {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange?.(Number(value))}>
+              <option value="" disabled>Select vehicle</option>
+              {props.assignableVehicles?.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange?.(Number(value))}>
+              <option value="" disabled>Select driver</option>
+              {props.availableDrivers?.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name} - {driver.home_base}
+                </option>
+              ))}
+            </SelectField>
+            <div className="actions inline-action">
+              <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
+                <Navigation size={16} />
+                Assign Trip
+              </button>
+            </div>
+          </div>
+        </Panel>
+      )}
+
       {/* Kanban Board Area */}
       <div className="kanban-board-container">
         <div className="kanban-board">
@@ -1224,6 +1304,32 @@ function TripsView(props: {
                                     {labelize(status)}
                                   </button>
                                 ))}
+                                <div style={{ height: 1, background: "var(--line)", margin: "4px 0" }} />
+                                <button
+                                  style={{
+                                    width: "100%",
+                                    textAlign: "left",
+                                    background: "transparent",
+                                    border: 0,
+                                    padding: "8px 10px",
+                                    fontSize: 12,
+                                    cursor: "pointer",
+                                    borderRadius: 4,
+                                    color: "var(--danger)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6
+                                  }}
+                                  onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,0,0,0.1)"}
+                                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (props.onDelete) props.onDelete(trip.id);
+                                    setOpenMenuId(null);
+                                  }}
+                                >
+                                  <Trash2 size={12} /> Delete
+                                </button>
                               </div>
                             )}
                           </div>
@@ -1258,64 +1364,10 @@ function TripsView(props: {
 
 function CreateTripView(props: {
   role: Role;
-  unassignedTrips: Trip[];
-  assignableVehicles: Vehicle[];
-  availableDrivers: Driver[];
-  selectedTrip: number | null;
-  selectedVehicle: number | null;
-  selectedDriver: number | null;
-  onTripChange: (value: number) => void;
-  onVehicleChange: (value: number) => void;
-  onDriverChange: (value: number) => void;
-  onAssign: () => void;
   onCreateTrip: (payload: any, onSuccess: () => void) => void;
 }) {
   return (
     <section className="grid">
-      <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
-        <div className="stack">
-          {props.unassignedTrips.length > 0 ? (
-            <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
-              <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange(Number(value))}>
-                <option value="" disabled>Select trip</option>
-                {props.unassignedTrips.map((trip) => (
-                  <option key={trip.id} value={trip.id}>
-                    {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
-                  </option>
-                ))}
-              </SelectField>
-              <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange(Number(value))}>
-                <option value="" disabled>Select vehicle</option>
-                {props.assignableVehicles.map((vehicle) => (
-                  <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
-                  </option>
-                ))}
-              </SelectField>
-              <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange(Number(value))}>
-                <option value="" disabled>Select driver</option>
-                {props.availableDrivers.map((driver) => (
-                  <option key={driver.id} value={driver.id}>
-                    {driver.name} - {driver.home_base}
-                  </option>
-                ))}
-              </SelectField>
-              <div className="actions inline-action">
-                <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
-                  <Navigation size={16} />
-                  Assign Trip
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="notice" style={{ marginBottom: 12 }}>All trips currently assigned. Create new OTA trips on the right.</div>
-          )}
-          
-          <div className="notice" style={{ background: "rgba(59, 130, 246, 0.05)", border: "1px solid rgba(59, 130, 246, 0.15)", color: "#93c5fd" }}>
-            💡 Manage active dispatches and status transitions on the Trips page board.
-          </div>
-        </div>
-      </Panel>
 
       {props.role !== "accountant" ? (
         <Panel title="New OTA Trip">
@@ -2119,6 +2171,38 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
   const [mapKey, setMapKey] = useState(0);
 
+  const [pickupDate, setPickupDate] = useState("");
+  const [pickupTime, setPickupTime] = useState("");
+  const [dropDate, setDropDate] = useState("");
+  const [dropTime, setDropTime] = useState("");
+
+  useEffect(() => {
+    if (pickupDate && pickupTime && distanceKm) {
+      // Estimate duration: assume average speed of 50 km/h + 30 mins buffer
+      const hours = distanceKm / 50;
+      const ms = (hours * 60 * 60 * 1000) + (30 * 60 * 1000);
+      const pickupDateObj = new Date(`${pickupDate}T${pickupTime}`);
+      if (!isNaN(pickupDateObj.getTime())) {
+        const dropDateObj = new Date(pickupDateObj.getTime() + ms);
+        
+        // Snap minutes to nearest 15 for consistency with the time picker UI
+        const mins = dropDateObj.getMinutes();
+        const snappedMins = Math.round(mins / 15) * 15;
+        dropDateObj.setMinutes(snappedMins);
+        
+        const yyyy = dropDateObj.getFullYear();
+        const mm = String(dropDateObj.getMonth() + 1).padStart(2, '0');
+        const dd = String(dropDateObj.getDate()).padStart(2, '0');
+        
+        const hh = String(dropDateObj.getHours()).padStart(2, '0');
+        const fmm = String(dropDateObj.getMinutes()).padStart(2, '0');
+        
+        setDropDate(`${yyyy}-${mm}-${dd}`);
+        setDropTime(`${hh}:${fmm}`);
+      }
+    }
+  }, [pickupDate, pickupTime, distanceKm]);
+
   const handleLocationSelected = (data: {
     pickupLat: number | null;
     pickupLng: number | null;
@@ -2139,14 +2223,15 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const formData = new FormData(formElement);
 
     onCreateTrip({
       customer_name: String(formData.get("customer_name")),
       pickup_city: pickupCity || String(formData.get("pickup_city")),
       drop_city: dropCity || String(formData.get("drop_city")),
-      pickup_at: String(formData.get("pickup_at")),
-      estimated_drop_at: String(formData.get("estimated_drop_at")),
+      pickup_at: `${pickupDate}T${pickupTime}`,
+      estimated_drop_at: `${dropDate}T${dropTime}`,
       ota_source: String(formData.get("ota_source")),
       fare_amount: String(formData.get("fare_amount")),
       pickup_latitude: pickupLat,
@@ -2162,8 +2247,12 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       setDropLat(null);
       setDropLng(null);
       setDistanceKm(null);
+      setPickupDate("");
+      setPickupTime("");
+      setDropDate("");
+      setDropTime("");
       setMapKey(prev => prev + 1);
-      event.currentTarget.reset();
+      formElement.reset();
     });
   };
 
@@ -2217,8 +2306,12 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       />
       
       <div className="form-grid" style={{ gap: 12 }}>
-        <InputField label="PICKUP AT" name="pickup_at" type="datetime-local" required />
-        <InputField label="DROP AT" name="estimated_drop_at" type="datetime-local" required />
+        <InputField label="PICKUP DATE" name="pickup_date" type="date" value={pickupDate} onChange={(e) => setPickupDate(e.target.value)} required />
+        <TimePickerField label="PICKUP TIME" name="pickup_time" value={pickupTime} onChange={setPickupTime} />
+      </div>
+      <div className="form-grid" style={{ gap: 12, marginTop: 12 }}>
+        <InputField label="DROP DATE" name="drop_date" type="date" value={dropDate} onChange={(e) => setDropDate(e.target.value)} required />
+        <TimePickerField label="DROP TIME" name="drop_time" value={dropTime} onChange={setDropTime} />
       </div>
 
       <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
@@ -2520,7 +2613,7 @@ function AutocompleteField({
           onChange(e.target.value);
         }}
         required={required}
-        autoComplete="off"
+        autoComplete="new-password"
       />
       {loading && (
         <div style={{ position: "absolute", right: 12, top: 38, fontSize: 11, color: "var(--muted)", pointerEvents: "none" }}>
@@ -2563,6 +2656,116 @@ function AutocompleteField({
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
             >
               {item.display_name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function TimePickerField({ label, name, required, value, onChange }: { label: string; name: string; required?: boolean; value?: string; onChange?: (val: string) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [internalTime, setInternalTime] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  
+  const selectedTime = value !== undefined ? value : internalTime;
+
+  const times = useMemo(() => {
+    const t = [];
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 15) {
+        const hh = h.toString().padStart(2, '0');
+        const mm = m.toString().padStart(2, '0');
+        const period = h < 12 ? 'AM' : 'PM';
+        const displayH = h % 12 === 0 ? 12 : h % 12;
+        t.push({ value: `${hh}:${mm}`, label: `${displayH}:${mm} ${period}` });
+      }
+    }
+    return t;
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  return (
+    <div className="field" ref={containerRef} style={{ position: "relative" }}>
+      <label>{label}</label>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        style={{
+          background: "rgba(0, 0, 0, 0.3)",
+          border: `1px solid ${isOpen ? "var(--accent)" : "var(--line)"}`,
+          boxShadow: isOpen ? "0 0 0 2px var(--accent-glow)" : "none",
+          borderRadius: 8,
+          padding: "12px 14px",
+          color: selectedTime ? "#fff" : "rgba(255, 255, 255, 0.25)",
+          cursor: "pointer",
+          fontSize: 14,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
+        }}
+      >
+        <span>{selectedTime ? times.find(t => t.value === selectedTime)?.label : "Select time..."}</span>
+        <Clock size={16} color="var(--muted)" />
+      </div>
+      
+      <input type="hidden" name={name} value={selectedTime} />
+
+      {isOpen && (
+        <ul className="time-picker-dropdown" style={{
+          position: "absolute",
+          top: "100%",
+          left: 0,
+          right: 0,
+          background: "var(--panel-strong)",
+          border: "1px solid var(--line)",
+          borderRadius: 8,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+          listStyle: "none",
+          padding: 8,
+          margin: "8px 0 0 0",
+          zIndex: 1000,
+          maxHeight: 220,
+          overflowY: "auto",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 4
+        }}>
+          {times.map((t) => (
+            <li
+              key={t.value}
+              onClick={() => {
+                if (onChange) onChange(t.value);
+                else setInternalTime(t.value);
+                setIsOpen(false);
+              }}
+              style={{
+                padding: "8px",
+                cursor: "pointer",
+                borderRadius: 4,
+                fontSize: 13,
+                color: selectedTime === t.value ? "#fff" : "#cbd5e1",
+                background: selectedTime === t.value ? "var(--accent)" : "transparent",
+                textAlign: "center",
+                transition: "all 0.2s"
+              }}
+              onMouseEnter={(e) => {
+                if (selectedTime !== t.value) e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+              }}
+              onMouseLeave={(e) => {
+                if (selectedTime !== t.value) e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              {t.label}
             </li>
           ))}
         </ul>

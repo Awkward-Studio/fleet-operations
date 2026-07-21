@@ -300,6 +300,12 @@ export function updateDriver(id: number, payload: Partial<{
   });
 }
 
+export function deleteTrip(id: number) {
+  return request<void>(`/trips/${id}/`, {
+    method: "DELETE"
+  });
+}
+
 export function deleteDriver(id: number) {
   return request<void>(`/drivers/${id}/`, {
     method: "DELETE"

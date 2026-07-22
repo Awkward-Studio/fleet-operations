@@ -1,3 +1,12 @@
+export type UploadedAsset = {
+  id: string;
+  kind: "image" | "invoice" | "pdf";
+  original_name: string;
+  content_type: string;
+  created_at: string;
+  href: string;
+};
+
 export type Driver = {
   id: number;
   name: string;
@@ -6,6 +15,10 @@ export type Driver = {
   home_base: string;
   status: string;
   rating: string;
+  aadhaar_card?: UploadedAsset | null;
+  driving_license?: UploadedAsset | null;
+  driving_license_expiry_date?: string | null;
+  police_clearance_certificate?: UploadedAsset | null;
 };
 
 export type Vehicle = {
@@ -279,6 +292,10 @@ export function createDriver(payload: {
   home_base: string;
   status?: string;
   rating?: string | number;
+  aadhaar_card_id?: string | null;
+  driving_license_id?: string | null;
+  driving_license_expiry_date?: string | null;
+  police_clearance_certificate_id?: string | null;
 }) {
   return request<Driver>("/drivers/", {
     method: "POST",
@@ -293,6 +310,10 @@ export function updateDriver(id: number, payload: Partial<{
   home_base: string;
   status: string;
   rating: string | number;
+  aadhaar_card_id?: string | null;
+  driving_license_id?: string | null;
+  driving_license_expiry_date?: string | null;
+  police_clearance_certificate_id?: string | null;
 }>) {
   return request<Driver>(`/drivers/${id}/`, {
     method: "PATCH",
@@ -385,4 +406,65 @@ export function changeUserPassword(payload: Record<string, string>) {
     body: JSON.stringify(payload)
   });
 }
+
+export function uploadAsset(
+  file: File,
+  kind: "image" | "pdf" | "invoice",
+  onProgress?: (progress: number) => void
+): Promise<UploadedAsset> {
+  return new Promise((resolve, reject) => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+    const xhr = new XMLHttpRequest();
+    const endpointMap = {
+      image: "/uploads/images/",
+      pdf: "/uploads/pdfs/",
+      invoice: "/uploads/invoices/",
+    };
+    const url = `${getApiBase()}/api${endpointMap[kind]}`;
+
+    xhr.open("POST", url);
+
+    if (token) {
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100);
+          onProgress(percentComplete);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText) as UploadedAsset;
+          resolve(data);
+        } catch (e) {
+          reject(new Error("Failed to parse upload response"));
+        }
+      } else {
+        let errMsg = xhr.responseText;
+        try {
+          const json = JSON.parse(xhr.responseText);
+          errMsg = json.error || json.detail || json.message || Object.values(json).flat().join(" ") || xhr.responseText;
+        } catch {
+          // Keep raw response text
+        }
+        reject(new Error(errMsg || `Upload failed with status ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("Network error during file upload."));
+    };
+
+    const formData = new FormData();
+    formData.append("file", file);
+    xhr.send(formData);
+  });
+}
+
 

@@ -1,7 +1,11 @@
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = "dev-only-change-me"
 DEBUG = True
@@ -18,9 +22,11 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
+    "media_store",
     "fleet",
     "accounts",
     "makemytrip",
+    "rentals",
 ]
 
 MIDDLEWARE = [
@@ -100,5 +106,8 @@ AUTHENTICATION_BACKENDS = [
 # MakeMyTrip (Incabs) API Settings
 MAKEMYTRIP_MOCK_SERVER_URL = "https://private-7902fd-incabsapipartnerdocumentationv3.apiary-mock.com/tracking/pp2"
 MAKEMYTRIP_HEADERS = {}
+
+# ImageKit Settings
+IMAGEKIT_PRIVATE_KEY = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip()
 
 

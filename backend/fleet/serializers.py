@@ -2,12 +2,54 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Driver, DriverStatus, Trip, TripStatus, Vehicle, VehicleStatus
+from media_store.models import UploadedAsset
+from media_store.serializers import UploadedAssetSerializer
 
 
 class DriverSerializer(serializers.ModelSerializer):
+    aadhaar_card = UploadedAssetSerializer(read_only=True)
+    aadhaar_card_id = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        source="aadhaar_card",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
+    driving_license = UploadedAssetSerializer(read_only=True)
+    driving_license_id = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        source="driving_license",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
+    police_clearance_certificate = UploadedAssetSerializer(read_only=True)
+    police_clearance_certificate_id = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        source="police_clearance_certificate",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
+
     class Meta:
         model = Driver
-        fields = ["id", "name", "phone", "license_number", "home_base", "status", "rating"]
+        fields = [
+            "id",
+            "name",
+            "phone",
+            "license_number",
+            "home_base",
+            "status",
+            "rating",
+            "aadhaar_card",
+            "aadhaar_card_id",
+            "driving_license",
+            "driving_license_id",
+            "driving_license_expiry_date",
+            "police_clearance_certificate",
+            "police_clearance_certificate_id",
+        ]
 
 
 class VehicleSerializer(serializers.ModelSerializer):

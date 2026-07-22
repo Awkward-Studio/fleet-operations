@@ -37,7 +37,8 @@ import {
   XCircle,
   Pencil,
   Trash2,
-  UserPlus
+  UserPlus,
+  KeyRound
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
@@ -66,15 +67,18 @@ import {
   getSummary,
   getTrips,
   getVehicles,
-  transitionTrip
+  transitionTrip,
+  UploadedAsset
 } from "@/lib/api";
+import { DocumentUpload } from "@/components/DocumentUpload";
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
 
 const navItems = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/trips", section: "trips", label: "Trips", icon: Route },
+  { href: "/rentals", section: "rentals", label: "Rentals", icon: KeyRound },
   { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
@@ -1828,6 +1832,12 @@ function DriverForm({
   const [driverStatus, setDriverStatus] = useState(initialData?.status || "available");
   const [rating, setRating] = useState(initialData?.rating || "4.5");
 
+  // Documents state
+  const [aadhaarCard, setAadhaarCard] = useState<UploadedAsset | null>(initialData?.aadhaar_card || null);
+  const [drivingLicense, setDrivingLicense] = useState<UploadedAsset | null>(initialData?.driving_license || null);
+  const [dlExpiryDate, setDlExpiryDate] = useState<string>(initialData?.driving_license_expiry_date || "");
+  const [pcc, setPcc] = useState<UploadedAsset | null>(initialData?.police_clearance_certificate || null);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !phone || !licenseNumber || !homeBase) {
@@ -1841,7 +1851,11 @@ function DriverForm({
       license_number: licenseNumber,
       home_base: homeBase,
       status: driverStatus,
-      rating: Number(rating)
+      rating: Number(rating),
+      aadhaar_card_id: aadhaarCard?.id || null,
+      driving_license_id: drivingLicense?.id || null,
+      driving_license_expiry_date: dlExpiryDate || null,
+      police_clearance_certificate_id: pcc?.id || null
     });
   };
 
@@ -1908,6 +1922,45 @@ function DriverForm({
             value={rating}
             onChange={(e) => setRating(e.target.value)}
           />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+        <h4 style={{ margin: "0 0 16px 0", color: "#fff" }}>Driver Documents</h4>
+        <div className="form-grid">
+          <div className="field">
+            <label>Aadhaar Card</label>
+            <DocumentUpload
+              value={aadhaarCard}
+              onChange={setAadhaarCard}
+              placeholder="Upload Aadhaar Card"
+            />
+          </div>
+          <div className="field">
+            <label>Driving License</label>
+            <DocumentUpload
+              value={drivingLicense}
+              onChange={setDrivingLicense}
+              placeholder="Upload Driving License"
+            />
+          </div>
+          <div className="field">
+            <label>Driving License Expiry Date {drivingLicense && "*"}</label>
+            <input
+              type="date"
+              required={!!drivingLicense}
+              value={dlExpiryDate}
+              onChange={(e) => setDlExpiryDate(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>Police Clearance Certificate (PCC)</label>
+            <DocumentUpload
+              value={pcc}
+              onChange={setPcc}
+              placeholder="Upload PCC"
+            />
+          </div>
         </div>
       </div>
 
@@ -2492,6 +2545,7 @@ function pageTitle(section: ConsoleSection) {
   const titles: Record<ConsoleSection, string> = {
     dashboard: "Operations Dashboard",
     trips: "Trip Dispatch Board",
+    rentals: "Rental Module Console",
     "create-trip": "Create & Dispatch Trip",
     vehicles: "Vehicle Management",
     drivers: "Driver Management",
@@ -2507,6 +2561,7 @@ function pageSubtitle(section: ConsoleSection) {
   const subtitles: Record<ConsoleSection, string> = {
     dashboard: "A live view of fleet capacity, dispatch load, and operational exceptions",
     trips: "View trip cards, filter dispatches, and transition trip statuses",
+    rentals: "Manage corporate chauffeur rentals, package bookings, pricing, and driver checklists",
     "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
     vehicles: "Review vehicle state, assignment, current city, and next operational slot",
     drivers: "Track driver availability, assignment, base city, and active work",

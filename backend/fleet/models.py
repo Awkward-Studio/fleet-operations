@@ -38,6 +38,30 @@ class Driver(models.Model):
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=4.5)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Documents
+    aadhaar_card = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="driver_aadhaar_cards",
+    )
+    driving_license = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="driver_driving_licenses",
+    )
+    driving_license_expiry_date = models.DateField(null=True, blank=True)
+    police_clearance_certificate = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="driver_pccs",
+    )
+
     def __str__(self):
         return self.name
 

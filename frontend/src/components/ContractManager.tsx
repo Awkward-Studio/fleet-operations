@@ -772,12 +772,12 @@ export default function ContractManager() {
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Grace Period (Mins)</label>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Payment Terms (Days)</label>
                   <input
                     type="number"
                     style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={editingContract.grace_period_minutes || 15}
-                    onChange={(e) => setEditingContract({ ...editingContract, grace_period_minutes: parseInt(e.target.value) })}
+                    value={editingContract.payment_terms_days || 30}
+                    onChange={(e) => setEditingContract({ ...editingContract, payment_terms_days: parseInt(e.target.value) })}
                   />
                 </div>
               </div>

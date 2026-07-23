@@ -17,7 +17,9 @@ import {
   Car,
   MapPin,
   HelpCircle,
-  FileCheck
+  FileCheck,
+  Eye,
+  X,
 } from "lucide-react";
 import {
   CorporateContract,
@@ -34,6 +36,14 @@ import {
   deleteContract,
 } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 export default function ContractManager() {
   const { user } = useAuth();
@@ -54,8 +64,9 @@ export default function ContractManager() {
   const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
 
-  // Selection
+  // Selection & Detail Drawer
   const [selectedContract, setSelectedContract] = useState<CorporateContract | null>(null);
+  const [showDetailDrawer, setShowDetailDrawer] = useState<boolean>(false);
   const [validationResult, setValidationResult] = useState<{
     is_valid: boolean;
     errors: string[];
@@ -90,9 +101,6 @@ export default function ContractManager() {
       ]);
       setContracts(contractList);
       setCustomers(customerList);
-      if (contractList.length > 0 && !selectedContract) {
-        setSelectedContract(contractList[0]);
-      }
     } catch (err: any) {
       setError(err.message || "Failed to load contracts.");
     } finally {
@@ -100,105 +108,135 @@ export default function ContractManager() {
     }
   };
 
-  const handleOpenCreateModal = () => {
+  const handleValidate = async (contractId: number) => {
+    try {
+      setError(null);
+      const res = await validateContract(contractId);
+      setValidationResult(res);
+    } catch (err: any) {
+      setError(err.message || "Contract validation failed.");
+    }
+  };
+
+  const handleActivate = async (contractId: number) => {
+    try {
+      setError(null);
+      const res = await activateContract(contractId);
+      setSuccess(`Contract version ${res.version_name} activated successfully.`);
+      fetchInitialData();
+      if (selectedContract?.id === contractId) {
+        setSelectedContract(res);
+      }
+    } catch (err: any) {
+      setError(err.message || "Activation failed.");
+    }
+  };
+
+  const handleDuplicate = async (contractId: number) => {
+    try {
+      setError(null);
+      const created = await copyContract(contractId);
+      setSuccess(`Created draft version '${created.version_name}' from contract ID #${contractId}.`);
+      fetchInitialData();
+      setSelectedContract(created);
+      setShowDetailDrawer(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to duplicate contract.");
+    }
+  };
+
+  const handleDelete = async (contract: CorporateContract) => {
+    if (!confirm(`Are you sure you want to delete contract '${contract.title}'?`)) return;
+    try {
+      setError(null);
+      await deleteContract(contract.id);
+      setSuccess(`Contract '${contract.title}' deleted.`);
+      if (selectedContract?.id === contract.id) {
+        setSelectedContract(null);
+        setShowDetailDrawer(false);
+      }
+      fetchInitialData();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete contract.");
+    }
+  };
+
+  const openNewContractModal = () => {
     setEditingContract({
-      customer: customers[0]?.id || 0,
-      title: "Master Corporate Rate Card 2026",
-      version_name: "v1.0",
-      effective_start: new Date().toISOString().split("T")[0],
+      contract_code: `CNT-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+      title: "Master Transportation Services Agreement",
       status: "DRAFT",
-      currency: "INR",
-      cgst_rate: "2.50",
-      sgst_rate: "2.50",
+      version_name: "v1.0-draft",
+      start_date: new Date().toISOString().split("T")[0],
       metering_policy: "GARAGE_TO_GARAGE",
-      payment_terms_days: 30,
+      grace_period_minutes: 15,
+      night_shift_start: "22:00:00",
+      night_shift_end: "06:00:00",
+      is_active: true,
+      rates: [
+        {
+          vehicle_category: "Sedan",
+          duty_type: "LOCAL_8HR_80KM",
+          base_hours: 8,
+          base_km: 80,
+          base_rate: "2500.00",
+          extra_km_rate: "18.00",
+          extra_hour_rate: "200.00",
+          night_allowance_rate: "300.00",
+          outstation_driver_allowance_per_day: "500.00",
+        },
+      ],
+      allowances: [
+        {
+          allowance_type: "NIGHT_ALLOWANCE",
+          name: "Night Duty Allowance (10 PM - 6 AM)",
+          amount: "300.00",
+          charging_unit: "PER_NIGHT",
+          is_mandatory: false,
+        },
+      ],
     });
     setRatesDraft([
       {
-        city: "mumbai",
-        vehicle_category: "sedan",
+        vehicle_category: "Sedan",
         duty_type: "LOCAL_8HR_80KM",
-        included_hours: 8,
-        included_km: 80,
-        base_rate: "2400.00",
-        extra_hour_rate: "200.00",
+        base_hours: 8,
+        base_km: 80,
+        base_rate: "2500.00",
         extra_km_rate: "18.00",
-      },
-      {
-        city: "mumbai",
-        vehicle_category: "sedan",
-        duty_type: "LOCAL_12HR_120KM",
-        included_hours: 12,
-        included_km: 120,
-        base_rate: "3500.00",
         extra_hour_rate: "200.00",
-        extra_km_rate: "18.00",
+        night_allowance_rate: "300.00",
+        outstation_driver_allowance_per_day: "500.00",
       },
     ]);
     setAllowancesDraft([
       {
-        allowance_type: "OVERTIME_PER_HOUR",
-        amount: "150.00",
-        description: "Overtime charge per hour",
-      },
-      {
-        allowance_type: "OVERNIGHT_DRIVER_ALLOWANCE",
+        allowance_type: "NIGHT_ALLOWANCE",
+        name: "Night Duty Allowance (10 PM - 6 AM)",
         amount: "300.00",
-        description: "Night halt allowance",
+        charging_unit: "PER_NIGHT",
+        is_mandatory: false,
       },
     ]);
     setShowContractModal(true);
   };
 
-  const handleOpenEditModal = (contract: CorporateContract) => {
+  const openEditContractModal = (contract: CorporateContract) => {
     setEditingContract(contract);
     setRatesDraft(contract.rates || []);
     setAllowancesDraft(contract.allowances || []);
     setShowContractModal(true);
   };
 
-  const handleAddRateRow = () => {
-    setRatesDraft((prev) => [
-      ...prev,
-      {
-        city: "mumbai",
-        vehicle_category: "sedan",
-        duty_type: "LOCAL_8HR_80KM",
-        included_hours: 8,
-        included_km: 80,
-        base_rate: "2000.00",
-        extra_hour_rate: "150.00",
-        extra_km_rate: "15.00",
-      },
-    ]);
-  };
-
-  const handleRemoveRateRow = (index: number) => {
-    setRatesDraft((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleAddAllowanceRow = () => {
-    setAllowancesDraft((prev) => [
-      ...prev,
-      {
-        allowance_type: "OUTSTATION_PER_DAY",
-        amount: "400.00",
-        description: "Daily outstation allowance",
-      },
-    ]);
-  };
-
-  const handleRemoveAllowanceRow = (index: number) => {
-    setAllowancesDraft((prev) => prev.filter((_, i) => i !== index));
-  };
-
   const handleSaveContract = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingContract) return;
-
+    if (!editingContract || !editingContract.customer) {
+      setError("Please select a valid corporate customer.");
+      return;
+    }
     try {
       setError(null);
-      const payload: Partial<CorporateContract> = {
+      const payload = {
         ...editingContract,
         rates: ratesDraft,
         allowances: allowancesDraft,
@@ -206,10 +244,15 @@ export default function ContractManager() {
 
       if (editingContract.id) {
         const updated = await updateContract(editingContract.id, payload);
-        setSuccess(`Contract '${updated.title}' updated successfully.`);
+        setSuccess(`Contract '${updated.title}' updated.`);
+        if (selectedContract?.id === updated.id) {
+          setSelectedContract(updated);
+        }
       } else {
         const created = await createContract(payload);
-        setSuccess(`Contract '${created.title}' created successfully.`);
+        setSuccess(`Contract '${created.title}' created as DRAFT.`);
+        setSelectedContract(created);
+        setShowDetailDrawer(true);
       }
       setShowContractModal(false);
       setEditingContract(null);
@@ -219,123 +262,60 @@ export default function ContractManager() {
     }
   };
 
-  const handleActivateContract = async (contract: CorporateContract) => {
-    try {
-      setError(null);
-      const updated = await activateContract(contract.id);
-      setSuccess(`Contract '${updated.title}' is now ACTIVE.`);
-      fetchInitialData();
-      if (selectedContract?.id === contract.id) setSelectedContract(updated);
-    } catch (err: any) {
-      setError(err.message || "Failed to activate contract.");
-    }
-  };
-
-  const handleValidateContract = async (contract: CorporateContract) => {
-    try {
-      setError(null);
-      const res = await validateContract(contract.id);
-      setValidationResult(res);
-    } catch (err: any) {
-      setError(err.message || "Failed to validate contract.");
-    }
-  };
-
-  const handleCopyContract = async (contract: CorporateContract) => {
-    try {
-      setError(null);
-      const newContract = await copyContract(contract.id);
-      setSuccess(`Copied contract into new draft '${newContract.title}'.`);
-      fetchInitialData();
-    } catch (err: any) {
-      setError(err.message || "Failed to copy contract.");
-    }
-  };
-
-  const handleDeleteContract = async (contractId: number) => {
-    if (!confirm("Are you sure you want to delete this contract?")) return;
-    try {
-      setError(null);
-      await deleteContract(contractId);
-      setSuccess("Contract deleted.");
-      fetchInitialData();
-      if (selectedContract?.id === contractId) setSelectedContract(null);
-    } catch (err: any) {
-      setError(err.message || "Failed to delete contract.");
-    }
-  };
-
-  const activeContractsCount = contracts.filter((c) => c.status === "ACTIVE").length;
-  const draftContractsCount = contracts.filter((c) => c.status === "DRAFT").length;
-  const totalRatesCount = contracts.reduce((acc, c) => acc + (c.rates?.length || 0), 0);
+  // Metrics
+  const totalContracts = contracts.length;
+  const activeContracts = contracts.filter((c) => c.status === "ACTIVE").length;
+  const draftContracts = contracts.filter((c) => c.status === "DRAFT").length;
 
   return (
     <div className="stack" style={{ gap: 24 }}>
-      {/* Top Metrics Cards matching Console Design System */}
+      {/* Top Metrics Cards */}
       <section className="metrics">
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(59, 73, 223, 0.15)", padding: 8, borderRadius: "50%", color: "var(--accent)" }}>
-              <FileText size={16} />
+            <div className="metric-icon" style={{ background: "rgba(59, 73, 223, 0.15)", color: "var(--accent)" }}>
+              <FileText size={20} />
             </div>
             TOTAL CONTRACTS
           </div>
           <div className="metric-content">
             <div className="metric-value">
-              <strong>{contracts.length}</strong>
-              <span>Versioned Cards</span>
+              <strong>{totalContracts}</strong>
+              <span>Corporate Agreements</span>
             </div>
-            <div className="metric-trend up">
-              <CheckCircle2 size={12} /> {activeContractsCount} Active
-            </div>
+            <div className="metric-trend live">Commercial Rate Sheets</div>
           </div>
         </div>
 
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(34, 197, 94, 0.15)", padding: 8, borderRadius: "50%", color: "var(--ok)" }}>
-              <CheckCircle2 size={16} />
+            <div className="metric-icon" style={{ background: "rgba(34, 197, 94, 0.15)", color: "var(--ok)" }}>
+              <CheckCircle2 size={20} />
             </div>
-            ACTIVE RATE CARDS
+            ACTIVE AGREEMENTS
           </div>
           <div className="metric-content">
             <div className="metric-value">
-              <strong>{activeContractsCount}</strong>
-              <span>Live Pricing</span>
+              <strong>{activeContracts}</strong>
+              <span>Live Pricing Enforced</span>
             </div>
-            <div className="metric-trend live">Ready</div>
+            <div className="metric-trend ok">Billing Enabled</div>
           </div>
         </div>
 
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(234, 179, 8, 0.15)", padding: 8, borderRadius: "50%", color: "var(--warn)" }}>
-              <Clock size={16} />
+            <div className="metric-icon" style={{ background: "rgba(234, 179, 8, 0.15)", color: "var(--warn)" }}>
+              <AlertTriangle size={20} />
             </div>
-            DRAFT CONTRACTS
+            DRAFT / PENDING
           </div>
           <div className="metric-content">
             <div className="metric-value">
-              <strong>{draftContractsCount}</strong>
-              <span>Pending Review</span>
+              <strong>{draftContracts}</strong>
+              <span>Pending Activation</span>
             </div>
-            <div className="metric-trend down">Drafts</div>
-          </div>
-        </div>
-
-        <div className="metric">
-          <div className="metric-header">
-            <div style={{ background: "rgba(139, 92, 246, 0.15)", padding: 8, borderRadius: "50%", color: "#8b5cf6" }}>
-              <Percent size={16} />
-            </div>
-            MATRIX RATES
-          </div>
-          <div className="metric-content">
-            <div className="metric-value">
-              <strong>{totalRatesCount}</strong>
-              <span>Duty Package Rows</span>
-            </div>
-            <div className="metric-trend live">Configured</div>
+            <div className="metric-trend live">Validation Needed</div>
           </div>
         </div>
       </section>
@@ -354,524 +334,471 @@ export default function ContractManager() {
         </div>
       )}
 
-      {/* Main Grid: Contracts List + Rate Matrix Detail */}
-      <section className="grid">
-        {/* Left Column: Contracts List & Search */}
-        <div className="stack">
-          {/* Search Filter Bar */}
-          <div className="search-filter-bar">
-            <div className="search-input-wrapper">
-              <Search size={16} className="search-icon" />
-              <input
-                type="text"
-                placeholder="Search title or customer..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <div className="filter-select-wrapper">
-              <select value={selectedCustomerFilter} onChange={(e) => setSelectedCustomerFilter(e.target.value)}>
-                <option value="ALL">All Customers</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.display_name}</option>
-                ))}
-              </select>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="ALL">All Statuses</option>
-                <option value="DRAFT">DRAFT</option>
-                <option value="ACTIVE">ACTIVE</option>
-                <option value="EXPIRED">EXPIRED</option>
-                <option value="ARCHIVED">ARCHIVED</option>
-              </select>
-            </div>
-            {isCommercialAdmin && (
-              <button className="button" style={{ whiteSpace: "nowrap" }} onClick={handleOpenCreateModal}>
-                <Plus size={16} /> New Contract
-              </button>
-            )}
-          </div>
+      {/* Search & Filter Bar */}
+      <div className="search-filter-bar">
+        <div className="search-input-wrapper">
+          <Search size={16} className="search-icon" />
+          <input
+            type="text"
+            placeholder="Search by contract code, title, version..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="filter-select-wrapper">
+          <select value={selectedCustomerFilter} onChange={(e) => setSelectedCustomerFilter(e.target.value)}>
+            <option value="ALL">All Customers</option>
+            {customers.map((cust) => (
+              <option key={cust.id} value={cust.id}>
+                {cust.display_name} ({cust.code})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-select-wrapper">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="ALL">All Statuses</option>
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="DRAFT">DRAFT</option>
+            <option value="EXPIRED">EXPIRED</option>
+            <option value="TERMINATED">TERMINATED</option>
+          </select>
+        </div>
+        {isCommercialAdmin && (
+          <button className="button" style={{ whiteSpace: "nowrap" }} onClick={openNewContractModal}>
+            <Plus size={16} /> Create Contract
+          </button>
+        )}
+      </div>
 
-          {/* List Cards */}
-          <div className="stack" style={{ maxHeight: 620, overflowY: "auto", paddingRight: 4 }}>
+      {/* Shadcn UI Table for Corporate Contracts */}
+      <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Contract Code</TableHead>
+              <TableHead>Agreement Title</TableHead>
+              <TableHead>Corporate Customer</TableHead>
+              <TableHead>Version</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Validity Period</TableHead>
+              <TableHead>Rate Packages</TableHead>
+              <TableHead>Metering Policy</TableHead>
+              <TableHead style={{ textAlign: "right" }}>Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {loading ? (
-              <div style={{ padding: 32, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>
-                Loading corporate contracts...
-              </div>
+              <TableRow>
+                <TableCell colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                  Loading commercial contracts...
+                </TableCell>
+              </TableRow>
             ) : contracts.length === 0 ? (
-              <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 32 }}>
-                No rate contracts found.
-              </div>
+              <TableRow>
+                <TableCell colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                  No corporate contracts match your filter criteria.
+                </TableCell>
+              </TableRow>
             ) : (
-              contracts.map((c) => {
-                const isSelected = selectedContract?.id === c.id;
-                return (
-                  <div
-                    key={c.id}
-                    onClick={() => {
-                      setSelectedContract(c);
-                      setValidationResult(null);
-                    }}
-                    style={{
-                      background: isSelected ? "var(--sidebar-active)" : "var(--panel)",
-                      border: `1px solid ${isSelected ? "var(--accent)" : "var(--line)"}`,
-                      borderRadius: 12,
-                      padding: 16,
-                      cursor: "pointer",
-                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-                      boxShadow: isSelected ? "0 4px 20px var(--accent-glow)" : "var(--card-shadow)"
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                      <div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <strong style={{ color: "#fff", fontSize: 15 }}>{c.title}</strong>
-                          <span style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 6px", background: "rgba(255, 255, 255, 0.08)", borderRadius: 4, color: "var(--muted)" }}>
-                            {c.version_name}
-                          </span>
-                        </div>
-                        <span style={{ fontSize: 12, color: "#5c6cfa", display: "block", marginTop: 4, fontWeight: 500 }}>
-                          🏢 {c.customer_display_name}
-                        </span>
-                      </div>
-                      <span className={`status ${c.status === "ACTIVE" ? "ok" : c.status === "DRAFT" ? "warn" : "neutral"}`}>
-                        {c.status}
-                      </span>
-                    </div>
+              contracts.map((c) => (
+                <TableRow
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedContract(c);
+                    setShowDetailDrawer(true);
+                  }}
+                  style={{
+                    background: selectedContract?.id === c.id ? "rgba(59, 73, 223, 0.08)" : "transparent",
+                  }}
+                >
+                  <TableCell>
+                    <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", padding: "4px 8px", background: "rgba(59, 73, 223, 0.12)", borderRadius: 6 }}>
+                      {c.contract_code}
+                    </span>
+                  </TableCell>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)", fontSize: 12, color: "var(--muted)" }}>
-                      <span>Package Rows: <strong style={{ color: "#fff" }}>{c.rates?.length || 0}</strong></span>
-                      <span>CGST {c.cgst_rate}% + SGST {c.sgst_rate}%</span>
-                      <span>Policy: <strong style={{ color: "#a5b4fc" }}>{c.metering_policy}</strong></span>
+                  <TableCell>
+                    <div>
+                      <strong style={{ color: "#fff", display: "block", fontSize: 14 }}>{c.title}</strong>
                     </div>
-                  </div>
-                );
-              })
+                  </TableCell>
+
+                  <TableCell>
+                    <div>
+                      <strong style={{ color: "#e2e8f0", fontSize: 13 }}>{c.customer_name}</strong>
+                      <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>{c.customer_code}</span>
+                    </div>
+                  </TableCell>
+
+                  <TableCell>
+                    <span style={{ fontSize: 12, padding: "2px 6px", background: "rgba(255,255,255,0.08)", borderRadius: 4, color: "#cbd5e1", fontFamily: "monospace" }}>
+                      {c.version_name}
+                    </span>
+                  </TableCell>
+
+                  <TableCell>
+                    <span className={`status ${c.status === "ACTIVE" ? "ok" : c.status === "DRAFT" ? "warn" : "danger"}`}>
+                      {c.status}
+                    </span>
+                  </TableCell>
+
+                  <TableCell>
+                    <span style={{ fontSize: 12, color: "#cbd5e1" }}>
+                      {c.start_date} → {c.end_date || "Ongoing"}
+                    </span>
+                  </TableCell>
+
+                  <TableCell>
+                    <span style={{ fontWeight: 600, color: "var(--accent)" }}>
+                      {c.rates_count} Tariff Rates
+                    </span>
+                  </TableCell>
+
+                  <TableCell>
+                    <span style={{ fontSize: 11, padding: "3px 8px", background: "rgba(255,255,255,0.05)", borderRadius: 4, color: "var(--muted)" }}>
+                      {c.metering_policy}
+                    </span>
+                  </TableCell>
+
+                  <TableCell style={{ textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                      <button
+                        className="button secondary"
+                        style={{ padding: "6px 12px", fontSize: 12 }}
+                        onClick={() => {
+                          setSelectedContract(c);
+                          setShowDetailDrawer(true);
+                        }}
+                      >
+                        <Eye size={14} /> Details
+                      </button>
+
+                      {isCommercialAdmin && (
+                        <>
+                          {c.status === "DRAFT" && (
+                            <button
+                              className="button"
+                              style={{ padding: "6px 10px", fontSize: 12, background: "var(--ok)", color: "#000" }}
+                              onClick={() => handleActivate(c.id)}
+                            >
+                              Activate
+                            </button>
+                          )}
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            title="Duplicate as new draft version"
+                            onClick={() => handleDuplicate(c.id)}
+                          >
+                            <Copy size={13} />
+                          </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            onClick={() => openEditContractModal(c)}
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12, color: "var(--danger)" }}
+                            onClick={() => handleDelete(c)}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
             )}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Contract Detail Drawer */}
+      {showDetailDrawer && selectedContract && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.75)", backdropFilter: "blur(8px)", display: "flex", justifyContent: "flex-end", zIndex: 1000 }}>
+          <div style={{ width: 720, maxWidth: "100%", background: "var(--panel-strong)", height: "100%", display: "flex", flexDirection: "column", borderLeft: "1px solid var(--line)", boxShadow: "-10px 0 30px rgba(0,0,0,0.5)" }}>
+            {/* Header */}
+            <div style={{ padding: 24, borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "flex-start", background: "rgba(15, 23, 42, 0.8)" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "#fff" }}>{selectedContract.title}</h2>
+                  <span className={`status ${selectedContract.status === "ACTIVE" ? "ok" : "warn"}`}>
+                    {selectedContract.status}
+                  </span>
+                </div>
+                <span style={{ fontSize: 13, color: "var(--muted)", display: "block", marginTop: 4 }}>
+                  Code: <strong style={{ color: "var(--accent)", fontFamily: "monospace" }}>{selectedContract.contract_code}</strong> • Customer: <strong style={{ color: "#fff" }}>{selectedContract.customer_name}</strong>
+                </span>
+              </div>
+              <button
+                onClick={() => setShowDetailDrawer(false)}
+                style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", padding: 6 }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div style={{ flex: 1, overflowY: "auto", padding: 24 }} className="stack">
+              {/* Actions Bar */}
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button className="button secondary" onClick={() => handleValidate(selectedContract.id)}>
+                  <ShieldCheck size={14} /> Validate Contract
+                </button>
+                {selectedContract.status === "DRAFT" && isCommercialAdmin && (
+                  <button className="button" style={{ background: "var(--ok)", color: "#000" }} onClick={() => handleActivate(selectedContract.id)}>
+                    <CheckCircle2 size={14} /> Activate Contract
+                  </button>
+                )}
+                {isCommercialAdmin && (
+                  <button className="button secondary" onClick={() => handleDuplicate(selectedContract.id)}>
+                    <Copy size={14} /> Duplicate Version
+                  </button>
+                )}
+              </div>
+
+              {/* Validation Result Box */}
+              {validationResult && (
+                <div className="panel" style={{ padding: 16, borderColor: validationResult.is_valid ? "var(--ok)" : "var(--warn)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: validationResult.is_valid ? "var(--ok)" : "var(--warn)", fontWeight: 600 }}>
+                    {validationResult.is_valid ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                    <span>{validationResult.is_valid ? "Contract is valid & ready for execution!" : "Validation Warnings Found"}</span>
+                  </div>
+                  {validationResult.errors.length > 0 && (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 20, color: "var(--danger)", fontSize: 13 }}>
+                      {validationResult.errors.map((err, i) => <li key={i}>{err}</li>)}
+                    </ul>
+                  )}
+                  {validationResult.warnings.length > 0 && (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 20, color: "var(--warn)", fontSize: 13 }}>
+                      {validationResult.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {/* General Metadata */}
+              <div className="panel" style={{ padding: 18 }}>
+                <h4 style={{ margin: "0 0 14px", fontSize: 14, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+                  Contract Terms & Policy Parameters
+                </h4>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, fontSize: 13 }}>
+                  <div>
+                    <span style={{ color: "var(--muted)", display: "block" }}>Metering Policy</span>
+                    <strong style={{ color: "#fff" }}>{selectedContract.metering_policy}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--muted)", display: "block" }}>Grace Period</span>
+                    <strong style={{ color: "#fff" }}>{selectedContract.grace_period_minutes} Minutes</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--muted)", display: "block" }}>Night Shift Window</span>
+                    <strong style={{ color: "#fff" }}>{selectedContract.night_shift_start} - {selectedContract.night_shift_end}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--muted)", display: "block" }}>Validity Window</span>
+                    <strong style={{ color: "#fff" }}>{selectedContract.start_date} to {selectedContract.end_date || "Ongoing"}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rate Matrix Table */}
+              <div className="panel" style={{ padding: 18 }}>
+                <h4 style={{ margin: "0 0 14px", fontSize: 14, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+                  Vehicle Package Rates Matrix ({selectedContract.rates?.length || 0})
+                </h4>
+                <div className="table-wrap">
+                  <table style={{ minWidth: 600 }}>
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th>Duty Package</th>
+                        <th>Base Package</th>
+                        <th>Extra KM</th>
+                        <th>Extra Hour</th>
+                        <th>Night Allowance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedContract.rates && selectedContract.rates.length > 0 ? (
+                        selectedContract.rates.map((rate, i) => (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600, color: "#fff" }}>{rate.vehicle_category}</td>
+                            <td><span className="status info">{rate.duty_type}</span></td>
+                            <td>₹{rate.base_rate} ({rate.base_hours}h / {rate.base_km}km)</td>
+                            <td>₹{rate.extra_km_rate}/km</td>
+                            <td>₹{rate.extra_hour_rate}/hr</td>
+                            <td>₹{rate.night_allowance_rate}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: "center", color: "var(--muted)", padding: 16 }}>
+                            No rate packages defined for this contract.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Allowances Table */}
+              <div className="panel" style={{ padding: 18 }}>
+                <h4 style={{ margin: "0 0 14px", fontSize: 14, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1 }}>
+                  Commercial Driver & Outstation Allowances
+                </h4>
+                <div className="table-wrap">
+                  <table style={{ minWidth: 500 }}>
+                    <thead>
+                      <tr>
+                        <th>Allowance Type</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedContract.allowances && selectedContract.allowances.length > 0 ? (
+                        selectedContract.allowances.map((al, i) => (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600, color: "#fff" }}>{al.allowance_type}</td>
+                            <td>{al.name}</td>
+                            <td style={{ color: "var(--ok)", fontWeight: 700 }}>₹{al.amount}</td>
+                            <td>{al.charging_unit}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={4} style={{ textAlign: "center", color: "var(--muted)", padding: 16 }}>
+                            No special allowances defined.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Right Column: Rate Card Matrix Detail View */}
-        <div>
-          {selectedContract ? (
-            <div className="section">
-              <div className="section-header" style={{ padding: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <h2 style={{ fontSize: 20, margin: 0, color: "#fff" }}>{selectedContract.title}</h2>
-                      <span style={{ background: "rgba(59, 73, 223, 0.2)", border: "1px solid var(--accent)", color: "#a5b4fc", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontFamily: "monospace" }}>
-                        {selectedContract.version_name}
-                      </span>
-                    </div>
-                    <span style={{ fontSize: 13, color: "var(--muted)", marginTop: 4, display: "block" }}>
-                      Account: <strong style={{ color: "#fff" }}>{selectedContract.customer_display_name}</strong> • Policy: <span style={{ color: "var(--accent)" }}>{selectedContract.metering_policy}</span>
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      className="button secondary"
-                      style={{ padding: "6px 12px", fontSize: 12 }}
-                      onClick={() => handleValidateContract(selectedContract)}
-                    >
-                      <ShieldCheck size={14} /> Validate
-                    </button>
-                    {isCommercialAdmin && (
-                      <>
-                        {selectedContract.status === "DRAFT" && (
-                          <button
-                            className="button"
-                            style={{ padding: "6px 12px", fontSize: 12, background: "var(--ok)" }}
-                            onClick={() => handleActivateContract(selectedContract)}
-                          >
-                            <CheckCircle2 size={14} /> Activate
-                          </button>
-                        )}
-                        <button
-                          className="button secondary"
-                          style={{ padding: "6px 12px", fontSize: 12 }}
-                          onClick={() => handleOpenEditModal(selectedContract)}
-                        >
-                          <Pencil size={14} /> Edit Matrix
-                        </button>
-                        <button
-                          className="button secondary"
-                          style={{ padding: "6px 12px", fontSize: 12 }}
-                          onClick={() => handleCopyContract(selectedContract)}
-                        >
-                          <Copy size={14} /> Copy
-                        </button>
-                        <button
-                          className="button secondary"
-                          style={{ padding: "6px 12px", fontSize: 12, color: "var(--danger)" }}
-                          onClick={() => handleDeleteContract(selectedContract.id)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="section-body" style={{ padding: 20 }}>
-                {/* Validation Summary Box */}
-                {validationResult && (
-                  <div
-                    style={{
-                      padding: 16,
-                      borderRadius: 8,
-                      fontSize: 13,
-                      marginBottom: 16,
-                      background: validationResult.is_valid ? "rgba(34, 197, 94, 0.1)" : "rgba(239, 68, 68, 0.1)",
-                      border: `1px solid ${validationResult.is_valid ? "rgba(34, 197, 94, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
-                      color: validationResult.is_valid ? "var(--ok)" : "var(--danger)"
-                    }}
-                  >
-                    <strong style={{ display: "block", marginBottom: 4 }}>
-                      {validationResult.is_valid ? "✓ Contract rate card is valid and ready for activation." : "❌ Validation issues found:"}
-                    </strong>
-                    {validationResult.errors.map((err, i) => (
-                      <div key={i} style={{ marginTop: 2 }}>• {err}</div>
-                    ))}
-                    {validationResult.warnings.map((warn, i) => (
-                      <div key={i} style={{ marginTop: 2, color: "var(--warn)" }}>• Warning: {warn}</div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Rate Card Matrix Table */}
-                <div className="stack" style={{ gap: 12 }}>
-                  <strong style={{ color: "#fff", fontSize: 14 }}>Configured Rate Card Matrix</strong>
-                  {selectedContract.rates && selectedContract.rates.length > 0 ? (
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>City</th>
-                            <th>Category</th>
-                            <th>Duty Type</th>
-                            <th>Included</th>
-                            <th>Base Fare</th>
-                            <th>Extra Hr / Km</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedContract.rates.map((r, i) => (
-                            <tr key={i}>
-                              <td><strong style={{ color: "#fff", textTransform: "capitalize" }}>{r.city}</strong></td>
-                              <td style={{ textTransform: "capitalize" }}>{r.vehicle_category}</td>
-                              <td><span className="status neutral">{r.duty_type}</span></td>
-                              <td>{r.included_hours}h / {r.included_km}km</td>
-                              <td><strong style={{ color: "var(--ok)" }}>₹{r.base_rate}</strong></td>
-                              <td>₹{r.extra_hour_rate}/h • ₹{r.extra_km_rate}/km</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 20 }}>
-                      No rate card package rows configured.
-                    </div>
-                  )}
-                </div>
-
-                {/* Allowances Section */}
-                <div className="stack" style={{ gap: 12, marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
-                  <strong style={{ color: "#fff", fontSize: 14 }}>Contract Allowances & Drivers Extras</strong>
-                  {selectedContract.allowances && selectedContract.allowances.length > 0 ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      {selectedContract.allowances.map((a, i) => (
-                        <div key={i} className="availability-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <div>
-                            <strong style={{ fontSize: 13 }}>{a.allowance_type}</strong>
-                            <span style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}</span>
-                          </div>
-                          <strong style={{ color: "var(--ok)", fontSize: 14 }}>₹{a.amount}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <span style={{ color: "var(--muted)", fontSize: 13 }}>No extra driver or operational allowances specified.</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="section" style={{ padding: 48, textAlign: "center", color: "var(--muted)" }}>
-              Select a rate contract from the left list to view its matrix packages, tax rules, and allowances.
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Contract Editor Modal */}
-      {showContractModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div style={{ background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 16, width: "100%", maxWidth: 840, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.6)" }}>
-            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0, fontSize: 18, color: "#fff" }}>
-                {editingContract?.id ? "Edit Contract & Rate Card Matrix" : "Create New Corporate Contract"}
-              </h3>
-              <button onClick={() => setShowContractModal(false)} style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
-            </div>
-
-            <form onSubmit={handleSaveContract} style={{ padding: 24 }} className="stack">
-              {/* Header Fields */}
-              <div className="form-grid">
-                <div className="field">
-                  <label>Corporate Account *</label>
+      {/* Contract Create/Edit Modal */}
+      {showContractModal && editingContract && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+          <div className="panel" style={{ width: 640, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", padding: 24 }}>
+            <h3 style={{ margin: "0 0 20px", color: "#fff" }}>
+              {editingContract.id ? "Edit Contract Agreement" : "New Contract Agreement"}
+            </h3>
+            <form onSubmit={handleSaveContract} className="stack" style={{ gap: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Corporate Customer *</label>
                   <select
                     required
-                    value={editingContract?.customer || ""}
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.customer || ""}
                     onChange={(e) => setEditingContract({ ...editingContract, customer: parseInt(e.target.value) })}
                   >
+                    <option value="">Select Customer...</option>
                     {customers.map((c) => (
-                      <option key={c.id} value={c.id}>{c.display_name} ({c.code})</option>
+                      <option key={c.id} value={c.id}>
+                        {c.display_name} ({c.code})
+                      </option>
                     ))}
                   </select>
                 </div>
-                <div className="field">
-                  <label>Contract Title *</label>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Contract Code *</label>
                   <input
                     type="text"
                     required
-                    value={editingContract?.title || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, title: e.target.value })}
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.contract_code || ""}
+                    onChange={(e) => setEditingContract({ ...editingContract, contract_code: e.target.value })}
                   />
                 </div>
               </div>
 
-              <div className="form-grid">
-                <div className="field">
-                  <label>Version Identifier *</label>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Agreement Title *</label>
+                <input
+                  type="text"
+                  required
+                  style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                  value={editingContract.title || ""}
+                  onChange={(e) => setEditingContract({ ...editingContract, title: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Version Name</label>
                   <input
                     type="text"
-                    required
-                    value={editingContract?.version_name || "v1.0"}
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.version_name || "v1.0-draft"}
                     onChange={(e) => setEditingContract({ ...editingContract, version_name: e.target.value })}
-                    style={{ fontFamily: "monospace" }}
                   />
                 </div>
-                <div className="field">
-                  <label>Metering Policy</label>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Start Date *</label>
+                  <input
+                    type="date"
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.start_date || ""}
+                    onChange={(e) => setEditingContract({ ...editingContract, start_date: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>End Date</label>
+                  <input
+                    type="date"
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.end_date || ""}
+                    onChange={(e) => setEditingContract({ ...editingContract, end_date: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Metering Policy</label>
                   <select
-                    value={editingContract?.metering_policy || "GARAGE_TO_GARAGE"}
-                    onChange={(e) => setEditingContract({ ...editingContract, metering_policy: e.target.value })}
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.metering_policy || "GARAGE_TO_GARAGE"}
+                    onChange={(e) => setEditingContract({ ...editingContract, metering_policy: e.target.value as any })}
                   >
-                    <option value="GARAGE_TO_GARAGE">GARAGE_TO_GARAGE</option>
-                    <option value="PICKUP_TO_DROP">PICKUP_TO_DROP</option>
-                    <option value="FIXED_PACKAGE">FIXED_PACKAGE</option>
-                    <option value="OUTSTATION_DAILY_MINIMUM">OUTSTATION_DAILY_MINIMUM</option>
+                    <option value="GARAGE_TO_GARAGE">Garage to Garage</option>
+                    <option value="PICKUP_TO_DROP">Pickup to Drop</option>
+                    <option value="FIXED_PACKAGE">Fixed Package</option>
+                    <option value="OUTSTATION_DAILY_MINIMUM">Outstation Daily Minimum</option>
                   </select>
                 </div>
-              </div>
-
-              <div className="form-grid">
-                <div className="field">
-                  <label>Effective Start Date *</label>
-                  <input
-                    type="date"
-                    required
-                    value={editingContract?.effective_start || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, effective_start: e.target.value })}
-                  />
-                </div>
-                <div className="field">
-                  <label>Effective End Date</label>
-                  <input
-                    type="date"
-                    value={editingContract?.effective_end || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, effective_end: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="form-grid">
-                <div className="field">
-                  <label>CGST Rate (%)</label>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Grace Period (Mins)</label>
                   <input
                     type="number"
-                    step="0.01"
-                    value={editingContract?.cgst_rate || "2.50"}
-                    onChange={(e) => setEditingContract({ ...editingContract, cgst_rate: e.target.value })}
-                  />
-                </div>
-                <div className="field">
-                  <label>SGST Rate (%)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editingContract?.sgst_rate || "2.50"}
-                    onChange={(e) => setEditingContract({ ...editingContract, sgst_rate: e.target.value })}
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingContract.grace_period_minutes || 15}
+                    onChange={(e) => setEditingContract({ ...editingContract, grace_period_minutes: parseInt(e.target.value) })}
                   />
                 </div>
               </div>
 
-              {/* Matrix Rows */}
-              <div className="stack" style={{ gap: 12, marginTop: 12, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <strong style={{ color: "#fff", fontSize: 14 }}>Rate Card Matrix Rows</strong>
-                  <button type="button" className="button secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={handleAddRateRow}>
-                    <Plus size={14} /> Add Row
-                  </button>
-                </div>
-
-                <div className="stack" style={{ gap: 8 }}>
-                  {ratesDraft.map((rate, index) => (
-                    <div key={index} className="availability-item" style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 2fr 1.2fr 1fr 1fr 30px", gap: 8, padding: 10, alignItems: "center" }}>
-                      <input
-                        type="text"
-                        placeholder="City"
-                        value={rate.city}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].city = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12, textTransform: "capitalize" }}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Category"
-                        value={rate.vehicle_category}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].vehicle_category = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12, textTransform: "capitalize" }}
-                      />
-                      <select
-                        value={rate.duty_type}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].duty_type = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12 }}
-                      >
-                        <option value="LOCAL_8HR_80KM">LOCAL_8HR_80KM</option>
-                        <option value="LOCAL_12HR_120KM">LOCAL_12HR_120KM</option>
-                        <option value="OUTSTATION">OUTSTATION</option>
-                        <option value="AIRPORT_TRANSFER">AIRPORT_TRANSFER</option>
-                        <option value="ONE_WAY">ONE_WAY</option>
-                        <option value="FULL_DAY">FULL_DAY</option>
-                      </select>
-                      <input
-                        type="number"
-                        placeholder="Base ₹"
-                        value={rate.base_rate}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].base_rate = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12, color: "var(--ok)", fontWeight: 700 }}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Ex/h ₹"
-                        value={rate.extra_hour_rate}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].extra_hour_rate = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12 }}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Ex/km ₹"
-                        value={rate.extra_km_rate}
-                        onChange={(e) => {
-                          const updated = [...ratesDraft];
-                          updated[index].extra_km_rate = e.target.value;
-                          setRatesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveRateRow(index)}
-                        style={{ background: "none", border: 0, color: "var(--danger)", cursor: "pointer", fontWeight: 700 }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Allowances Rows */}
-              <div className="stack" style={{ gap: 12, marginTop: 12, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <strong style={{ color: "#fff", fontSize: 14 }}>Contract Allowances</strong>
-                  <button type="button" className="button secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={handleAddAllowanceRow}>
-                    <Plus size={14} /> Add Allowance
-                  </button>
-                </div>
-
-                <div className="stack" style={{ gap: 8 }}>
-                  {allowancesDraft.map((allowance, index) => (
-                    <div key={index} className="availability-item" style={{ display: "grid", gridTemplateColumns: "2.5fr 1.5fr 3fr 30px", gap: 8, padding: 10, alignItems: "center" }}>
-                      <select
-                        value={allowance.allowance_type}
-                        onChange={(e) => {
-                          const updated = [...allowancesDraft];
-                          updated[index].allowance_type = e.target.value;
-                          setAllowancesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12 }}
-                      >
-                        <option value="OVERTIME_PER_HOUR">OVERTIME_PER_HOUR</option>
-                        <option value="OUTSTATION_PER_DAY">OUTSTATION_PER_DAY</option>
-                        <option value="OVERNIGHT_DRIVER_ALLOWANCE">OVERNIGHT_DRIVER_ALLOWANCE</option>
-                        <option value="SUNDAY_ALLOWANCE">SUNDAY_ALLOWANCE</option>
-                        <option value="EARLY_START_ALLOWANCE">EARLY_START_ALLOWANCE</option>
-                        <option value="NIGHT_ALLOWANCE">NIGHT_ALLOWANCE</option>
-                        <option value="EXTRA_DUTY_ALLOWANCE">EXTRA_DUTY_ALLOWANCE</option>
-                      </select>
-                      <input
-                        type="number"
-                        placeholder="Amount ₹"
-                        value={allowance.amount}
-                        onChange={(e) => {
-                          const updated = [...allowancesDraft];
-                          updated[index].amount = e.target.value;
-                          setAllowancesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12, color: "var(--ok)", fontWeight: 700 }}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Description"
-                        value={allowance.description || ""}
-                        onChange={(e) => {
-                          const updated = [...allowancesDraft];
-                          updated[index].description = e.target.value;
-                          setAllowancesDraft(updated);
-                        }}
-                        style={{ padding: "6px 8px", fontSize: 12 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveAllowanceRow(index)}
-                        style={{ background: "none", border: 0, color: "var(--danger)", cursor: "pointer", fontWeight: 700 }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 12 }}>
                 <button type="button" className="button secondary" onClick={() => setShowContractModal(false)}>
                   Cancel
                 </button>
                 <button type="submit" className="button">
-                  Save Contract & Matrix
+                  Save Contract
                 </button>
               </div>
             </form>

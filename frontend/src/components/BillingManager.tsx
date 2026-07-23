@@ -25,6 +25,14 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 interface LegalEntity {
   id: number;
@@ -98,8 +106,7 @@ export function BillingManager() {
         setInvoices(data.results || data);
       }
     } catch (e) {
-      console.error(e);
-      setError("Failed to connect to billing service.");
+      setError("Failed to load billing invoices.");
     } finally {
       setLoading(false);
     }
@@ -107,205 +114,164 @@ export function BillingManager() {
 
   const fetchEntities = async () => {
     try {
-      const res = await fetch("/api/billing/entities/");
+      const res = await fetch("/api/billing/legal-entities/");
       if (res.ok) {
         const data = await res.json();
-        const list = data.results || data;
-        setEntities(list);
-        if (list.length > 0) setSelectedEntityId(String(list[0].id));
+        setEntities(data.results || data);
       }
     } catch (e) {
       console.error(e);
     }
   };
 
-  const handleGenerateDraft = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setGenError(null);
-    setGenSuccess(null);
-    setGenerating(true);
-
-    const tripIds = tripIdsInput
-      .split(",")
-      .map((s) => parseInt(s.trim()))
-      .filter((n) => !isNaN(n));
-
-    if (!selectedEntityId || tripIds.length === 0) {
-      setGenError("Please select a Legal Entity and enter valid Trip IDs.");
-      setGenerating(false);
-      return;
-    }
-
+  const handlePreviewPdf = async (invoiceId: number, invNum: string) => {
     try {
-      const res = await fetch("/api/billing/invoices/generate_draft/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          legal_entity_id: parseInt(selectedEntityId),
-          trip_ids: tripIds,
-        }),
-      });
-
-      const data = await res.json();
+      const res = await fetch(`/api/billing/invoices/${invoiceId}/pdf/`);
       if (res.ok) {
-        setGenSuccess(`Draft Invoice #${data.id} generated successfully with ₹${parseFloat(data.total_amount).toFixed(2)} total.`);
-        setTripIdsInput("");
-        fetchInvoices();
-        setActiveTab("invoices");
+        const html = await res.text();
+        setPreviewHtml(html);
+        setPreviewTitle(`Tax Invoice #${invNum || invoiceId}`);
       } else {
-        setGenError(data.detail || "Failed to generate draft invoice.");
+        alert("Failed to render PDF HTML");
       }
-    } catch (err: any) {
-      setGenError(err.message || "An error occurred during draft generation.");
-    } finally {
-      setGenerating(false);
+    } catch (e) {
+      console.error(e);
     }
+  };
+
+  const handleExportTally = (invoiceId: number, invNum: string) => {
+    window.open(`/api/billing/invoices/${invoiceId}/export_tally_xml/`, "_blank");
   };
 
   const handleIssueInvoice = async (invoiceId: number) => {
     try {
       const res = await fetch(`/api/billing/invoices/${invoiceId}/issue/`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
       });
       if (res.ok) {
-        setSuccess(`Invoice #${invoiceId} issued & posted to subledger successfully!`);
-        setTimeout(() => setSuccess(null), 4000);
+        setSuccess("Invoice issued successfully!");
+        fetchInvoices();
+      } else {
+        const errData = await res.json();
+        setError(errData.detail || "Failed to issue invoice");
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to issue invoice");
+    }
+  };
+
+  const handleGenerateInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGenError(null);
+    setGenSuccess(null);
+    if (!selectedEntityId) {
+      setGenError("Please select a Legal Entity.");
+      return;
+    }
+    const rawIds = tripIdsInput
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => !isNaN(n));
+
+    if (rawIds.length === 0) {
+      setGenError("Please enter at least one valid numeric Trip ID.");
+      return;
+    }
+
+    setGenerating(true);
+    try {
+      const res = await fetch("/api/billing/invoices/generate_from_trips/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legal_entity_id: parseInt(selectedEntityId, 10),
+          trip_ids: rawIds,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setGenSuccess(`Invoice draft ${data.invoice_number || "#" + data.id} created with ${data.lines?.length || 0} line items.`);
+        setTripIdsInput("");
         fetchInvoices();
       } else {
         const data = await res.json();
-        setError(data.detail || "Issuance failed.");
+        setGenError(data.detail || data.error || "Invoice generation failed.");
       }
-    } catch (e: any) {
-      setError(e.message || "Error issuing invoice.");
+    } catch (err: any) {
+      setGenError(err.message || "Network error generating invoice.");
+    } finally {
+      setGenerating(false);
     }
   };
 
-  const handlePreviewHtml = async (inv: Invoice) => {
-    try {
-      const res = await fetch(`/api/billing/invoices/${inv.id}/html_preview/`);
-      if (res.ok) {
-        const html = await res.text();
-        setPreviewTitle(inv.invoice_number || `Draft Invoice #${inv.id}`);
-        setPreviewHtml(html);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleExportTally = async (inv: Invoice) => {
-    try {
-      const res = await fetch(`/api/billing/invoices/${inv.id}/tally_xml/`);
-      if (res.ok) {
-        const xml = await res.text();
-        const blob = new Blob([xml], { type: "application/xml" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Tally_Voucher_${inv.invoice_number || inv.id}.xml`;
-        a.click();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
+  // Filter logic
   const filteredInvoices = invoices.filter((inv) => {
-    const query = search.toLowerCase().trim();
     const matchesSearch =
-      !query ||
-      (inv.invoice_number && inv.invoice_number.toLowerCase().includes(query)) ||
-      inv.customer_name.toLowerCase().includes(query) ||
-      inv.legal_entity_name.toLowerCase().includes(query);
+      !search.trim() ||
+      (inv.invoice_number && inv.invoice_number.toLowerCase().includes(search.toLowerCase())) ||
+      inv.customer_name.toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === "ALL" || inv.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const totalOutstanding = invoices
-    .filter((i) => i.status === "ISSUED" || i.status === "PARTIALLY_PAID")
-    .reduce((sum, i) => sum + parseFloat(i.balance_amount || "0"), 0);
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "ISSUED":
-        return <span style={{ background: "rgba(34, 197, 94, 0.15)", color: "var(--ok)", border: "1px solid rgba(34, 197, 94, 0.3)", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600 }}>ISSUED</span>;
-      case "PAID":
-        return <span style={{ background: "rgba(59, 130, 246, 0.15)", color: "var(--info)", border: "1px solid rgba(59, 130, 246, 0.3)", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600 }}>PAID</span>;
-      case "PARTIALLY_PAID":
-        return <span style={{ background: "rgba(234, 179, 8, 0.15)", color: "var(--warn)", border: "1px solid rgba(234, 179, 8, 0.3)", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600 }}>PARTIAL</span>;
-      case "DRAFT":
-      default:
-        return <span style={{ background: "rgba(100, 116, 139, 0.2)", color: "#cbd5e1", border: "1px solid rgba(148, 163, 184, 0.3)", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600 }}>DRAFT</span>;
-    }
-  };
+  // Calculate Metrics
+  const totalBilled = invoices.reduce((acc, i) => acc + (parseFloat(i.total_amount) || 0), 0);
+  const totalPaid = invoices.reduce((acc, i) => acc + (parseFloat(i.paid_amount) || 0), 0);
+  const totalOutstanding = invoices.reduce((acc, i) => acc + (parseFloat(i.balance_amount) || 0), 0);
 
   return (
     <div className="stack" style={{ gap: 24 }}>
-      {/* Metric Strip matching Application Console layout */}
+      {/* Top Financial Metrics */}
       <section className="metrics">
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(59, 73, 223, 0.15)", padding: 8, borderRadius: "50%", color: "var(--accent)" }}>
-              <Receipt size={16} />
+            <div className="metric-icon" style={{ background: "rgba(59, 73, 223, 0.15)", color: "var(--accent)" }}>
+              <Receipt size={20} />
             </div>
-            TOTAL INVOICES
+            TOTAL INVOICED
           </div>
           <div className="metric-content">
             <div className="metric-value">
-              <strong>{invoices.length}</strong>
-              <span>Registered Documents</span>
+              <strong>₹{totalBilled.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
+              <span>Cumulative Revenue</span>
             </div>
-            <div className="metric-trend live">Active</div>
+            <div className="metric-trend live">{invoices.length} Invoices Issued</div>
           </div>
         </div>
 
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(234, 179, 8, 0.15)", padding: 8, borderRadius: "50%", color: "var(--warn)" }}>
-              <Clock size={16} />
+            <div className="metric-icon" style={{ background: "rgba(34, 197, 94, 0.15)", color: "var(--ok)" }}>
+              <CheckCircle2 size={20} />
             </div>
-            DRAFT QUEUE
+            TOTAL COLLECTED
           </div>
           <div className="metric-content">
             <div className="metric-value">
-              <strong>{invoices.filter((i) => i.status === "DRAFT").length}</strong>
-              <span>Pending Review</span>
+              <strong>₹{totalPaid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
+              <span>Received Payments</span>
             </div>
-            <div className="metric-trend live">Action Required</div>
+            <div className="metric-trend ok">Bank & Cash Realized</div>
           </div>
         </div>
 
-        <div className="metric">
+        <div className="metric-card">
           <div className="metric-header">
-            <div style={{ background: "rgba(34, 197, 94, 0.15)", padding: 8, borderRadius: "50%", color: "var(--ok)" }}>
-              <FileCheck size={16} />
-            </div>
-            ISSUED & SETTLED
-          </div>
-          <div className="metric-content">
-            <div className="metric-value">
-              <strong>{invoices.filter((i) => i.status === "ISSUED" || i.status === "PAID").length}</strong>
-              <span>Posted Invoices</span>
-            </div>
-            <div className="metric-trend up">
-              <CheckCircle2 size={12} /> Balanced
-            </div>
-          </div>
-        </div>
-
-        <div className="metric">
-          <div className="metric-header">
-            <div style={{ background: "rgba(59, 130, 246, 0.15)", padding: 8, borderRadius: "50%", color: "var(--info)" }}>
-              <DollarSign size={16} />
+            <div className="metric-icon" style={{ background: "rgba(239, 68, 68, 0.15)", color: "var(--danger)" }}>
+              <Clock size={20} />
             </div>
             OUTSTANDING AR
           </div>
           <div className="metric-content">
             <div className="metric-value">
               <strong>₹{totalOutstanding.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
-              <span>Receivables Balance</span>
+              <span>Pending Receivables</span>
             </div>
-            <div className="metric-trend live">Subledger Sync</div>
+            <div className="metric-trend live">Corporate Credit</div>
           </div>
         </div>
       </section>
@@ -324,216 +290,248 @@ export function BillingManager() {
         </div>
       )}
 
-      {/* Control Bar & Tabs */}
-      <div className="search-filter-bar" style={{ display: "flex", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", gap: 12, flex: 1, alignItems: "center" }}>
-          {activeTab === "invoices" && (
-            <>
-              <div className="search-input-wrapper">
-                <Search size={16} className="search-icon" />
-                <input
-                  type="text"
-                  placeholder="Search by invoice #, customer, entity..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </div>
-
-              <div className="filter-select-wrapper">
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                  <option value="ALL">All Statuses</option>
-                  <option value="DRAFT">DRAFT</option>
-                  <option value="ISSUED">ISSUED</option>
-                  <option value="PARTIALLY_PAID">PARTIALLY PAID</option>
-                  <option value="PAID">PAID</option>
-                </select>
-              </div>
-            </>
-          )}
-        </div>
-
+      {/* Search & Action Bar */}
+      <div className="search-filter-bar">
         <div style={{ display: "flex", gap: 8 }}>
           <button
+            className={`button ${activeTab === "invoices" ? "" : "secondary"}`}
             onClick={() => setActiveTab("invoices")}
-            className={activeTab === "invoices" ? "primary-btn" : "secondary-btn"}
-            style={{ padding: "8px 14px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
           >
-            <Receipt size={14} />
-            Invoice Register
+            <Receipt size={16} /> Tax Invoices
           </button>
           <button
+            className={`button ${activeTab === "generator" ? "" : "secondary"}`}
             onClick={() => setActiveTab("generator")}
-            className={activeTab === "generator" ? "primary-btn" : "secondary-btn"}
-            style={{ padding: "8px 14px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
           >
-            <Plus size={14} />
-            New Invoice Draft
+            <Plus size={16} /> Generate Invoice
           </button>
         </div>
+
+        {activeTab === "invoices" && (
+          <>
+            <div className="search-input-wrapper" style={{ flex: 1, maxWidth: 400 }}>
+              <Search size={16} className="search-icon" />
+              <input
+                type="text"
+                placeholder="Search by invoice # or customer..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="filter-select-wrapper">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="ALL">All Statuses</option>
+                <option value="DRAFT">DRAFT</option>
+                <option value="ISSUED">ISSUED</option>
+                <option value="SENT">SENT</option>
+                <option value="PARTIALLY_PAID">PARTIALLY PAID</option>
+                <option value="PAID">PAID</option>
+              </select>
+            </div>
+            <button className="button secondary" onClick={fetchInvoices}>
+              <RefreshCw size={14} /> Refresh
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Main Tab 1: Invoice Register */}
-      {activeTab === "invoices" && (
+      {activeTab === "invoices" ? (
+        /* Shadcn UI Table for Billing & Invoices */
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-          {loading ? (
-            <div style={{ padding: 48, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>Loading invoice records...</div>
-          ) : filteredInvoices.length === 0 ? (
-            <div style={{ padding: 48, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>No invoice records found matching your query.</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: "var(--panel-strong)", borderBottom: "1px solid var(--line)", color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    <th style={{ padding: "12px 16px" }}>Invoice #</th>
-                    <th style={{ padding: "12px 16px" }}>Legal Entity</th>
-                    <th style={{ padding: "12px 16px" }}>Customer</th>
-                    <th style={{ padding: "12px 16px" }}>Status</th>
-                    <th style={{ padding: "12px 16px", textAlign: "right" }}>Taxable (₹)</th>
-                    <th style={{ padding: "12px 16px", textAlign: "right" }}>GST (₹)</th>
-                    <th style={{ padding: "12px 16px", textAlign: "right" }}>Grand Total (₹)</th>
-                    <th style={{ padding: "12px 16px", textAlign: "center" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredInvoices.map((inv) => (
-                    <tr key={inv.id} style={{ borderBottom: "1px solid var(--line)" }} className="table-row-hover">
-                      <td style={{ padding: "14px 16px", fontFamily: "monospace", fontWeight: 700, color: "var(--accent-strong)" }}>{inv.invoice_number || `DRAFT-${inv.id}`}</td>
-                      <td style={{ padding: "14px 16px", color: "var(--muted)" }}>{inv.legal_entity_name}</td>
-                      <td style={{ padding: "14px 16px", fontWeight: 600, color: "var(--ink)" }}>{inv.customer_name}</td>
-                      <td style={{ padding: "14px 16px" }}>{getStatusBadge(inv.status)}</td>
-                      <td style={{ padding: "14px 16px", textAlign: "right", color: "var(--muted)" }}>₹{parseFloat(inv.taxable_amount).toFixed(2)}</td>
-                      <td style={{ padding: "14px 16px", textAlign: "right", color: "var(--muted)" }}>₹{(parseFloat(inv.cgst_amount) + parseFloat(inv.sgst_amount)).toFixed(2)}</td>
-                      <td style={{ padding: "14px 16px", textAlign: "right", fontWeight: 700, color: "var(--ink)" }}>₹{parseFloat(inv.total_amount).toFixed(2)}</td>
-                      <td style={{ padding: "14px 16px", textAlign: "center" }}>
-                        <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Invoice #</TableHead>
+                <TableHead>Billed Customer</TableHead>
+                <TableHead>Legal Entity</TableHead>
+                <TableHead>Issue Date</TableHead>
+                <TableHead>Due Date</TableHead>
+                <TableHead>Taxable Value</TableHead>
+                <TableHead>GST (5%)</TableHead>
+                <TableHead>Total Amount</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead style={{ textAlign: "right" }}>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                    Loading tax invoices...
+                  </TableCell>
+                </TableRow>
+              ) : filteredInvoices.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                    No tax invoices found.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredInvoices.map((inv) => {
+                  const gstSum = (parseFloat(inv.cgst_amount) || 0) + (parseFloat(inv.sgst_amount) || 0);
+                  return (
+                    <TableRow key={inv.id}>
+                      <TableCell>
+                        <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", padding: "4px 8px", background: "rgba(59, 73, 223, 0.12)", borderRadius: 6 }}>
+                          {inv.invoice_number || `DRAFT-#${inv.id}`}
+                        </span>
+                      </TableCell>
+
+                      <TableCell>
+                        <strong style={{ color: "#fff", fontSize: 14 }}>{inv.customer_name}</strong>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>{inv.legal_entity_name}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 13, color: "#cbd5e1" }}>{inv.issue_date || "Not Issued"}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 13, color: "#cbd5e1" }}>{inv.due_date || "N/A"}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span>₹{parseFloat(inv.taxable_amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ color: "var(--muted)", fontSize: 13 }}>₹{gstSum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <strong style={{ color: "#fff", fontSize: 14 }}>₹{parseFloat(inv.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>
+                      </TableCell>
+
+                      <TableCell>
+                        <span className={`status ${inv.status === "PAID" ? "ok" : inv.status === "DRAFT" ? "warn" : "info"}`}>
+                          {inv.status}
+                        </span>
+                      </TableCell>
+
+                      <TableCell style={{ textAlign: "right" }}>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
                           <button
-                            onClick={() => handlePreviewHtml(inv)}
-                            title="Tax Invoice HTML Preview"
-                            style={{ padding: "6px 10px", borderRadius: 6, background: "var(--panel-strong)", border: "1px solid var(--line)", color: "var(--ink)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            title="Preview PDF Tax Invoice"
+                            onClick={() => handlePreviewPdf(inv.id, inv.invoice_number || "")}
                           >
-                            <Eye size={13} />
-                            Preview
+                            <Eye size={13} /> PDF
                           </button>
+
                           <button
-                            onClick={() => handleExportTally(inv)}
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
                             title="Export Tally Prime XML"
-                            style={{ padding: "6px 10px", borderRadius: 6, background: "var(--panel-strong)", border: "1px solid var(--line)", color: "var(--info)", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                            onClick={() => handleExportTally(inv.id, inv.invoice_number || "")}
                           >
-                            <Download size={13} />
-                            Tally XML
+                            <Download size={13} /> Tally
                           </button>
+
                           {inv.status === "DRAFT" && (
                             <button
+                              className="button"
+                              style={{ padding: "6px 10px", fontSize: 12, background: "var(--ok)", color: "#000" }}
                               onClick={() => handleIssueInvoice(inv.id)}
-                              title="Issue Invoice & Post Journal"
-                              style={{ padding: "6px 12px", borderRadius: 6, background: "var(--ok)", border: "none", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
                             >
-                              <Send size={13} />
                               Issue
                             </button>
                           )}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
         </div>
-      )}
-
-      {/* Main Tab 2: Draft Invoice Generator */}
-      {activeTab === "generator" && (
-        <div className="panel" style={{ maxWidth: 650, margin: "0 auto", width: "100%", padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ borderBottom: "1px solid var(--line)", paddingBottom: 14 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)", margin: 0 }}>Generate Draft Tax Invoice</h2>
-            <p style={{ color: "var(--muted)", fontSize: 13, margin: "4px 0 0" }}>Consolidate billing-ready trip closeouts into an official GST tax invoice draft with snapshot pricing.</p>
-          </div>
+      ) : (
+        /* Invoice Generator Form Panel */
+        <div className="panel" style={{ padding: 24, maxWidth: 640 }}>
+          <h3 style={{ margin: "0 0 16px", color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
+            <FileText size={20} style={{ color: "var(--accent)" }} />
+            Generate Corporate Tax Invoice
+          </h3>
+          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 20 }}>
+            Select your legal entity and input completed trip IDs to compile automated GST tax invoices based on corporate contract pricing packages.
+          </p>
 
           {genError && (
-            <div style={{ padding: "12px 16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 8, color: "var(--danger)", fontSize: 13 }}>
+            <div style={{ padding: 12, background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 6, color: "var(--danger)", fontSize: 13, marginBottom: 16 }}>
               {genError}
             </div>
           )}
-
           {genSuccess && (
-            <div style={{ padding: "12px 16px", background: "rgba(34, 197, 94, 0.1)", border: "1px solid rgba(34, 197, 94, 0.25)", borderRadius: 8, color: "var(--ok)", fontSize: 13 }}>
+            <div style={{ padding: 12, background: "rgba(34, 197, 94, 0.1)", border: "1px solid rgba(34, 197, 94, 0.25)", borderRadius: 6, color: "var(--ok)", fontSize: 13, marginBottom: 16 }}>
               {genSuccess}
             </div>
           )}
 
-          <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Issuer Legal Entity</label>
+          <form onSubmit={handleGenerateInvoice} className="stack" style={{ gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Legal Entity (Billing Provider) *
+              </label>
               <select
+                required
+                style={{ width: "100%", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
                 value={selectedEntityId}
                 onChange={(e) => setSelectedEntityId(e.target.value)}
-                style={{ width: "100%", background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--ink)", outline: "none" }}
               >
-                {entities.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.legal_name} (GSTIN: {e.gstin})
+                <option value="">Select Legal Entity...</option>
+                {entities.map((ent) => (
+                  <option key={ent.id} value={ent.id}>
+                    {ent.legal_name} (GSTIN: {ent.gstin})
                   </option>
                 ))}
               </select>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Completed Trip IDs (Comma Separated)</label>
+            <div>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Trip IDs (Comma-separated) *
+              </label>
               <input
                 type="text"
-                placeholder="e.g. 1, 2, 5"
+                required
+                placeholder="e.g. 101, 102, 105"
+                style={{ width: "100%", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff", fontFamily: "monospace" }}
                 value={tripIdsInput}
                 onChange={(e) => setTripIdsInput(e.target.value)}
-                style={{ width: "100%", background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--ink)", outline: "none" }}
               />
-              <span style={{ fontSize: 11, color: "var(--muted)" }}>Only trips marked as COMPLETED with approved closeouts will be accepted.</span>
             </div>
 
-            <button
-              type="submit"
-              disabled={generating}
-              className="primary-btn"
-              style={{
-                marginTop: 8,
-                padding: "12px 18px",
-                fontSize: 14,
-                fontWeight: 600,
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                gap: 8,
-                opacity: generating ? 0.7 : 1,
-              }}
-            >
-              {generating ? "Calculating & Generating Draft..." : "Generate Invoice Draft"}
+            <button type="submit" className="button" disabled={generating} style={{ marginTop: 8 }}>
+              {generating ? "Generating Invoice..." : "Compile & Issue Invoice Draft"}
             </button>
           </form>
         </div>
       )}
 
-      {/* Tax Invoice Preview Modal */}
+      {/* PDF Tax Invoice Modal Preview */}
       {previewHtml && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.75)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, zIndex: 1000 }}>
-          <div style={{ background: "#ffffff", borderRadius: 12, width: "100%", maxWidth: 900, maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)" }}>
-            <div style={{ background: "var(--panel-strong)", padding: "14px 20px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <Receipt size={18} style={{ color: "var(--accent)" }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>Tax Invoice Preview — {previewTitle}</span>
-              </div>
-              <button onClick={() => setPreviewHtml(null)} style={{ background: "none", border: 0, color: "var(--muted)", fontSize: 18, cursor: "pointer", fontWeight: 700 }}>
-                ✕
-              </button>
-            </div>
-            <div style={{ flex: 1, padding: 16, overflowY: "auto", background: "#f8fafc" }}>
-              <iframe title="Invoice Preview" srcDoc={previewHtml} style={{ width: "100%", height: 650, border: 0 }} />
-            </div>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(10px)", display: "flex", flexDirection: "column", zIndex: 2000, padding: 24 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <h3 style={{ color: "#fff", margin: 0 }}>{previewTitle}</h3>
+            <button
+              className="button secondary"
+              onClick={() => setPreviewHtml(null)}
+              style={{ background: "rgba(255,255,255,0.1)", color: "#fff", border: 0 }}
+            >
+              <X size={18} /> Close Preview
+            </button>
           </div>
+          <iframe
+            srcDoc={previewHtml}
+            style={{ flex: 1, width: "100%", border: "0", borderRadius: 8, background: "#fff" }}
+            title="PDF Preview"
+          />
         </div>
       )}
     </div>
   );
 }
-
-export default BillingManager;

@@ -547,10 +547,6 @@ export function changeUserPassword(payload: Record<string, string>) {
   return request<{ message: string }>("/auth/change-password/", {
     method: "POST",
     body: JSON.stringify(payload)
-export function changeUserPassword(payload: Record<string, string>) {
-  return request<{ message: string }>("/auth/change-password/", {
-    method: "POST",
-    body: JSON.stringify(payload)
   });
 }
 

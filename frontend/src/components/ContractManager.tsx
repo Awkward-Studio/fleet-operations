@@ -163,16 +163,14 @@ export default function ContractManager() {
 
   const openNewContractModal = () => {
     setEditingContract({
-      contract_code: `CNT-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
       title: "Master Transportation Services Agreement",
       status: "DRAFT",
       version_name: "v1.0-draft",
-      start_date: new Date().toISOString().split("T")[0],
+      effective_start: new Date().toISOString().split("T")[0],
       metering_policy: "GARAGE_TO_GARAGE",
-      grace_period_minutes: 15,
-      night_shift_start: "22:00:00",
-      night_shift_end: "06:00:00",
-      is_active: true,
+      currency: "INR",
+      cgst_rate: "2.5",
+      sgst_rate: "2.5",
       rates: [
         {
           city: "Mumbai",
@@ -408,7 +406,7 @@ export default function ContractManager() {
                 >
                   <TableCell>
                     <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", padding: "4px 8px", background: "rgba(59, 73, 223, 0.12)", borderRadius: 6 }}>
-                      {c.contract_code}
+                      CNT-#{c.id}
                     </span>
                   </TableCell>
 
@@ -420,8 +418,7 @@ export default function ContractManager() {
 
                   <TableCell>
                     <div>
-                      <strong style={{ color: "#e2e8f0", fontSize: 13 }}>{c.customer_name}</strong>
-                      <span style={{ fontSize: 11, color: "var(--muted)", display: "block" }}>{c.customer_code}</span>
+                      <strong style={{ color: "#e2e8f0", fontSize: 13 }}>{c.customer_display_name || `Customer #${c.customer}`}</strong>
                     </div>
                   </TableCell>
 
@@ -439,13 +436,13 @@ export default function ContractManager() {
 
                   <TableCell>
                     <span style={{ fontSize: 12, color: "#cbd5e1" }}>
-                      {c.start_date} → {c.end_date || "Ongoing"}
+                      {c.effective_start} → {c.effective_end || "Ongoing"}
                     </span>
                   </TableCell>
 
                   <TableCell>
                     <span style={{ fontWeight: 600, color: "var(--accent)" }}>
-                      {c.rates_count} Tariff Rates
+                      {c.rates?.length || 0} Tariff Rates
                     </span>
                   </TableCell>
 
@@ -526,7 +523,7 @@ export default function ContractManager() {
                   </span>
                 </div>
                 <span style={{ fontSize: 13, color: "var(--muted)", display: "block", marginTop: 4 }}>
-                  Code: <strong style={{ color: "var(--accent)", fontFamily: "monospace" }}>{selectedContract.contract_code}</strong> • Customer: <strong style={{ color: "#fff" }}>{selectedContract.customer_name}</strong>
+                  Contract ID: <strong style={{ color: "var(--accent)", fontFamily: "monospace" }}>#{selectedContract.id}</strong> • Customer: <strong style={{ color: "#fff" }}>{selectedContract.customer_display_name || `Customer #${selectedContract.customer}`}</strong>
                 </span>
               </div>
               <button
@@ -587,16 +584,16 @@ export default function ContractManager() {
                     <strong style={{ color: "#fff" }}>{selectedContract.metering_policy}</strong>
                   </div>
                   <div>
-                    <span style={{ color: "var(--muted)", display: "block" }}>Grace Period</span>
-                    <strong style={{ color: "#fff" }}>{selectedContract.grace_period_minutes} Minutes</strong>
+                    <span style={{ color: "var(--muted)", display: "block" }}>Currency</span>
+                    <strong style={{ color: "#fff" }}>{selectedContract.currency || "INR"}</strong>
                   </div>
                   <div>
-                    <span style={{ color: "var(--muted)", display: "block" }}>Night Shift Window</span>
-                    <strong style={{ color: "#fff" }}>{selectedContract.night_shift_start} - {selectedContract.night_shift_end}</strong>
+                    <span style={{ color: "var(--muted)", display: "block" }}>GST Rates</span>
+                    <strong style={{ color: "#fff" }}>CGST {selectedContract.cgst_rate}% + SGST {selectedContract.sgst_rate}%</strong>
                   </div>
                   <div>
                     <span style={{ color: "var(--muted)", display: "block" }}>Validity Window</span>
-                    <strong style={{ color: "#fff" }}>{selectedContract.start_date} to {selectedContract.end_date || "Ongoing"}</strong>
+                    <strong style={{ color: "#fff" }}>{selectedContract.effective_start} to {selectedContract.effective_end || "Ongoing"}</strong>
                   </div>
                 </div>
               </div>

@@ -2,8 +2,28 @@
 
 import React, { useState, useEffect } from "react";
 import {
+  Building2,
+  Users,
+  FileText,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Mail,
+  Phone,
+  Shield,
+  CreditCard,
+  Check,
+  X,
+  FileCheck
+} from "lucide-react";
+import {
   CorporateCustomer,
   CustomerContact,
+  CorporateContract,
   getCustomers,
   createCustomer,
   updateCustomer,
@@ -13,11 +33,9 @@ import {
   updateCustomerContact,
   deleteCustomerContact,
   getContracts,
-  CorporateContract,
 } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
 
-type TabType = "directory" | "detail";
 type DetailTab = "overview" | "contacts" | "contracts" | "terms";
 
 export default function CustomerManager() {
@@ -69,6 +87,9 @@ export default function CustomerManager() {
 
       const data = await getCustomers(params);
       setCustomers(data);
+      if (data.length > 0 && !selectedCustomer) {
+        setSelectedCustomer(data[0]);
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load customers.");
     } finally {
@@ -105,6 +126,7 @@ export default function CustomerManager() {
       } else {
         const created = await createCustomer(editingCustomer);
         setCustomers((prev) => [created, ...prev]);
+        setSelectedCustomer(created);
         setSuccess(`Customer '${created.display_name}' created successfully.`);
       }
       setShowCustomerModal(false);
@@ -164,104 +186,152 @@ export default function CustomerManager() {
     }
   };
 
+  const activeCount = customers.filter((c) => c.status === "ACTIVE").length;
+  const poRequiredCount = customers.filter((c) => c.po_required).length;
+
   return (
-    <div className="space-y-6">
-      {/* Header & Action Bar */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/60 p-6 rounded-2xl border border-slate-800 backdrop-blur-md">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Customer Management</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Maintain corporate accounts, billing profiles, contacts, and pricing contracts.
-          </p>
+    <div className="stack" style={{ gap: 24 }}>
+      {/* Top Metric Cards matching Console Design System */}
+      <section className="metrics">
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(59, 73, 223, 0.15)", padding: 8, borderRadius: "50%", color: "var(--accent)" }}>
+              <Building2 size={16} />
+            </div>
+            TOTAL CUSTOMERS
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{customers.length}</strong>
+              <span>Corporate Accounts</span>
+            </div>
+            <div className="metric-trend up">
+              <CheckCircle2 size={12} /> {activeCount} Active
+            </div>
+          </div>
         </div>
-        {isCommercialAdmin && (
-          <button
-            onClick={() => {
-              setEditingCustomer({
-                code: "",
-                legal_name: "",
-                display_name: "",
-                status: "ACTIVE",
-                is_active: true,
-                gstin: "",
-                billing_address: "",
-                billing_email: "",
-                billing_phone: "",
-                payment_terms_days: 30,
-                po_required: false,
-              });
-              setShowCustomerModal(true);
-            }}
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition shadow-lg shadow-indigo-600/20 flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-            </svg>
-            Add New Corporate
-          </button>
-        )}
-      </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(34, 197, 94, 0.15)", padding: 8, borderRadius: "50%", color: "var(--ok)" }}>
+              <FileCheck size={16} />
+            </div>
+            CONTRACT COVERAGE
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{customers.filter((c) => c.active_contract_summary).length}</strong>
+              <span>With Active Rates</span>
+            </div>
+            <div className="metric-trend live">Verified</div>
+          </div>
+        </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(234, 179, 8, 0.15)", padding: 8, borderRadius: "50%", color: "var(--warn)" }}>
+              <CreditCard size={16} />
+            </div>
+            CREDIT TERMS
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>30</strong>
+              <span>Avg Credit Days</span>
+            </div>
+            <div className="metric-trend live">Standard</div>
+          </div>
+        </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(139, 92, 246, 0.15)", padding: 8, borderRadius: "50%", color: "#8b5cf6" }}>
+              <Shield size={16} />
+            </div>
+            PO MANDATORY
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{poRequiredCount}</strong>
+              <span>Strict Accounts</span>
+            </div>
+            <div className="metric-trend live">Enforced</div>
+          </div>
+        </div>
+      </section>
 
       {/* Notifications */}
       {error && (
-        <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-sm flex justify-between items-center">
+        <div style={{ padding: "12px 16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 8, color: "var(--danger)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-200">×</button>
+          <button onClick={() => setError(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
         </div>
       )}
       {success && (
-        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-sm flex justify-between items-center">
+        <div style={{ padding: "12px 16px", background: "rgba(34, 197, 94, 0.1)", border: "1px solid rgba(34, 197, 94, 0.25)", borderRadius: 8, color: "var(--ok)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>{success}</span>
-          <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-200">×</button>
+          <button onClick={() => setSuccess(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
         </div>
       )}
 
-      {/* Main Grid: Directory + Detail View */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Searchable Directory List (5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          <div className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800 space-y-3">
-            <div className="relative">
+      {/* Main Grid: Directory + Detail */}
+      <section className="grid">
+        {/* Left Column: Search & Directory List */}
+        <div className="stack">
+          {/* Search Filter Bar */}
+          <div className="search-filter-bar">
+            <div className="search-input-wrapper">
+              <Search size={16} className="search-icon" />
               <input
                 type="text"
+                placeholder="Search by code, legal name, GSTIN..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by code, name, GSTIN..."
-                className="w-full bg-slate-800/80 border border-slate-700/60 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition"
               />
-              {search && (
-                <button
-                  onClick={() => setSearch("")}
-                  className="absolute right-3 top-2.5 text-slate-400 hover:text-white text-xs"
-                >
-                  Clear
-                </button>
-              )}
             </div>
-            <div className="flex gap-2">
-              {["ALL", "ACTIVE", "INACTIVE", "SUSPENDED"].map((st) => (
-                <button
-                  key={st}
-                  onClick={() => setStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                    statusFilter === st
-                      ? "bg-indigo-600/30 text-indigo-300 border border-indigo-500/50"
-                      : "bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-slate-300 border border-slate-800"
-                  }`}
-                >
-                  {st}
-                </button>
-              ))}
+            <div className="filter-select-wrapper">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="INACTIVE">INACTIVE</option>
+                <option value="SUSPENDED">SUSPENDED</option>
+              </select>
             </div>
+            {isCommercialAdmin && (
+              <button
+                className="button"
+                style={{ whiteSpace: "nowrap" }}
+                onClick={() => {
+                  setEditingCustomer({
+                    code: "",
+                    legal_name: "",
+                    display_name: "",
+                    status: "ACTIVE",
+                    is_active: true,
+                    gstin: "",
+                    billing_address: "",
+                    billing_email: "",
+                    billing_phone: "",
+                    payment_terms_days: 30,
+                    po_required: false,
+                  });
+                  setShowCustomerModal(true);
+                }}
+              >
+                <Plus size={16} /> Add Corporate
+              </button>
+            )}
           </div>
 
-          {/* Customer Cards List */}
-          <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+          {/* Directory List Cards */}
+          <div className="stack" style={{ maxHeight: 620, overflowY: "auto", paddingRight: 4 }}>
             {loading ? (
-              <div className="p-8 text-center text-slate-400 text-sm">Loading corporate customers...</div>
+              <div style={{ padding: 32, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>
+                Loading corporate accounts...
+              </div>
             ) : customers.length === 0 ? (
-              <div className="p-8 text-center bg-slate-900/40 rounded-2xl border border-slate-800/60 text-slate-400 text-sm">
-                No corporate customers found.
+              <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 32 }}>
+                No corporate accounts found.
               </div>
             ) : (
               customers.map((c) => {
@@ -270,50 +340,48 @@ export default function CustomerManager() {
                   <div
                     key={c.id}
                     onClick={() => setSelectedCustomer(c)}
-                    className={`p-4 rounded-xl border transition cursor-pointer ${
-                      isSelected
-                        ? "bg-indigo-950/40 border-indigo-500/60 shadow-lg shadow-indigo-900/20"
-                        : "bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-800/40"
-                    }`}
+                    style={{
+                      background: isSelected ? "var(--sidebar-active)" : "var(--panel)",
+                      border: `1px solid ${isSelected ? "var(--accent)" : "var(--line)"}`,
+                      borderRadius: 12,
+                      padding: 16,
+                      cursor: "pointer",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      boxShadow: isSelected ? "0 4px 20px var(--accent-glow)" : "var(--card-shadow)"
+                    }}
                   >
-                    <div className="flex justify-between items-start">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-white text-base">{c.display_name}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <strong style={{ color: "#fff", fontSize: 15 }}>{c.display_name}</strong>
+                          <span style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 6px", background: "rgba(255, 255, 255, 0.08)", borderRadius: 4, color: "var(--muted)" }}>
                             {c.code}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-400 mt-1 line-clamp-1">{c.legal_name}</p>
+                        <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 4 }}>
+                          {c.legal_name}
+                        </span>
                       </div>
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
-                          c.status === "ACTIVE"
-                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                            : c.status === "INACTIVE"
-                            ? "bg-slate-500/10 text-slate-400 border-slate-500/30"
-                            : "bg-amber-500/10 text-amber-400 border-amber-500/30"
-                        }`}
-                      >
+                      <span className={`status ${c.status === "ACTIVE" ? "ok" : c.status === "INACTIVE" ? "danger" : "warn"}`}>
                         {c.status}
                       </span>
                     </div>
 
-                    <div className="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)", fontSize: 12, color: "var(--muted)" }}>
                       <div>
                         <span>GSTIN: </span>
-                        <span className="font-mono text-slate-300">{c.gstin || "N/A"}</span>
+                        <strong style={{ color: "#e2e8f0", fontFamily: "monospace" }}>{c.gstin || "N/A"}</strong>
                       </div>
                       <div>
-                        <span>Terms: </span>
-                        <span className="text-slate-300">{c.payment_terms_days} days</span>
+                        <span>Credit: </span>
+                        <strong style={{ color: "#e2e8f0" }}>{c.payment_terms_days} days</strong>
                       </div>
                     </div>
 
                     {c.active_contract_summary && (
-                      <div className="mt-2 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-700/30 rounded-lg text-xs text-indigo-300 flex justify-between items-center">
+                      <div style={{ marginTop: 10, padding: "6px 10px", background: "rgba(59, 73, 223, 0.12)", border: "1px solid rgba(59, 73, 223, 0.25)", borderRadius: 6, fontSize: 11, color: "#a5b4fc", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span>📄 {c.active_contract_summary.title}</span>
-                        <span className="text-[10px] bg-indigo-950 px-1.5 py-0.5 rounded">
+                        <span style={{ background: "rgba(0,0,0,0.3)", padding: "2px 6px", borderRadius: 4 }}>
                           {c.active_contract_summary.version_name}
                         </span>
                       </div>
@@ -325,270 +393,289 @@ export default function CustomerManager() {
           </div>
         </div>
 
-        {/* Right Column: Customer Details View (7 cols) */}
-        <div className="lg:col-span-7">
+        {/* Right Column: Customer Details */}
+        <div>
           {selectedCustomer ? (
-            <div className="bg-slate-900/60 rounded-2xl border border-slate-800 p-6 space-y-6">
-              {/* Header inside detail */}
-              <div className="flex justify-between items-start pb-4 border-b border-slate-800">
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-white">{selectedCustomer.display_name}</h2>
-                    <span className="px-2.5 py-0.5 rounded-md text-xs font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                      {selectedCustomer.code}
+            <div className="section">
+              <div className="section-header" style={{ flexDirection: "column", alignItems: "stretch", gap: 12, padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <h2 style={{ fontSize: 20, margin: 0, color: "#fff" }}>{selectedCustomer.display_name}</h2>
+                      <span style={{ background: "rgba(59, 73, 223, 0.2)", border: "1px solid var(--accent)", color: "#a5b4fc", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontFamily: "monospace" }}>
+                        {selectedCustomer.code}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 13, color: "var(--muted)", marginTop: 4, display: "block" }}>
+                      {selectedCustomer.legal_name}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">{selectedCustomer.legal_name}</p>
-                </div>
-                {isCommercialAdmin && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setEditingCustomer(selectedCustomer);
-                        setShowCustomerModal(true);
-                      }}
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition"
-                    >
-                      Edit Profile
-                    </button>
-                    {selectedCustomer.is_active && (
+                  {isCommercialAdmin && (
+                    <div style={{ display: "flex", gap: 8 }}>
                       <button
-                        onClick={() => handleDeactivateCustomer(selectedCustomer)}
-                        className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/30 transition"
+                        className="button secondary"
+                        style={{ padding: "6px 12px", fontSize: 12 }}
+                        onClick={() => {
+                          setEditingCustomer(selectedCustomer);
+                          setShowCustomerModal(true);
+                        }}
                       >
-                        Deactivate
+                        <Pencil size={14} /> Edit Profile
                       </button>
+                      {selectedCustomer.is_active && (
+                        <button
+                          className="button secondary"
+                          style={{ padding: "6px 12px", fontSize: 12, color: "var(--danger)" }}
+                          onClick={() => handleDeactivateCustomer(selectedCustomer)}
+                        >
+                          <Trash2 size={14} /> Deactivate
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Section Navigation Tabs */}
+                <div style={{ display: "flex", gap: 8, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+                  {[
+                    { id: "overview", label: "Overview" },
+                    { id: "contacts", label: `Contacts (${customerContacts.length})` },
+                    { id: "contracts", label: `Contracts (${customerContracts.length})` },
+                    { id: "terms", label: "Billing & Terms" },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setDetailTab(tab.id as DetailTab)}
+                      style={{
+                        background: detailTab === tab.id ? "var(--sidebar-active)" : "transparent",
+                        border: `1px solid ${detailTab === tab.id ? "var(--accent)" : "transparent"}`,
+                        borderRadius: 6,
+                        color: detailTab === tab.id ? "#fff" : "var(--muted)",
+                        padding: "8px 14px",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        transition: "all 0.15s"
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="section-body" style={{ padding: 20 }}>
+                {detailTab === "overview" && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                      <div className="availability-item">
+                        <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700 }}>Account Status</span>
+                        <strong style={{ fontSize: 16, marginTop: 4, display: "block" }}>{selectedCustomer.status}</strong>
+                        <span style={{ fontSize: 12, marginTop: 4 }}>Active Record: {selectedCustomer.is_active ? "Yes" : "No"}</span>
+                      </div>
+                      <div className="availability-item">
+                        <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700 }}>Tax Registration</span>
+                        <strong style={{ fontSize: 16, marginTop: 4, display: "block", fontFamily: "monospace" }}>
+                          {selectedCustomer.gstin || "Not Registered"}
+                        </strong>
+                        <span style={{ fontSize: 12, marginTop: 4 }}>GSTIN Verification Code</span>
+                      </div>
+                    </div>
+
+                    <div className="availability-item">
+                      <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700, display: "block", marginBottom: 6 }}>
+                        Default Dispatch Contact
+                      </span>
+                      <strong style={{ fontSize: 15 }}>{selectedCustomer.booking_contact_name || "N/A"}</strong>
+                      <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 13, color: "var(--muted)" }}>
+                        {selectedCustomer.booking_contact_email && <span>📧 {selectedCustomer.booking_contact_email}</span>}
+                        {selectedCustomer.booking_contact_phone && <span>📞 {selectedCustomer.booking_contact_phone}</span>}
+                      </div>
+                    </div>
+
+                    {selectedCustomer.notes && (
+                      <div className="availability-item">
+                        <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700, display: "block", marginBottom: 6 }}>
+                          Account Notes & Operating Directives
+                        </span>
+                        <span style={{ fontSize: 13, color: "#e2e8f0", whiteSpace: "pre-wrap" }}>{selectedCustomer.notes}</span>
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
 
-              {/* Navigation Tabs */}
-              <div className="flex gap-2 border-b border-slate-800/80 pb-2">
-                {[
-                  { id: "overview", label: "Overview" },
-                  { id: "contacts", label: `Contacts (${customerContacts.length})` },
-                  { id: "contracts", label: `Contracts (${customerContracts.length})` },
-                  { id: "terms", label: "Commercial & Billing" },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setDetailTab(tab.id as DetailTab)}
-                    className={`px-4 py-2 rounded-xl text-xs font-medium transition ${
-                      detailTab === tab.id
-                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Tab Content */}
-              {detailTab === "overview" && (
-                <div className="space-y-4 text-sm text-slate-300">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800">
-                      <span className="text-xs text-slate-400 block mb-1">Status & Activity</span>
-                      <span className="font-semibold text-white">{selectedCustomer.status}</span>
-                      <span className="text-xs text-slate-400 block mt-1">
-                        Active: {selectedCustomer.is_active ? "Yes" : "No"}
-                      </span>
+                {detailTab === "contacts" && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong style={{ color: "#fff", fontSize: 14 }}>Associated Account Contacts</strong>
+                      {isCommercialAdmin && (
+                        <button
+                          className="button"
+                          style={{ padding: "6px 12px", fontSize: 12 }}
+                          onClick={() => {
+                            setEditingContact({
+                              name: "",
+                              contact_type: "PRIMARY",
+                              phone: "",
+                              email: "",
+                              is_primary: customerContacts.length === 0,
+                            });
+                            setShowContactModal(true);
+                          }}
+                        >
+                          <Plus size={14} /> Add Contact
+                        </button>
+                      )}
                     </div>
-                    <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800">
-                      <span className="text-xs text-slate-400 block mb-1">GSTIN Number</span>
-                      <span className="font-mono font-medium text-white">{selectedCustomer.gstin || "Not provided"}</span>
-                    </div>
-                  </div>
 
-                  <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800 space-y-2">
-                    <span className="text-xs text-slate-400 block">Default Booking Contact</span>
-                    <p className="font-medium text-white">{selectedCustomer.booking_contact_name || "N/A"}</p>
-                    <p className="text-xs text-slate-400">{selectedCustomer.booking_contact_email} {selectedCustomer.booking_contact_phone && `• ${selectedCustomer.booking_contact_phone}`}</p>
-                  </div>
-
-                  {selectedCustomer.notes && (
-                    <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800">
-                      <span className="text-xs text-slate-400 block mb-1">Account Notes</span>
-                      <p className="text-xs text-slate-300 whitespace-pre-wrap">{selectedCustomer.notes}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {detailTab === "contacts" && (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-sm font-semibold text-white">Customer Contacts</h3>
-                    {isCommercialAdmin && (
-                      <button
-                        onClick={() => {
-                          setEditingContact({
-                            name: "",
-                            contact_type: "PRIMARY",
-                            phone: "",
-                            email: "",
-                            is_primary: customerContacts.length === 0,
-                          });
-                          setShowContactModal(true);
-                        }}
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition"
-                      >
-                        + Add Contact
-                      </button>
+                    {customerContacts.length === 0 ? (
+                      <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
+                        No contacts listed for this corporate account.
+                      </div>
+                    ) : (
+                      <div className="stack" style={{ gap: 10 }}>
+                        {customerContacts.map((ct) => (
+                          <div key={ct.id} className="availability-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <strong style={{ fontSize: 14 }}>{ct.name}</strong>
+                                {ct.is_primary && (
+                                  <span className="status ok" style={{ fontSize: 9 }}>PRIMARY</span>
+                                )}
+                                <span style={{ fontSize: 10, padding: "2px 6px", background: "rgba(255,255,255,0.06)", borderRadius: 4, color: "var(--muted)" }}>
+                                  {ct.contact_type}
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 12, color: "var(--muted)" }}>
+                                {ct.email && <span>📧 {ct.email}</span>}
+                                {ct.phone && <span>📞 {ct.phone}</span>}
+                              </div>
+                            </div>
+                            {isCommercialAdmin && (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button
+                                  className="button secondary"
+                                  style={{ padding: "4px 8px", fontSize: 11 }}
+                                  onClick={() => {
+                                    setEditingContact(ct);
+                                    setShowContactModal(true);
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  className="button secondary"
+                                  style={{ padding: "4px 8px", fontSize: 11, color: "var(--danger)" }}
+                                  onClick={() => handleDeleteContact(ct.id)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
+                )}
 
-                  {customerContacts.length === 0 ? (
-                    <p className="text-xs text-slate-400 py-4 text-center">No contacts added for this customer yet.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {customerContacts.map((ct) => (
-                        <div
-                          key={ct.id}
-                          className="p-3.5 bg-slate-800/40 rounded-xl border border-slate-800 flex justify-between items-center"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-white text-sm">{ct.name}</span>
-                              {ct.is_primary && (
-                                <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] rounded font-semibold">
-                                  Primary
-                                </span>
-                              )}
-                              <span className="px-2 py-0.5 bg-slate-700 text-slate-300 text-[10px] rounded font-medium">
-                                {ct.contact_type}
+                {detailTab === "contracts" && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    <strong style={{ color: "#fff", fontSize: 14 }}>Active & Draft Commercial Contracts</strong>
+                    {customerContracts.length === 0 ? (
+                      <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
+                        No commercial rate contracts configured for this account.
+                      </div>
+                    ) : (
+                      <div className="stack" style={{ gap: 10 }}>
+                        {customerContracts.map((ctr) => (
+                          <div key={ctr.id} className="availability-item">
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <div>
+                                <strong style={{ fontSize: 15 }}>{ctr.title}</strong>
+                                <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>({ctr.version_name})</span>
+                              </div>
+                              <span className={`status ${ctr.status === "ACTIVE" ? "ok" : "warn"}`}>
+                                {ctr.status}
                               </span>
                             </div>
-                            <div className="text-xs text-slate-400 mt-1 space-x-3">
-                              {ct.email && <span>📧 {ct.email}</span>}
-                              {ct.phone && <span>📞 {ct.phone}</span>}
+                            <div style={{ display: "flex", gap: 20, marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+                              <span>Effective: {ctr.effective_start} to {ctr.effective_end || "Ongoing"}</span>
+                              <span>Taxes: CGST {ctr.cgst_rate}% + SGST {ctr.sgst_rate}%</span>
                             </div>
                           </div>
-                          {isCommercialAdmin && (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  setEditingContact(ct);
-                                  setShowContactModal(true);
-                                }}
-                                className="text-xs text-indigo-400 hover:text-indigo-300"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={() => handleDeleteContact(ct.id)}
-                                className="text-xs text-rose-400 hover:text-rose-300"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
-              {detailTab === "contracts" && (
-                <div className="space-y-4">
-                  <h3 className="text-sm font-semibold text-white">Commercial Rate Contracts</h3>
-                  {customerContracts.length === 0 ? (
-                    <p className="text-xs text-slate-400 py-4 text-center">No active or draft contracts created yet.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {customerContracts.map((ctr) => (
-                        <div key={ctr.id} className="p-4 bg-slate-800/40 rounded-xl border border-slate-800 space-y-2">
-                          <div className="flex justify-between items-center">
-                            <div>
-                              <span className="font-semibold text-white text-sm">{ctr.title}</span>
-                              <span className="ml-2 text-xs text-slate-400">({ctr.version_name})</span>
-                            </div>
-                            <span
-                              className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                ctr.status === "ACTIVE"
-                                  ? "bg-emerald-500/20 text-emerald-300"
-                                  : "bg-slate-700 text-slate-300"
-                              }`}
-                            >
-                              {ctr.status}
-                            </span>
-                          </div>
-                          <div className="text-xs text-slate-400 flex gap-4">
-                            <span>Start: {ctr.effective_start}</span>
-                            <span>End: {ctr.effective_end || "Ongoing"}</span>
-                            <span>Taxes: CGST {ctr.cgst_rate}% + SGST {ctr.sgst_rate}%</span>
-                          </div>
-                        </div>
-                      ))}
+                {detailTab === "terms" && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                      <div className="availability-item">
+                        <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700 }}>Payment Credit Window</span>
+                        <strong style={{ fontSize: 20, marginTop: 4, display: "block", color: "var(--ok)" }}>
+                          {selectedCustomer.payment_terms_days} Days
+                        </strong>
+                      </div>
+                      <div className="availability-item">
+                        <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700 }}>PO Enforcement</span>
+                        <strong style={{ fontSize: 16, marginTop: 4, display: "block", color: selectedCustomer.po_required ? "var(--warn)" : "var(--muted)" }}>
+                          {selectedCustomer.po_required ? "Mandatory Purchase Order" : "Optional PO"}
+                        </strong>
+                      </div>
                     </div>
-                  )}
-                </div>
-              )}
 
-              {detailTab === "terms" && (
-                <div className="space-y-4 text-sm text-slate-300">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800">
-                      <span className="text-xs text-slate-400 block mb-1">Payment Credit Terms</span>
-                      <span className="font-bold text-white text-base">{selectedCustomer.payment_terms_days} Days</span>
-                    </div>
-                    <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800">
-                      <span className="text-xs text-slate-400 block mb-1">Purchase Order Required</span>
-                      <span className="font-bold text-white text-base">
-                        {selectedCustomer.po_required ? "Yes (Mandatory PO)" : "No (Optional PO)"}
+                    <div className="availability-item">
+                      <span style={{ fontSize: 11, textTransform: "uppercase", color: "var(--muted)", fontWeight: 700, display: "block", marginBottom: 6 }}>
+                        Billing Identity & Address
+                      </span>
+                      <span style={{ fontSize: 13, color: "#fff", fontWeight: 600, display: "block" }}>{selectedCustomer.billing_email || "No email"}</span>
+                      <span style={{ fontSize: 13, color: "var(--muted)", marginTop: 4, display: "block", whiteSpace: "pre-wrap" }}>
+                        {selectedCustomer.billing_address || "No formal address recorded."}
                       </span>
                     </div>
                   </div>
-
-                  <div className="p-4 bg-slate-800/40 rounded-xl border border-slate-800 space-y-2">
-                    <span className="text-xs text-slate-400 block">Billing Identity & Address</span>
-                    <p className="text-xs font-medium text-white">{selectedCustomer.billing_email || "No billing email"}</p>
-                    <p className="text-xs text-slate-300 whitespace-pre-wrap">{selectedCustomer.billing_address || "No billing address configured."}</p>
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           ) : (
-            <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-12 text-center text-slate-400 text-sm">
-              Select a customer from the left directory to view full details and management controls.
+            <div className="section" style={{ padding: 48, textAlign: "center", color: "var(--muted)" }}>
+              Select a corporate account from the left directory list to view account details and contracts.
             </div>
           )}
         </div>
-      </div>
+      </section>
 
-      {/* Customer Create/Edit Modal */}
+      {/* Customer Modal */}
       {showCustomerModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 space-y-6 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white">
-                {editingCustomer?.id ? "Edit Customer Profile" : "Create New Corporate Customer"}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 16, width: "100%", maxWidth: 640, overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.6)" }}>
+            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 18, color: "#fff" }}>
+                {editingCustomer?.id ? "Edit Corporate Customer Profile" : "Create New Corporate Account"}
               </h3>
-              <button onClick={() => setShowCustomerModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setShowCustomerModal(false)} style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
             </div>
 
-            <form onSubmit={handleSaveCustomer} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Customer Code *</label>
+            <form onSubmit={handleSaveCustomer} style={{ padding: 24 }} className="stack">
+              <div className="form-grid">
+                <div className="field">
+                  <label>Customer Code *</label>
                   <input
                     type="text"
                     required
                     value={editingCustomer?.code || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, code: e.target.value })}
                     placeholder="e.g. ACME01"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Status</label>
+                <div className="field">
+                  <label>Account Status</label>
                   <select
                     value={editingCustomer?.status || "ACTIVE"}
                     onChange={(e: any) => setEditingCustomer({ ...editingCustomer, status: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="ACTIVE">ACTIVE</option>
                     <option value="INACTIVE">INACTIVE</option>
@@ -597,112 +684,98 @@ export default function CustomerManager() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Display Name *</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Display Name *</label>
                   <input
                     type="text"
                     required
                     value={editingCustomer?.display_name || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, display_name: e.target.value })}
                     placeholder="e.g. ACME Corp"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Legal Registered Name *</label>
+                <div className="field">
+                  <label>Legal Registered Name *</label>
                   <input
                     type="text"
                     required
                     value={editingCustomer?.legal_name || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, legal_name: e.target.value })}
                     placeholder="e.g. ACME Logistics Pvt Ltd"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">GSTIN Number</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>GSTIN Number</label>
                   <input
                     type="text"
                     value={editingCustomer?.gstin || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, gstin: e.target.value })}
                     placeholder="27AAAAA0000A1Z5"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                    style={{ fontFamily: "monospace" }}
                   />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Payment Credit Terms (Days)</label>
+                <div className="field">
+                  <label>Credit Window (Days)</label>
                   <input
                     type="number"
                     value={editingCustomer?.payment_terms_days || 30}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, payment_terms_days: parseInt(e.target.value) || 0 })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Billing Email</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Billing Email</label>
                   <input
                     type="email"
                     value={editingCustomer?.billing_email || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, billing_email: e.target.value })}
                     placeholder="accounts@acme.com"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1">Billing Phone</label>
+                <div className="field">
+                  <label>Billing Phone</label>
                   <input
                     type="text"
                     value={editingCustomer?.billing_phone || ""}
                     onChange={(e) => setEditingCustomer({ ...editingCustomer, billing_phone: e.target.value })}
                     placeholder="+91 9876543210"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-slate-300 block mb-1">Billing Address</label>
+              <div className="field">
+                <label>Billing Address</label>
                 <textarea
                   rows={2}
                   value={editingCustomer?.billing_address || ""}
                   onChange={(e) => setEditingCustomer({ ...editingCustomer, billing_address: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
-              <div className="flex items-center gap-2 pt-2">
+              <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4 }}>
                 <input
                   type="checkbox"
                   id="po_required"
                   checked={editingCustomer?.po_required || false}
                   onChange={(e) => setEditingCustomer({ ...editingCustomer, po_required: e.target.checked })}
-                  className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
                 />
-                <label htmlFor="po_required" className="text-xs text-slate-300 font-medium">
-                  Mandatory Purchase Order (PO) required for bookings
+                <label htmlFor="po_required" style={{ fontSize: 13, color: "#e2e8f0" }}>
+                  Enforce Mandatory Purchase Order (PO) for trip dispatches
                 </label>
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowCustomerModal(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl"
-                >
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                <button type="button" className="button secondary" onClick={() => setShowCustomerModal(false)}>
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/30"
-                >
-                  Save Customer
+                <button type="submit" className="button">
+                  Save Customer Account
                 </button>
               </div>
             </form>
@@ -712,34 +785,32 @@ export default function CustomerManager() {
 
       {/* Contact Modal */}
       {showContactModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-white">
-                {editingContact?.id ? "Edit Contact" : "Add New Contact"}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 16, width: "100%", maxWidth: 440, overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.6)" }}>
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>
+                {editingContact?.id ? "Edit Account Contact" : "Add New Account Contact"}
               </h3>
-              <button onClick={() => setShowContactModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setShowContactModal(false)} style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
             </div>
 
-            <form onSubmit={handleSaveContact} className="space-y-4 text-xs">
-              <div>
-                <label className="text-slate-300 block mb-1">Contact Name *</label>
+            <form onSubmit={handleSaveContact} style={{ padding: 20 }} className="stack">
+              <div className="field">
+                <label>Contact Name *</label>
                 <input
                   type="text"
                   required
                   value={editingContact?.name || ""}
                   onChange={(e) => setEditingContact({ ...editingContact, name: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-slate-300 block mb-1">Contact Type</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Contact Role</label>
                   <select
                     value={editingContact?.contact_type || "PRIMARY"}
                     onChange={(e) => setEditingContact({ ...editingContact, contact_type: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   >
                     <option value="PRIMARY">PRIMARY</option>
                     <option value="BILLING">BILLING</option>
@@ -749,50 +820,40 @@ export default function CustomerManager() {
                     <option value="OTHER">OTHER</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-slate-300 block mb-1">Phone</label>
+                <div className="field">
+                  <label>Phone Number</label>
                   <input
                     type="text"
                     value={editingContact?.phone || ""}
                     onChange={(e) => setEditingContact({ ...editingContact, phone: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="text-slate-300 block mb-1">Email</label>
+              <div className="field">
+                <label>Email Address</label>
                 <input
                   type="email"
                   value={editingContact?.email || ""}
                   onChange={(e) => setEditingContact({ ...editingContact, email: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                 />
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
+              <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4 }}>
                 <input
                   type="checkbox"
                   id="is_primary"
                   checked={editingContact?.is_primary || false}
                   onChange={(e) => setEditingContact({ ...editingContact, is_primary: e.target.checked })}
-                  className="rounded border-slate-700 text-indigo-600"
                 />
-                <label htmlFor="is_primary" className="text-slate-300 font-medium">Set as primary contact</label>
+                <label htmlFor="is_primary" style={{ fontSize: 13, color: "#e2e8f0" }}>Designate as primary contact</label>
               </div>
 
-              <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowContactModal(false)}
-                  className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-lg"
-                >
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+                <button type="button" className="button secondary" onClick={() => setShowContactModal(false)}>
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg"
-                >
+                <button type="submit" className="button">
                   Save Contact
                 </button>
               </div>

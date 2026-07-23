@@ -8,6 +8,7 @@ urlpatterns = [
     path("api/", include("fleet.urls")),
     path("api/", include("media_store.urls")),
     path("api/rentals/", include("rentals.urls")),
+    path("api/billing/", include("billing.urls")),
     path("api/makemytrip/", include("makemytrip.urls")),
 ]
 

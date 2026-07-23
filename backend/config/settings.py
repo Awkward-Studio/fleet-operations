@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "accounts",
     "makemytrip",
     "rentals",
+    "billing",
 ]
 
 MIDDLEWARE = [

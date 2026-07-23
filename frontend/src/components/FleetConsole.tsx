@@ -92,6 +92,7 @@ const navItems = [
   { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus },
   { href: "/customers", section: "customers", label: "Customers", icon: Building2 },
   { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText },
+  { href: "/billing", section: "billing", label: "Fleet Billing", icon: Receipt },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
   { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned },
@@ -573,6 +574,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
 
           {section === "customers" ? <CustomerManager /> : null}
           {section === "contracts" ? <ContractManager /> : null}
+          {section === "billing" ? <BillingManager /> : null}
 
           {section === "dashboard" ? (
             <DashboardView
@@ -2734,6 +2736,7 @@ function pageTitle(section: ConsoleSection) {
     "create-trip": "Create & Dispatch Trip",
     customers: "Corporate Customers",
     contracts: "Rate Contracts",
+    billing: "Fleet Billing & Invoicing",
     vehicles: "Vehicle Management",
     drivers: "Driver Management",
     tracking: "Vehicle Tracking",
@@ -2752,6 +2755,7 @@ function pageSubtitle(section: ConsoleSection) {
     "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
     customers: "Maintain corporate accounts, billing identities, and primary contacts",
     contracts: "Manage versioned rate cards, package matrices, taxes, and allowances",
+    billing: "Manage legal entities, draft invoices, tax preview, and payment allocations",
     vehicles: "Review vehicle state, assignment, current city, and next operational slot",
     drivers: "Track driver availability, assignment, base city, and active work",
     tracking: "Monitor each car by status, active trip, city, and predicted next location",

@@ -2,6 +2,24 @@
 
 import React, { useState, useEffect } from "react";
 import {
+  FileText,
+  Building2,
+  CheckCircle2,
+  AlertTriangle,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  Copy,
+  ShieldCheck,
+  Percent,
+  Clock,
+  Car,
+  MapPin,
+  HelpCircle,
+  FileCheck
+} from "lucide-react";
+import {
   CorporateContract,
   ContractRate,
   ContractAllowance,
@@ -72,6 +90,9 @@ export default function ContractManager() {
       ]);
       setContracts(contractList);
       setCustomers(customerList);
+      if (contractList.length > 0 && !selectedContract) {
+        setSelectedContract(contractList[0]);
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load contracts.");
     } finally {
@@ -99,7 +120,7 @@ export default function ContractManager() {
         duty_type: "LOCAL_8HR_80KM",
         included_hours: 8,
         included_km: 80,
-        base_rate: "2500.00",
+        base_rate: "2400.00",
         extra_hour_rate: "200.00",
         extra_km_rate: "18.00",
       },
@@ -244,72 +265,118 @@ export default function ContractManager() {
     }
   };
 
+  const activeContractsCount = contracts.filter((c) => c.status === "ACTIVE").length;
+  const draftContractsCount = contracts.filter((c) => c.status === "DRAFT").length;
+  const totalRatesCount = contracts.reduce((acc, c) => acc + (c.rates?.length || 0), 0);
+
   return (
-    <div className="space-y-6">
-      {/* Header Bar */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-900/60 p-6 rounded-2xl border border-slate-800 backdrop-blur-md">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Corporate Contract & Rate Card Management</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Configure versioned rate cards, duty packages, allowances, tax rates, and metering policies.
-          </p>
+    <div className="stack" style={{ gap: 24 }}>
+      {/* Top Metrics Cards matching Console Design System */}
+      <section className="metrics">
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(59, 73, 223, 0.15)", padding: 8, borderRadius: "50%", color: "var(--accent)" }}>
+              <FileText size={16} />
+            </div>
+            TOTAL CONTRACTS
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{contracts.length}</strong>
+              <span>Versioned Cards</span>
+            </div>
+            <div className="metric-trend up">
+              <CheckCircle2 size={12} /> {activeContractsCount} Active
+            </div>
+          </div>
         </div>
-        {isCommercialAdmin && (
-          <button
-            onClick={handleOpenCreateModal}
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition shadow-lg shadow-indigo-600/20 flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-            </svg>
-            Create New Contract
-          </button>
-        )}
-      </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(34, 197, 94, 0.15)", padding: 8, borderRadius: "50%", color: "var(--ok)" }}>
+              <CheckCircle2 size={16} />
+            </div>
+            ACTIVE RATE CARDS
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{activeContractsCount}</strong>
+              <span>Live Pricing</span>
+            </div>
+            <div className="metric-trend live">Ready</div>
+          </div>
+        </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(234, 179, 8, 0.15)", padding: 8, borderRadius: "50%", color: "var(--warn)" }}>
+              <Clock size={16} />
+            </div>
+            DRAFT CONTRACTS
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{draftContractsCount}</strong>
+              <span>Pending Review</span>
+            </div>
+            <div className="metric-trend down">Drafts</div>
+          </div>
+        </div>
+
+        <div className="metric">
+          <div className="metric-header">
+            <div style={{ background: "rgba(139, 92, 246, 0.15)", padding: 8, borderRadius: "50%", color: "#8b5cf6" }}>
+              <Percent size={16} />
+            </div>
+            MATRIX RATES
+          </div>
+          <div className="metric-content">
+            <div className="metric-value">
+              <strong>{totalRatesCount}</strong>
+              <span>Duty Package Rows</span>
+            </div>
+            <div className="metric-trend live">Configured</div>
+          </div>
+        </div>
+      </section>
 
       {/* Notifications */}
       {error && (
-        <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-sm flex justify-between items-center">
+        <div style={{ padding: "12px 16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 8, color: "var(--danger)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-200">✕</button>
+          <button onClick={() => setError(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
         </div>
       )}
       {success && (
-        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-sm flex justify-between items-center">
+        <div style={{ padding: "12px 16px", background: "rgba(34, 197, 94, 0.1)", border: "1px solid rgba(34, 197, 94, 0.25)", borderRadius: 8, color: "var(--ok)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>{success}</span>
-          <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-200">✕</button>
+          <button onClick={() => setSuccess(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
         </div>
       )}
 
       {/* Main Grid: Contracts List + Rate Matrix Detail */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Contracts List (5 cols) */}
-        <div className="lg:col-span-5 space-y-4">
-          {/* Filters */}
-          <div className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800 space-y-3">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search contract title or customer..."
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                value={selectedCustomerFilter}
-                onChange={(e) => setSelectedCustomerFilter(e.target.value)}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
-              >
+      <section className="grid">
+        {/* Left Column: Contracts List & Search */}
+        <div className="stack">
+          {/* Search Filter Bar */}
+          <div className="search-filter-bar">
+            <div className="search-input-wrapper">
+              <Search size={16} className="search-icon" />
+              <input
+                type="text"
+                placeholder="Search title or customer..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="filter-select-wrapper">
+              <select value={selectedCustomerFilter} onChange={(e) => setSelectedCustomerFilter(e.target.value)}>
                 <option value="ALL">All Customers</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>{c.display_name}</option>
                 ))}
               </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
-              >
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="ALL">All Statuses</option>
                 <option value="DRAFT">DRAFT</option>
                 <option value="ACTIVE">ACTIVE</option>
@@ -317,15 +384,22 @@ export default function ContractManager() {
                 <option value="ARCHIVED">ARCHIVED</option>
               </select>
             </div>
+            {isCommercialAdmin && (
+              <button className="button" style={{ whiteSpace: "nowrap" }} onClick={handleOpenCreateModal}>
+                <Plus size={16} /> New Contract
+              </button>
+            )}
           </div>
 
           {/* List Cards */}
-          <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+          <div className="stack" style={{ maxHeight: 620, overflowY: "auto", paddingRight: 4 }}>
             {loading ? (
-              <div className="p-8 text-center text-slate-400 text-sm">Loading contracts...</div>
+              <div style={{ padding: 32, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>
+                Loading corporate contracts...
+              </div>
             ) : contracts.length === 0 ? (
-              <div className="p-8 text-center bg-slate-900/40 rounded-2xl border border-slate-800 text-slate-400 text-sm">
-                No corporate contracts found.
+              <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 32 }}>
+                No rate contracts found.
               </div>
             ) : (
               contracts.map((c) => {
@@ -337,39 +411,37 @@ export default function ContractManager() {
                       setSelectedContract(c);
                       setValidationResult(null);
                     }}
-                    className={`p-4 rounded-xl border transition cursor-pointer ${
-                      isSelected
-                        ? "bg-indigo-950/40 border-indigo-500/60 shadow-lg shadow-indigo-900/20"
-                        : "bg-slate-900/50 border-slate-800 hover:border-slate-700 hover:bg-slate-800/40"
-                    }`}
+                    style={{
+                      background: isSelected ? "var(--sidebar-active)" : "var(--panel)",
+                      border: `1px solid ${isSelected ? "var(--accent)" : "var(--line)"}`,
+                      borderRadius: 12,
+                      padding: 16,
+                      cursor: "pointer",
+                      transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+                      boxShadow: isSelected ? "0 4px 20px var(--accent-glow)" : "var(--card-shadow)"
+                    }}
                   >
-                    <div className="flex justify-between items-start">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-white text-base">{c.title}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <strong style={{ color: "#fff", fontSize: 15 }}>{c.title}</strong>
+                          <span style={{ fontSize: 11, fontFamily: "monospace", padding: "2px 6px", background: "rgba(255, 255, 255, 0.08)", borderRadius: 4, color: "var(--muted)" }}>
                             {c.version_name}
                           </span>
                         </div>
-                        <p className="text-xs text-indigo-400 mt-1 font-medium">{c.customer_display_name}</p>
+                        <span style={{ fontSize: 12, color: "#5c6cfa", display: "block", marginTop: 4, fontWeight: 500 }}>
+                          🏢 {c.customer_display_name}
+                        </span>
                       </div>
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
-                          c.status === "ACTIVE"
-                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                            : c.status === "DRAFT"
-                            ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
-                            : "bg-slate-500/10 text-slate-400 border-slate-500/30"
-                        }`}
-                      >
+                      <span className={`status ${c.status === "ACTIVE" ? "ok" : c.status === "DRAFT" ? "warn" : "neutral"}`}>
                         {c.status}
                       </span>
                     </div>
 
-                    <div className="mt-3 pt-3 border-t border-slate-800/80 flex justify-between items-center text-xs text-slate-400">
-                      <span>Rates: <strong className="text-white">{c.rates?.length || 0} rows</strong></span>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)", fontSize: 12, color: "var(--muted)" }}>
+                      <span>Package Rows: <strong style={{ color: "#fff" }}>{c.rates?.length || 0}</strong></span>
                       <span>CGST {c.cgst_rate}% + SGST {c.sgst_rate}%</span>
-                      <span>Policy: <strong className="text-slate-300">{c.metering_policy}</strong></span>
+                      <span>Policy: <strong style={{ color: "#a5b4fc" }}>{c.metering_policy}</strong></span>
                     </div>
                   </div>
                 );
@@ -378,437 +450,427 @@ export default function ContractManager() {
           </div>
         </div>
 
-        {/* Right Column: Rate Card Matrix & Validation Detail (7 cols) */}
-        <div className="lg:col-span-7">
+        {/* Right Column: Rate Card Matrix Detail View */}
+        <div>
           {selectedContract ? (
-            <div className="bg-slate-900/60 rounded-2xl border border-slate-800 p-6 space-y-6">
-              {/* Detail Header */}
-              <div className="flex justify-between items-start pb-4 border-b border-slate-800">
-                <div>
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-white">{selectedContract.title}</h2>
-                    <span className="px-2 py-0.5 rounded text-xs font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
-                      {selectedContract.version_name}
+            <div className="section">
+              <div className="section-header" style={{ padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <h2 style={{ fontSize: 20, margin: 0, color: "#fff" }}>{selectedContract.title}</h2>
+                      <span style={{ background: "rgba(59, 73, 223, 0.2)", border: "1px solid var(--accent)", color: "#a5b4fc", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontFamily: "monospace" }}>
+                        {selectedContract.version_name}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 13, color: "var(--muted)", marginTop: 4, display: "block" }}>
+                      Account: <strong style={{ color: "#fff" }}>{selectedContract.customer_display_name}</strong> • Policy: <span style={{ color: "var(--accent)" }}>{selectedContract.metering_policy}</span>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">Customer: <span className="text-white font-medium">{selectedContract.customer_display_name}</span></p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleValidateContract(selectedContract)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition"
-                  >
-                    Check Validation
-                  </button>
-                  {isCommercialAdmin && (
-                    <>
-                      {selectedContract.status === "DRAFT" && (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="button secondary"
+                      style={{ padding: "6px 12px", fontSize: 12 }}
+                      onClick={() => handleValidateContract(selectedContract)}
+                    >
+                      <ShieldCheck size={14} /> Validate
+                    </button>
+                    {isCommercialAdmin && (
+                      <>
+                        {selectedContract.status === "DRAFT" && (
+                          <button
+                            className="button"
+                            style={{ padding: "6px 12px", fontSize: 12, background: "var(--ok)" }}
+                            onClick={() => handleActivateContract(selectedContract)}
+                          >
+                            <CheckCircle2 size={14} /> Activate
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleActivateContract(selectedContract)}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-md shadow-emerald-600/30 transition"
+                          className="button secondary"
+                          style={{ padding: "6px 12px", fontSize: 12 }}
+                          onClick={() => handleOpenEditModal(selectedContract)}
                         >
-                          Activate
+                          <Pencil size={14} /> Edit Matrix
                         </button>
-                      )}
-                      <button
-                        onClick={() => handleOpenEditModal(selectedContract)}
-                        className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 text-xs font-medium rounded-lg border border-indigo-500/30 transition"
-                      >
-                        Edit Matrix
-                      </button>
-                      <button
-                        onClick={() => handleCopyContract(selectedContract)}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg border border-slate-700 transition"
-                      >
-                        Copy
-                      </button>
-                      <button
-                        onClick={() => handleDeleteContract(selectedContract.id)}
-                        className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/30 transition"
-                      >
-                        Delete
-                      </button>
-                    </>
+                        <button
+                          className="button secondary"
+                          style={{ padding: "6px 12px", fontSize: 12 }}
+                          onClick={() => handleCopyContract(selectedContract)}
+                        >
+                          <Copy size={14} /> Copy
+                        </button>
+                        <button
+                          className="button secondary"
+                          style={{ padding: "6px 12px", fontSize: 12, color: "var(--danger)" }}
+                          onClick={() => handleDeleteContract(selectedContract.id)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="section-body" style={{ padding: 20 }}>
+                {/* Validation Summary Box */}
+                {validationResult && (
+                  <div
+                    style={{
+                      padding: 16,
+                      borderRadius: 8,
+                      fontSize: 13,
+                      marginBottom: 16,
+                      background: validationResult.is_valid ? "rgba(34, 197, 94, 0.1)" : "rgba(239, 68, 68, 0.1)",
+                      border: `1px solid ${validationResult.is_valid ? "rgba(34, 197, 94, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+                      color: validationResult.is_valid ? "var(--ok)" : "var(--danger)"
+                    }}
+                  >
+                    <strong style={{ display: "block", marginBottom: 4 }}>
+                      {validationResult.is_valid ? "✓ Contract rate card is valid and ready for activation." : "❌ Validation issues found:"}
+                    </strong>
+                    {validationResult.errors.map((err, i) => (
+                      <div key={i} style={{ marginTop: 2 }}>• {err}</div>
+                    ))}
+                    {validationResult.warnings.map((warn, i) => (
+                      <div key={i} style={{ marginTop: 2, color: "var(--warn)" }}>• Warning: {warn}</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Rate Card Matrix Table */}
+                <div className="stack" style={{ gap: 12 }}>
+                  <strong style={{ color: "#fff", fontSize: 14 }}>Configured Rate Card Matrix</strong>
+                  {selectedContract.rates && selectedContract.rates.length > 0 ? (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>City</th>
+                            <th>Category</th>
+                            <th>Duty Type</th>
+                            <th>Included</th>
+                            <th>Base Fare</th>
+                            <th>Extra Hr / Km</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedContract.rates.map((r, i) => (
+                            <tr key={i}>
+                              <td><strong style={{ color: "#fff", textTransform: "capitalize" }}>{r.city}</strong></td>
+                              <td style={{ textTransform: "capitalize" }}>{r.vehicle_category}</td>
+                              <td><span className="status neutral">{r.duty_type}</span></td>
+                              <td>{r.included_hours}h / {r.included_km}km</td>
+                              <td><strong style={{ color: "var(--ok)" }}>₹{r.base_rate}</strong></td>
+                              <td>₹{r.extra_hour_rate}/h • ₹{r.extra_km_rate}/km</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="availability-item" style={{ textAlign: "center", color: "var(--muted)", padding: 20 }}>
+                      No rate card package rows configured.
+                    </div>
+                  )}
+                </div>
+
+                {/* Allowances Section */}
+                <div className="stack" style={{ gap: 12, marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line)" }}>
+                  <strong style={{ color: "#fff", fontSize: 14 }}>Contract Allowances & Drivers Extras</strong>
+                  {selectedContract.allowances && selectedContract.allowances.length > 0 ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      {selectedContract.allowances.map((a, i) => (
+                        <div key={i} className="availability-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <strong style={{ fontSize: 13 }}>{a.allowance_type}</strong>
+                            <span style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}</span>
+                          </div>
+                          <strong style={{ color: "var(--ok)", fontSize: 14 }}>₹{a.amount}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ color: "var(--muted)", fontSize: 13 }}>No extra driver or operational allowances specified.</span>
                   )}
                 </div>
               </div>
-
-              {/* Validation Banner if checked */}
-              {validationResult && (
-                <div
-                  className={`p-4 rounded-xl border text-xs space-y-1 ${
-                    validationResult.is_valid
-                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                      : "bg-rose-500/10 border-rose-500/30 text-rose-300"
-                  }`}
-                >
-                  <p className="font-bold">
-                    {validationResult.is_valid ? "✓ Contract is valid and ready for activation." : "❌ Contract validation failed:"}
-                  </p>
-                  {validationResult.errors.map((err, i) => (
-                    <p key={i}>• {err}</p>
-                  ))}
-                  {validationResult.warnings.map((warn, i) => (
-                    <p key={i} className="text-amber-300">• Warning: {warn}</p>
-                  ))}
-                </div>
-              )}
-
-              {/* Rate Card Matrix Table */}
-              <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-white">Rate Card Matrix</h3>
-                {selectedContract.rates && selectedContract.rates.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-slate-800/80 text-slate-400 border-b border-slate-800">
-                          <th className="p-2.5 font-medium">City</th>
-                          <th className="p-2.5 font-medium">Category</th>
-                          <th className="p-2.5 font-medium">Duty Type</th>
-                          <th className="p-2.5 font-medium">Included</th>
-                          <th className="p-2.5 font-medium">Base Fare</th>
-                          <th className="p-2.5 font-medium">Extra Hr / Km</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60">
-                        {selectedContract.rates.map((r, i) => (
-                          <tr key={i} className="hover:bg-slate-800/30">
-                            <td className="p-2.5 text-white font-medium capitalize">{r.city}</td>
-                            <td className="p-2.5 text-slate-300 capitalize">{r.vehicle_category}</td>
-                            <td className="p-2.5 text-indigo-400 font-mono">{r.duty_type}</td>
-                            <td className="p-2.5 text-slate-300">{r.included_hours}h / {r.included_km}km</td>
-                            <td className="p-2.5 text-emerald-400 font-semibold">₹{r.base_rate}</td>
-                            <td className="p-2.5 text-slate-300">₹{r.extra_hour_rate}/h • ₹{r.extra_km_rate}/km</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-400 py-3">No rate rows configured for this contract yet.</p>
-                )}
-              </div>
-
-              {/* Contract Allowances */}
-              <div className="space-y-3 pt-3 border-t border-slate-800">
-                <h3 className="text-sm font-semibold text-white">Configured Allowances</h3>
-                {selectedContract.allowances && selectedContract.allowances.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    {selectedContract.allowances.map((a, i) => (
-                      <div key={i} className="p-3 bg-slate-800/40 rounded-xl border border-slate-800 flex justify-between items-center">
-                        <div>
-                          <span className="text-xs font-medium text-white block">{a.allowance_type}</span>
-                          <span className="text-[11px] text-slate-400">{a.description}</span>
-                        </div>
-                        <span className="text-xs font-bold text-emerald-400">₹{a.amount}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-xs text-slate-400">No extra allowances specified.</p>
-                )}
-              </div>
             </div>
           ) : (
-            <div className="bg-slate-900/40 rounded-2xl border border-slate-800 p-12 text-center text-slate-400 text-sm">
-              Select a contract from the left list to view rate card details, validation status, and matrix rules.
+            <div className="section" style={{ padding: 48, textAlign: "center", color: "var(--muted)" }}>
+              Select a rate contract from the left list to view its matrix packages, tax rules, and allowances.
             </div>
           )}
         </div>
-      </div>
+      </section>
 
-      {/* Contract Editor Modal with Rate Matrix & Allowances */}
+      {/* Contract Editor Modal */}
       {showContractModal && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 space-y-6 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white">
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "var(--panel-strong)", border: "1px solid var(--line)", borderRadius: 16, width: "100%", maxWidth: 840, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.6)" }}>
+            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 18, color: "#fff" }}>
                 {editingContract?.id ? "Edit Contract & Rate Card Matrix" : "Create New Corporate Contract"}
               </h3>
-              <button onClick={() => setShowContractModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setShowContractModal(false)} style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
             </div>
 
-            <form onSubmit={handleSaveContract} className="space-y-6">
+            <form onSubmit={handleSaveContract} style={{ padding: 24 }} className="stack">
               {/* Header Fields */}
-              <div className="grid grid-cols-3 gap-4 text-xs">
-                <div>
-                  <label className="text-slate-300 block mb-1">Corporate Customer *</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Corporate Account *</label>
                   <select
                     required
                     value={editingContract?.customer || ""}
                     onChange={(e) => setEditingContract({ ...editingContract, customer: parseInt(e.target.value) })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   >
                     {customers.map((c) => (
                       <option key={c.id} value={c.id}>{c.display_name} ({c.code})</option>
                     ))}
                   </select>
                 </div>
-
-                <div>
-                  <label className="text-slate-300 block mb-1">Contract Title *</label>
+                <div className="field">
+                  <label>Contract Title *</label>
                   <input
                     type="text"
                     required
                     value={editingContract?.title || ""}
                     onChange={(e) => setEditingContract({ ...editingContract, title: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="text-slate-300 block mb-1">Version Identifier *</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Version Identifier *</label>
                   <input
                     type="text"
                     required
                     value={editingContract?.version_name || "v1.0"}
                     onChange={(e) => setEditingContract({ ...editingContract, version_name: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                    style={{ fontFamily: "monospace" }}
                   />
+                </div>
+                <div className="field">
+                  <label>Metering Policy</label>
+                  <select
+                    value={editingContract?.metering_policy || "GARAGE_TO_GARAGE"}
+                    onChange={(e) => setEditingContract({ ...editingContract, metering_policy: e.target.value })}
+                  >
+                    <option value="GARAGE_TO_GARAGE">GARAGE_TO_GARAGE</option>
+                    <option value="PICKUP_TO_DROP">PICKUP_TO_DROP</option>
+                    <option value="FIXED_PACKAGE">FIXED_PACKAGE</option>
+                    <option value="OUTSTATION_DAILY_MINIMUM">OUTSTATION_DAILY_MINIMUM</option>
+                  </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 gap-4 text-xs">
-                <div>
-                  <label className="text-slate-300 block mb-1">Effective Start *</label>
+              <div className="form-grid">
+                <div className="field">
+                  <label>Effective Start Date *</label>
                   <input
                     type="date"
                     required
                     value={editingContract?.effective_start || ""}
                     onChange={(e) => setEditingContract({ ...editingContract, effective_start: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <div>
-                  <label className="text-slate-300 block mb-1">Effective End (Optional)</label>
+                <div className="field">
+                  <label>Effective End Date</label>
                   <input
                     type="date"
                     value={editingContract?.effective_end || ""}
                     onChange={(e) => setEditingContract({ ...editingContract, effective_end: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <div>
-                  <label className="text-slate-300 block mb-1">CGST Rate (%)</label>
+              </div>
+
+              <div className="form-grid">
+                <div className="field">
+                  <label>CGST Rate (%)</label>
                   <input
                     type="number"
                     step="0.01"
                     value={editingContract?.cgst_rate || "2.50"}
                     onChange={(e) => setEditingContract({ ...editingContract, cgst_rate: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
-                <div>
-                  <label className="text-slate-300 block mb-1">SGST Rate (%)</label>
+                <div className="field">
+                  <label>SGST Rate (%)</label>
                   <input
                     type="number"
                     step="0.01"
                     value={editingContract?.sgst_rate || "2.50"}
                     onChange={(e) => setEditingContract({ ...editingContract, sgst_rate: e.target.value })}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
               </div>
 
-              {/* Rate Card Matrix Section */}
-              <div className="space-y-3 pt-3 border-t border-slate-800">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-sm font-bold text-white">Rate Card Matrix Rows</h4>
-                  <button
-                    type="button"
-                    onClick={handleAddRateRow}
-                    className="px-3 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/50 text-xs font-semibold rounded-lg"
-                  >
-                    + Add Rate Row
+              {/* Matrix Rows */}
+              <div className="stack" style={{ gap: 12, marginTop: 12, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ color: "#fff", fontSize: 14 }}>Rate Card Matrix Rows</strong>
+                  <button type="button" className="button secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={handleAddRateRow}>
+                    <Plus size={14} /> Add Row
                   </button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="stack" style={{ gap: 8 }}>
                   {ratesDraft.map((rate, index) => (
-                    <div key={index} className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/60 grid grid-cols-12 gap-2 text-xs items-center">
-                      <div className="col-span-2">
-                        <input
-                          type="text"
-                          placeholder="City (e.g. mumbai)"
-                          value={rate.city}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].city = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white capitalize"
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <input
-                          type="text"
-                          placeholder="Category (e.g. sedan)"
-                          value={rate.vehicle_category}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].vehicle_category = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white capitalize"
-                        />
-                      </div>
-                      <div className="col-span-3">
-                        <select
-                          value={rate.duty_type}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].duty_type = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white text-[11px]"
-                        >
-                          <option value="LOCAL_8HR_80KM">LOCAL_8HR_80KM</option>
-                          <option value="LOCAL_12HR_120KM">LOCAL_12HR_120KM</option>
-                          <option value="OUTSTATION">OUTSTATION</option>
-                          <option value="AIRPORT_TRANSFER">AIRPORT_TRANSFER</option>
-                          <option value="ONE_WAY">ONE_WAY</option>
-                          <option value="FULL_DAY">FULL_DAY</option>
-                        </select>
-                      </div>
-                      <div className="col-span-2">
-                        <input
-                          type="number"
-                          placeholder="Base ₹"
-                          value={rate.base_rate}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].base_rate = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-emerald-400 font-semibold"
-                        />
-                      </div>
-                      <div className="col-span-2 flex gap-1">
-                        <input
-                          type="number"
-                          placeholder="Ex/h ₹"
-                          value={rate.extra_hour_rate}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].extra_hour_rate = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-1/2 bg-slate-900 border border-slate-700 rounded-lg px-1.5 py-1 text-white"
-                        />
-                        <input
-                          type="number"
-                          placeholder="Ex/km ₹"
-                          value={rate.extra_km_rate}
-                          onChange={(e) => {
-                            const updated = [...ratesDraft];
-                            updated[index].extra_km_rate = e.target.value;
-                            setRatesDraft(updated);
-                          }}
-                          className="w-1/2 bg-slate-900 border border-slate-700 rounded-lg px-1.5 py-1 text-white"
-                        />
-                      </div>
-                      <div className="col-span-1 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRateRow(index)}
-                          className="text-rose-400 hover:text-rose-300 font-bold px-2 py-1"
-                        >
-                          ✕
-                        </button>
-                      </div>
+                    <div key={index} className="availability-item" style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 2fr 1.2fr 1fr 1fr 30px", gap: 8, padding: 10, alignItems: "center" }}>
+                      <input
+                        type="text"
+                        placeholder="City"
+                        value={rate.city}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].city = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12, textTransform: "capitalize" }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Category"
+                        value={rate.vehicle_category}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].vehicle_category = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12, textTransform: "capitalize" }}
+                      />
+                      <select
+                        value={rate.duty_type}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].duty_type = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12 }}
+                      >
+                        <option value="LOCAL_8HR_80KM">LOCAL_8HR_80KM</option>
+                        <option value="LOCAL_12HR_120KM">LOCAL_12HR_120KM</option>
+                        <option value="OUTSTATION">OUTSTATION</option>
+                        <option value="AIRPORT_TRANSFER">AIRPORT_TRANSFER</option>
+                        <option value="ONE_WAY">ONE_WAY</option>
+                        <option value="FULL_DAY">FULL_DAY</option>
+                      </select>
+                      <input
+                        type="number"
+                        placeholder="Base ₹"
+                        value={rate.base_rate}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].base_rate = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12, color: "var(--ok)", fontWeight: 700 }}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Ex/h ₹"
+                        value={rate.extra_hour_rate}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].extra_hour_rate = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12 }}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Ex/km ₹"
+                        value={rate.extra_km_rate}
+                        onChange={(e) => {
+                          const updated = [...ratesDraft];
+                          updated[index].extra_km_rate = e.target.value;
+                          setRatesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveRateRow(index)}
+                        style={{ background: "none", border: 0, color: "var(--danger)", cursor: "pointer", fontWeight: 700 }}
+                      >
+                        ✕
+                      </button>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Allowances Section */}
-              <div className="space-y-3 pt-3 border-t border-slate-800">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-sm font-bold text-white">Contract Allowances</h4>
-                  <button
-                    type="button"
-                    onClick={handleAddAllowanceRow}
-                    className="px-3 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/50 text-xs font-semibold rounded-lg"
-                  >
-                    + Add Allowance
+              {/* Allowances Rows */}
+              <div className="stack" style={{ gap: 12, marginTop: 12, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ color: "#fff", fontSize: 14 }}>Contract Allowances</strong>
+                  <button type="button" className="button secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={handleAddAllowanceRow}>
+                    <Plus size={14} /> Add Allowance
                   </button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="stack" style={{ gap: 8 }}>
                   {allowancesDraft.map((allowance, index) => (
-                    <div key={index} className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/60 grid grid-cols-12 gap-2 text-xs items-center">
-                      <div className="col-span-5">
-                        <select
-                          value={allowance.allowance_type}
-                          onChange={(e) => {
-                            const updated = [...allowancesDraft];
-                            updated[index].allowance_type = e.target.value;
-                            setAllowancesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                        >
-                          <option value="OVERTIME_PER_HOUR">OVERTIME_PER_HOUR</option>
-                          <option value="OUTSTATION_PER_DAY">OUTSTATION_PER_DAY</option>
-                          <option value="OVERNIGHT_DRIVER_ALLOWANCE">OVERNIGHT_DRIVER_ALLOWANCE</option>
-                          <option value="SUNDAY_ALLOWANCE">SUNDAY_ALLOWANCE</option>
-                          <option value="EARLY_START_ALLOWANCE">EARLY_START_ALLOWANCE</option>
-                          <option value="NIGHT_ALLOWANCE">NIGHT_ALLOWANCE</option>
-                          <option value="EXTRA_DUTY_ALLOWANCE">EXTRA_DUTY_ALLOWANCE</option>
-                        </select>
-                      </div>
-                      <div className="col-span-3">
-                        <input
-                          type="number"
-                          placeholder="Amount ₹"
-                          value={allowance.amount}
-                          onChange={(e) => {
-                            const updated = [...allowancesDraft];
-                            updated[index].amount = e.target.value;
-                            setAllowancesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-emerald-400 font-semibold"
-                        />
-                      </div>
-                      <div className="col-span-3">
-                        <input
-                          type="text"
-                          placeholder="Description"
-                          value={allowance.description || ""}
-                          onChange={(e) => {
-                            const updated = [...allowancesDraft];
-                            updated[index].description = e.target.value;
-                            setAllowancesDraft(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
-                        />
-                      </div>
-                      <div className="col-span-1 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveAllowanceRow(index)}
-                          className="text-rose-400 hover:text-rose-300 font-bold px-2 py-1"
-                        >
-                          ✕
-                        </button>
-                      </div>
+                    <div key={index} className="availability-item" style={{ display: "grid", gridTemplateColumns: "2.5fr 1.5fr 3fr 30px", gap: 8, padding: 10, alignItems: "center" }}>
+                      <select
+                        value={allowance.allowance_type}
+                        onChange={(e) => {
+                          const updated = [...allowancesDraft];
+                          updated[index].allowance_type = e.target.value;
+                          setAllowancesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12 }}
+                      >
+                        <option value="OVERTIME_PER_HOUR">OVERTIME_PER_HOUR</option>
+                        <option value="OUTSTATION_PER_DAY">OUTSTATION_PER_DAY</option>
+                        <option value="OVERNIGHT_DRIVER_ALLOWANCE">OVERNIGHT_DRIVER_ALLOWANCE</option>
+                        <option value="SUNDAY_ALLOWANCE">SUNDAY_ALLOWANCE</option>
+                        <option value="EARLY_START_ALLOWANCE">EARLY_START_ALLOWANCE</option>
+                        <option value="NIGHT_ALLOWANCE">NIGHT_ALLOWANCE</option>
+                        <option value="EXTRA_DUTY_ALLOWANCE">EXTRA_DUTY_ALLOWANCE</option>
+                      </select>
+                      <input
+                        type="number"
+                        placeholder="Amount ₹"
+                        value={allowance.amount}
+                        onChange={(e) => {
+                          const updated = [...allowancesDraft];
+                          updated[index].amount = e.target.value;
+                          setAllowancesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12, color: "var(--ok)", fontWeight: 700 }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Description"
+                        value={allowance.description || ""}
+                        onChange={(e) => {
+                          const updated = [...allowancesDraft];
+                          updated[index].description = e.target.value;
+                          setAllowancesDraft(updated);
+                        }}
+                        style={{ padding: "6px 8px", fontSize: 12 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAllowanceRow(index)}
+                        style={{ background: "none", border: 0, color: "var(--danger)", cursor: "pointer", fontWeight: 700 }}
+                      >
+                        ✕
+                      </button>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Submit Buttons */}
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowContractModal(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl"
-                >
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+                <button type="button" className="button secondary" onClick={() => setShowContractModal(false)}>
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/30"
-                >
+                <button type="submit" className="button">
                   Save Contract & Matrix
                 </button>
               </div>

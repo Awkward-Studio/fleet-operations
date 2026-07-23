@@ -705,13 +705,12 @@ export default function ContractManager() {
                   </select>
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Contract Code *</label>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Billing Currency</label>
                   <input
                     type="text"
-                    required
                     style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={editingContract.contract_code || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, contract_code: e.target.value })}
+                    value={editingContract.currency || "INR"}
+                    onChange={(e) => setEditingContract({ ...editingContract, currency: e.target.value })}
                   />
                 </div>
               </div>
@@ -738,22 +737,22 @@ export default function ContractManager() {
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Start Date *</label>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Effective Start *</label>
                   <input
                     type="date"
                     required
                     style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={editingContract.start_date || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, start_date: e.target.value })}
+                    value={editingContract.effective_start || ""}
+                    onChange={(e) => setEditingContract({ ...editingContract, effective_start: e.target.value })}
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>End Date</label>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Effective End</label>
                   <input
                     type="date"
                     style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={editingContract.end_date || ""}
-                    onChange={(e) => setEditingContract({ ...editingContract, end_date: e.target.value })}
+                    value={editingContract.effective_end || ""}
+                    onChange={(e) => setEditingContract({ ...editingContract, effective_end: e.target.value })}
                   />
                 </div>
               </div>

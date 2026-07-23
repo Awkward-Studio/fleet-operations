@@ -535,3 +535,5 @@ export function BillingManager() {
     </div>
   );
 }
+
+export default BillingManager;

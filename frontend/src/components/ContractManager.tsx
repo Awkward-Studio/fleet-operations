@@ -175,47 +175,41 @@ export default function ContractManager() {
       is_active: true,
       rates: [
         {
+          city: "Mumbai",
           vehicle_category: "Sedan",
           duty_type: "LOCAL_8HR_80KM",
-          base_hours: 8,
-          base_km: 80,
+          included_hours: 8,
+          included_km: 80,
           base_rate: "2500.00",
           extra_km_rate: "18.00",
           extra_hour_rate: "200.00",
-          night_allowance_rate: "300.00",
-          outstation_driver_allowance_per_day: "500.00",
         },
       ],
       allowances: [
         {
           allowance_type: "NIGHT_ALLOWANCE",
-          name: "Night Duty Allowance (10 PM - 6 AM)",
           amount: "300.00",
-          charging_unit: "PER_NIGHT",
-          is_mandatory: false,
+          description: "Night Duty Allowance (10 PM - 6 AM)",
         },
       ],
     });
     setRatesDraft([
       {
+        city: "Mumbai",
         vehicle_category: "Sedan",
         duty_type: "LOCAL_8HR_80KM",
-        base_hours: 8,
-        base_km: 80,
+        included_hours: 8,
+        included_km: 80,
         base_rate: "2500.00",
         extra_km_rate: "18.00",
         extra_hour_rate: "200.00",
-        night_allowance_rate: "300.00",
-        outstation_driver_allowance_per_day: "500.00",
       },
     ]);
     setAllowancesDraft([
       {
         allowance_type: "NIGHT_ALLOWANCE",
-        name: "Night Duty Allowance (10 PM - 6 AM)",
         amount: "300.00",
-        charging_unit: "PER_NIGHT",
-        is_mandatory: false,
+        description: "Night Duty Allowance (10 PM - 6 AM)",
       },
     ]);
     setShowContractModal(true);
@@ -630,10 +624,10 @@ export default function ContractManager() {
                           <tr key={i}>
                             <td style={{ fontWeight: 600, color: "#fff" }}>{rate.vehicle_category}</td>
                             <td><span className="status info">{rate.duty_type}</span></td>
-                            <td>₹{rate.base_rate} ({rate.base_hours}h / {rate.base_km}km)</td>
+                            <td>₹{rate.base_rate} ({rate.included_hours}h / {rate.included_km}km)</td>
                             <td>₹{rate.extra_km_rate}/km</td>
                             <td>₹{rate.extra_hour_rate}/hr</td>
-                            <td>₹{rate.night_allowance_rate}</td>
+                            <td>{rate.city || "All Cities"}</td>
                           </tr>
                         ))
                       ) : (
@@ -668,9 +662,8 @@ export default function ContractManager() {
                         selectedContract.allowances.map((al, i) => (
                           <tr key={i}>
                             <td style={{ fontWeight: 600, color: "#fff" }}>{al.allowance_type}</td>
-                            <td>{al.name}</td>
+                            <td>{al.description || "Standard Allowance"}</td>
                             <td style={{ color: "var(--ok)", fontWeight: 700 }}>₹{al.amount}</td>
-                            <td>{al.charging_unit}</td>
                           </tr>
                         ))
                       ) : (

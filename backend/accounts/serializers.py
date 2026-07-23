@@ -5,10 +5,12 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    permissions = serializers.ReadOnlyField(source="permissions_list")
+
     class Meta:
         model = User
-        fields = ["id", "username", "email", "first_name", "last_name"]
-        read_only_fields = ["id"]
+        fields = ["id", "username", "email", "first_name", "last_name", "role", "permissions"]
+        read_only_fields = ["id", "permissions"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -17,10 +19,11 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "password", "confirm_password", "first_name", "last_name"]
+        fields = ["id", "username", "email", "password", "confirm_password", "first_name", "last_name", "role"]
         extra_kwargs = {
             "first_name": {"required": False, "allow_blank": True},
             "last_name": {"required": False, "allow_blank": True},
+            "role": {"required": False},
         }
 
     def validate_email(self, value):
@@ -39,12 +42,14 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("confirm_password")
+        role = validated_data.pop("role", "admin")
         user = User.objects.create_user(
             username=validated_data["username"],
             email=validated_data["email"],
             password=validated_data["password"],
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
+            role=role,
         )
         return user
 

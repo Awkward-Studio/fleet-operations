@@ -38,12 +38,18 @@ import {
   Pencil,
   Trash2,
   UserPlus,
-  KeyRound
+  KeyRound,
+  Building2,
+  FileText,
+  Receipt,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import dynamic from "next/dynamic";
+import CustomerManager from "./CustomerManager";
+import ContractManager from "./ContractManager";
+import BillingManager from "./BillingManager";
 
 const MapComponent = dynamic(() => import("./MapComponent"), { ssr: false });
 
@@ -68,18 +74,24 @@ import {
   getTrips,
   getVehicles,
   transitionTrip,
-  UploadedAsset
+  UploadedAsset,
+  CorporateCustomer,
+  PricingQuote,
+  getCustomers,
+  getPricingQuote
 } from "@/lib/api";
 import { DocumentUpload } from "@/components/DocumentUpload";
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
 
 const navItems = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/trips", section: "trips", label: "Trips", icon: Route },
   { href: "/rentals", section: "rentals", label: "Rentals", icon: KeyRound },
   { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus },
+  { href: "/customers", section: "customers", label: "Customers", icon: Building2 },
+  { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
   { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned },
@@ -558,6 +570,9 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
             </div>
           )}
           {loading ? <div className="notice">Loading fleet data from Django API...</div> : null}
+
+          {section === "customers" ? <CustomerManager /> : null}
+          {section === "contracts" ? <ContractManager /> : null}
 
           {section === "dashboard" ? (
             <DashboardView
@@ -2274,25 +2289,94 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
     setDistanceKm(data.distanceKm);
   };
 
+  const [bookingType, setBookingType] = useState<string>("ADHOC");
+  const [customersList, setCustomersList] = useState<CorporateCustomer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [dutyType, setDutyType] = useState<string>("LOCAL_8HR_80KM");
+  const [vehicleCategory, setVehicleCategory] = useState<string>("sedan");
+  const [quote, setQuote] = useState<PricingQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState<boolean>(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getCustomers().then((data) => {
+      setCustomersList(data);
+      if (data.length > 0) setSelectedCustomerId(data[0].id);
+    }).catch((err) => console.error("Error loading customers for trip form:", err));
+  }, []);
+
+  // Fetch quote whenever corporate parameters change
+  useEffect(() => {
+    if (bookingType !== "CORPORATE" || !selectedCustomerId || !pickupCity || !pickupDate || !pickupTime) {
+      setQuote(null);
+      setQuoteError(null);
+      return;
+    }
+
+    const fetchQuote = async () => {
+      try {
+        setQuoteLoading(true);
+        setQuoteError(null);
+        const pickupDt = `${pickupDate}T${pickupTime}:00Z`;
+        const res = await getPricingQuote({
+          customer: selectedCustomerId,
+          pickup_datetime: pickupDt,
+          pickup_city: pickupCity,
+          vehicle_category: vehicleCategory,
+          duty_type: dutyType,
+          planned_km: distanceKm || 0,
+        });
+        setQuote(res);
+      } catch (err: any) {
+        setQuote(null);
+        setQuoteError(err.message || "No active rate card matched.");
+      } finally {
+        setQuoteLoading(false);
+      }
+    };
+
+    const timer = setTimeout(fetchQuote, 400);
+    return () => clearTimeout(timer);
+  }, [bookingType, selectedCustomerId, pickupCity, pickupDate, pickupTime, dutyType, vehicleCategory, distanceKm]);
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const formElement = event.currentTarget;
     const formData = new FormData(formElement);
 
-    onCreateTrip({
-      customer_name: String(formData.get("customer_name")),
+    const payload: any = {
+      booking_type: bookingType,
       pickup_city: pickupCity || String(formData.get("pickup_city")),
       drop_city: dropCity || String(formData.get("drop_city")),
       pickup_at: `${pickupDate}T${pickupTime}`,
       estimated_drop_at: `${dropDate}T${dropTime}`,
-      ota_source: String(formData.get("ota_source")),
-      fare_amount: String(formData.get("fare_amount")),
       pickup_latitude: pickupLat,
       pickup_longitude: pickupLng,
       drop_latitude: dropLat,
       drop_longitude: dropLng,
-      distance_km: distanceKm
-    }, () => {
+      distance_km: distanceKm,
+    };
+
+    if (bookingType === "CORPORATE") {
+      if (!selectedCustomerId) {
+        alert("Please select a corporate customer.");
+        return;
+      }
+      if (!quote) {
+        alert("Cannot submit corporate trip without a valid rate quote.");
+        return;
+      }
+      payload.customer_id = selectedCustomerId;
+      payload.duty_type = dutyType;
+      payload.vehicle_category_requested = vehicleCategory;
+      payload.fare_amount = quote.total_amount;
+    } else {
+      payload.customer_name = String(formData.get("customer_name"));
+      payload.ota_source = String(formData.get("ota_source"));
+      payload.fare_amount = String(formData.get("fare_amount"));
+    }
+
+    onCreateTrip(payload, () => {
       setPickupCity("");
       setDropCity("");
       setPickupLat(null);
@@ -2304,23 +2388,78 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       setPickupTime("");
       setDropDate("");
       setDropTime("");
-      setMapKey(prev => prev + 1);
+      setQuote(null);
+      setMapKey((prev) => prev + 1);
       formElement.reset();
     });
   };
 
   return (
     <form className="stack" onSubmit={handleSubmit}>
-      <InputField label="CUSTOMER" name="customer_name" placeholder="Enter customer name" required />
-      
       <div className="field">
-        <label>OTA SOURCE</label>
-        <select name="ota_source" defaultValue="MMT">
-          <option value="MMT">MMT</option>
-          <option value="Goibibo">Goibibo</option>
-          <option value="ClearTrip">ClearTrip</option>
+        <label>BOOKING TYPE</label>
+        <select value={bookingType} onChange={(e) => setBookingType(e.target.value)}>
+          <option value="ADHOC">Ad-hoc / Direct</option>
+          <option value="CORPORATE">Corporate Contract</option>
+          <option value="OTA">OTA / Aggregator</option>
         </select>
       </div>
+
+      {bookingType === "CORPORATE" ? (
+        <>
+          <div className="field">
+            <label>CORPORATE CUSTOMER *</label>
+            <select
+              value={selectedCustomerId || ""}
+              onChange={(e) => setSelectedCustomerId(Number(e.target.value))}
+              required
+            >
+              {customersList.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.display_name} ({c.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-grid" style={{ gap: 12 }}>
+            <div className="field">
+              <label>DUTY TYPE *</label>
+              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)}>
+                <option value="LOCAL_8HR_80KM">LOCAL (8h / 80km)</option>
+                <option value="LOCAL_12HR_120KM">LOCAL (12h / 120km)</option>
+                <option value="OUTSTATION">OUTSTATION</option>
+                <option value="AIRPORT_TRANSFER">AIRPORT TRANSFER</option>
+                <option value="ONE_WAY">ONE WAY</option>
+                <option value="FULL_DAY">FULL DAY</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>REQUESTED CATEGORY *</label>
+              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)}>
+                <option value="sedan">Sedan</option>
+                <option value="suv">SUV</option>
+                <option value="luxury">Luxury</option>
+                <option value="hatchback">Hatchback</option>
+              </select>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <InputField label="CUSTOMER NAME" name="customer_name" placeholder="Enter customer name" required />
+          {bookingType === "OTA" && (
+            <div className="field">
+              <label>OTA SOURCE</label>
+              <select name="ota_source" defaultValue="MMT">
+                <option value="MMT">MMT</option>
+                <option value="Goibibo">Goibibo</option>
+                <option value="ClearTrip">ClearTrip</option>
+              </select>
+            </div>
+          )}
+        </>
+      )}
 
       <MapComponent 
         key={mapKey}
@@ -2367,7 +2506,43 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
         <TimePickerField label="DROP TIME" name="drop_time" value={dropTime} onChange={setDropTime} />
       </div>
 
-      <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
+      {bookingType === "CORPORATE" ? (
+        <div style={{ padding: 16, background: "rgba(15, 23, 42, 0.6)", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13 }}>
+          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8 }}>Live Contract Pricing Breakdown</div>
+          {quoteLoading ? (
+            <div style={{ color: "var(--muted)", fontStyle: "italic" }}>Calculating server quote...</div>
+          ) : quoteError ? (
+            <div style={{ color: "var(--danger)" }}>⚠️ {quoteError}</div>
+          ) : quote ? (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                <span>Contract:</span>
+                <strong style={{ color: "#fff" }}>{quote.contract.title} ({quote.contract.version_name})</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                <span>Base Charge ({quote.itemized_charges.included_hours}h / {quote.itemized_charges.included_km}km):</span>
+                <span style={{ color: "#fff" }}>₹{quote.itemized_charges.base_charge}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                <span>Taxes (CGST {quote.itemized_charges.cgst_rate}% + SGST {quote.itemized_charges.sgst_rate}%):</span>
+                <span style={{ color: "#fff" }}>₹{(Number(quote.itemized_charges.cgst_amount) + Number(quote.itemized_charges.sgst_amount)).toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                <span>Metering Policy:</span>
+                <span style={{ color: "var(--accent)" }}>{quote.contract.metering_policy}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "1px solid var(--line)", fontSize: 15 }}>
+                <strong style={{ color: "#fff" }}>Calculated Fare:</strong>
+                <strong style={{ color: "#10b981" }}>₹{quote.total_amount}</strong>
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: "var(--muted)" }}>Enter pickup city, date, and time to generate quote.</div>
+          )}
+        </div>
+      ) : (
+        <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
+      )}
 
       {distanceKm !== null && (
         <div style={{ padding: 12, background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2377,9 +2552,19 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       )}
 
       <div className="actions" style={{ marginTop: 8 }}>
-        <button className="button" type="submit" style={{ width: "100%", justifyContent: "center", background: "var(--accent-strong)" }}>
+        <button
+          className="button"
+          type="submit"
+          disabled={bookingType === "CORPORATE" && (!quote || quoteLoading)}
+          style={{
+            width: "100%",
+            justifyContent: "center",
+            background: bookingType === "CORPORATE" && (!quote || quoteLoading) ? "var(--muted)" : "var(--accent-strong)",
+            cursor: bookingType === "CORPORATE" && (!quote || quoteLoading) ? "not-allowed" : "pointer"
+          }}
+        >
           <Plus size={16} />
-          Create Trip
+          {bookingType === "CORPORATE" ? "Create Corporate Trip" : "Create Trip"}
         </button>
       </div>
     </form>
@@ -2547,6 +2732,8 @@ function pageTitle(section: ConsoleSection) {
     trips: "Trip Dispatch Board",
     rentals: "Rental Module Console",
     "create-trip": "Create & Dispatch Trip",
+    customers: "Corporate Customers",
+    contracts: "Rate Contracts",
     vehicles: "Vehicle Management",
     drivers: "Driver Management",
     tracking: "Vehicle Tracking",
@@ -2563,6 +2750,8 @@ function pageSubtitle(section: ConsoleSection) {
     trips: "View trip cards, filter dispatches, and transition trip statuses",
     rentals: "Manage corporate chauffeur rentals, package bookings, pricing, and driver checklists",
     "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
+    customers: "Maintain corporate accounts, billing identities, and primary contacts",
+    contracts: "Manage versioned rate cards, package matrices, taxes, and allowances",
     vehicles: "Review vehicle state, assignment, current city, and next operational slot",
     drivers: "Track driver availability, assignment, base city, and active work",
     tracking: "Monitor each car by status, active trip, city, and predicted next location",

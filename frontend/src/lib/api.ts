@@ -90,12 +90,155 @@ export type Summary = {
   compliance_alerts: number;
 };
 
+export type CustomerContact = {
+  id: number;
+  customer: number;
+  name: string;
+  contact_type: string;
+  phone: string;
+  email: string;
+  is_primary: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CorporateCustomer = {
+  id: number;
+  code: string;
+  legal_name: string;
+  display_name: string;
+  status: "ACTIVE" | "INACTIVE" | "SUSPENDED";
+  is_active: boolean;
+  gstin: string;
+  billing_address: string;
+  billing_email: string;
+  billing_phone: string;
+  booking_contact_name: string;
+  booking_contact_email: string;
+  booking_contact_phone: string;
+  payment_terms_days: number;
+  po_required: boolean;
+  notes: string;
+  contacts?: CustomerContact[];
+  active_contract_summary?: {
+    id: number;
+    title: string;
+    version_name: string;
+    rates_count: number;
+  } | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ContractRate = {
+  id?: number;
+  contract?: number;
+  city: string;
+  vehicle_category: string;
+  duty_type: string;
+  included_hours: number;
+  included_km: number;
+  base_rate: string | number;
+  extra_hour_rate: string | number;
+  extra_km_rate: string | number;
+  switch_threshold_hours?: number | null;
+  switch_threshold_km?: number | null;
+  outstation_daily_min_km?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ContractAllowance = {
+  id?: number;
+  contract?: number;
+  allowance_type: string;
+  amount: string | number;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CorporateContract = {
+  id: number;
+  customer: number;
+  customer_display_name?: string;
+  title: string;
+  version_name: string;
+  effective_start: string;
+  effective_end?: string | null;
+  status: "DRAFT" | "ACTIVE" | "EXPIRED" | "TERMINATED" | "ARCHIVED";
+  currency: string;
+  cgst_rate: string | number;
+  sgst_rate: string | number;
+  payment_terms_days?: number | null;
+  cancellation_terms?: string;
+  metering_policy: string;
+  notes?: string;
+  rates?: ContractRate[];
+  allowances?: ContractAllowance[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PricingQuote = {
+  customer: {
+    id: number;
+    code: string;
+    display_name: string;
+  };
+  contract: {
+    id: number;
+    title: string;
+    version_name: string;
+    metering_policy: string;
+  };
+  rate: {
+    id: number;
+    city: string;
+    vehicle_category: string;
+    duty_type: string;
+  };
+  inputs: {
+    pickup_datetime: string;
+    pickup_city: string;
+    vehicle_category: string;
+    duty_type: string;
+    planned_hours: number;
+    planned_km: number;
+    effective_km: number;
+    outstation_days: number;
+  };
+  itemized_charges: {
+    base_charge: string;
+    included_hours: number;
+    included_km: number;
+    excess_hours: string;
+    extra_hour_rate: string;
+    excess_hour_charge: string;
+    excess_km: string;
+    extra_km_rate: string;
+    excess_km_charge: string;
+    allowances: any[];
+    allowances_total: string;
+    subtotal: string;
+    cgst_rate: string;
+    cgst_amount: string;
+    sgst_rate: string;
+    sgst_amount: string;
+    total_amount: string;
+  };
+  total_amount: string;
+  explanation: string;
+};
+
 export type User = {
   id: number;
   username: string;
   email: string;
   first_name: string;
   last_name: string;
+  role?: string;
+  permissions?: string[];
 };
 
 export type AuthResponse = {
@@ -404,6 +547,10 @@ export function changeUserPassword(payload: Record<string, string>) {
   return request<{ message: string }>("/auth/change-password/", {
     method: "POST",
     body: JSON.stringify(payload)
+export function changeUserPassword(payload: Record<string, string>) {
+  return request<{ message: string }>("/auth/change-password/", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 
@@ -467,4 +614,133 @@ export function uploadAsset(
   });
 }
 
+// Customers API
+export function getCustomers(params?: { search?: string; status?: string; is_active?: boolean }) {
+  const query = new URLSearchParams();
+  if (params?.search) query.append("search", params.search);
+  if (params?.status) query.append("status", params.status);
+  if (params?.is_active !== undefined) query.append("is_active", String(params.is_active));
+  const queryString = query.toString() ? `?${query.toString()}` : "";
+  return request<CorporateCustomer[]>(`/customers/${queryString}`);
+}
+
+export function getCustomer(id: number) {
+  return request<CorporateCustomer>(`/customers/${id}/`);
+}
+
+export function createCustomer(payload: Partial<CorporateCustomer>) {
+  return request<CorporateCustomer>("/customers/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCustomer(id: number, payload: Partial<CorporateCustomer>) {
+  return request<CorporateCustomer>(`/customers/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCustomer(id: number) {
+  return request<{ detail: string }>(`/customers/${id}/`, {
+    method: "DELETE",
+  });
+}
+
+// Customer Contacts API
+export function getCustomerContacts(customerId: number) {
+  return request<CustomerContact[]>(`/customers/${customerId}/contacts/`);
+}
+
+export function createCustomerContact(customerId: number, payload: Partial<CustomerContact>) {
+  return request<CustomerContact>(`/customers/${customerId}/contacts/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCustomerContact(id: number, payload: Partial<CustomerContact>) {
+  return request<CustomerContact>(`/contacts/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCustomerContact(id: number) {
+  return request<void>(`/contacts/${id}/`, {
+    method: "DELETE",
+  });
+}
+
+// Contracts API
+export function getContracts(params?: { customer?: number; status?: string; search?: string }) {
+  const query = new URLSearchParams();
+  if (params?.customer) query.append("customer", String(params.customer));
+  if (params?.status) query.append("status", params.status);
+  if (params?.search) query.append("search", params.search);
+  const queryString = query.toString() ? `?${query.toString()}` : "";
+  return request<CorporateContract[]>(`/contracts/${queryString}`);
+}
+
+export function getContract(id: number) {
+  return request<CorporateContract>(`/contracts/${id}/`);
+}
+
+export function createContract(payload: Partial<CorporateContract>) {
+  return request<CorporateContract>("/contracts/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateContract(id: number, payload: Partial<CorporateContract>) {
+  return request<CorporateContract>(`/contracts/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function activateContract(id: number) {
+  return request<CorporateContract>(`/contracts/${id}/activate/`, {
+    method: "POST",
+  });
+}
+
+export function validateContract(id: number) {
+  return request<{ is_valid: boolean; errors: string[]; warnings: string[]; rates_count: number }>(
+    `/contracts/${id}/validate_contract/`,
+    { method: "POST" }
+  );
+}
+
+export function copyContract(id: number) {
+  return request<CorporateContract>(`/contracts/${id}/copy_contract/`, {
+    method: "POST",
+  });
+}
+
+export function deleteContract(id: number) {
+  return request<void>(`/contracts/${id}/`, {
+    method: "DELETE",
+  });
+}
+
+// Pricing Quote API
+export function getPricingQuote(payload: {
+  customer: number;
+  pickup_datetime: string;
+  pickup_city: string;
+  vehicle_category: string;
+  duty_type: string;
+  planned_hours?: number;
+  planned_km?: number;
+  outstation_days?: number;
+  allowances?: any[];
+}) {
+  return request<PricingQuote>("/pricing/quote/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 

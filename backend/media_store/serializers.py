@@ -13,6 +13,8 @@ class UploadedAssetSerializer(serializers.ModelSerializer):
             "kind",
             "original_name",
             "content_type",
+            "checksum_sha256",
+            "is_private",
             "created_at",
             "href",
         ]

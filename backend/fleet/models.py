@@ -1,6 +1,7 @@
 from decimal import Decimal
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -26,6 +27,7 @@ class TripStatus(models.TextChoices):
     REQUESTED = "requested", "Requested"
     ASSIGNED = "assigned", "Assigned"
     EN_ROUTE_PICKUP = "en_route_pickup", "En route to pickup"
+    ARRIVED_AT_PICKUP = "arrived_at_pickup", "Arrived at pickup"
     ACTIVE = "active", "Active"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
@@ -83,6 +85,13 @@ class MeteringPolicy(models.TextChoices):
 
 
 class Driver(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        related_name="driver_profile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
     name = models.CharField(max_length=120)
     phone = models.CharField(max_length=24)
     license_number = models.CharField(max_length=64, unique=True)
@@ -410,11 +419,14 @@ class Trip(models.Model):
     duty_type = models.CharField(max_length=40, blank=True)
     vehicle_category_requested = models.CharField(max_length=80, blank=True)
     customer_name = models.CharField(max_length=120, blank=True)
+    customer_phone = models.CharField(max_length=24, blank=True)
     customer_display_name_snapshot = models.CharField(max_length=150, blank=True)
     pricing_snapshot = models.JSONField(default=dict, blank=True)
 
     pickup_city = models.CharField(max_length=120)
     drop_city = models.CharField(max_length=120)
+    pickup_address = models.TextField(blank=True)
+    drop_address = models.TextField(blank=True)
     pickup_at = models.DateTimeField()
     estimated_drop_at = models.DateTimeField()
     status = models.CharField(max_length=24, choices=TripStatus.choices, default=TripStatus.REQUESTED)
@@ -437,6 +449,117 @@ class Trip(models.Model):
     def __str__(self):
         name = self.customer_display_name_snapshot or self.customer_name or "Trip"
         return f"{name}: {self.pickup_city} to {self.drop_city} at {self.pickup_at:%Y-%m-%d %H:%M}"
+
+
+class TripChecklist(models.Model):
+    trip = models.OneToOneField(Trip, related_name="checklist", on_delete=models.CASCADE)
+    start_odometer_km = models.PositiveIntegerField()
+    start_odometer_asset = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.PROTECT,
+        related_name="trip_start_odometers",
+    )
+    end_odometer_km = models.PositiveIntegerField(null=True, blank=True)
+    end_odometer_asset = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="trip_end_odometers",
+    )
+    cleanliness_ok = models.BooleanField(default=True)
+    fuel_level_percent = models.PositiveIntegerField(default=100)
+    tire_pressure_ok = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+    start_idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    complete_idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_trip_checklists",
+    )
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="completed_trip_checklists",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["trip"]),
+            models.Index(fields=["start_idempotency_key"]),
+            models.Index(fields=["complete_idempotency_key"]),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.fuel_level_percent > 100:
+            raise ValidationError({"fuel_level_percent": "Fuel level must be between 0 and 100."})
+        if self.end_odometer_km is not None and self.end_odometer_km < self.start_odometer_km:
+            raise ValidationError({"end_odometer_km": "End odometer cannot be less than start odometer."})
+
+    def __str__(self):
+        return f"Checklist for trip #{self.trip_id}"
+
+
+class TripLocationLog(models.Model):
+    trip = models.ForeignKey(Trip, related_name="location_logs", on_delete=models.CASCADE)
+    latitude = models.DecimalField(max_digits=11, decimal_places=8)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8)
+    speed_kmh = models.FloatField(default=0.0)
+    heading = models.FloatField(default=0.0)
+    timestamp = models.DateTimeField(default=timezone.now)
+    idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="trip_location_logs",
+    )
+
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["trip", "-timestamp"]),
+            models.Index(fields=["idempotency_key"]),
+        ]
+
+    def __str__(self):
+        return f"Trip #{self.trip_id} @ {self.latitude},{self.longitude}"
+
+
+class TripOTP(models.Model):
+    trip = models.OneToOneField(Trip, related_name="otp_session", on_delete=models.CASCADE)
+    code = models.CharField(max_length=6)
+    is_verified = models.BooleanField(default=False)
+    idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generated_trip_otps",
+    )
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="verified_trip_otps",
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"OTP for trip #{self.trip_id}"
 
 
 class FuelTransactionStatus(models.TextChoices):

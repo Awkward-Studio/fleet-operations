@@ -12,6 +12,7 @@ from .views import (
     VehicleViewSet,
     FuelTransactionViewSet,
     availability,
+    current_driver_trip,
     dashboard_summary,
     quote_api,
 )
@@ -31,6 +32,7 @@ urlpatterns = [
     path("", include(router.urls)),
     path("pricing/quote/", quote_api),
     path("quote/", quote_api),
+    path("driver/my-trips/current/", current_driver_trip),
     path("availability/", availability),
     path("dashboard/summary/", dashboard_summary),
 ]

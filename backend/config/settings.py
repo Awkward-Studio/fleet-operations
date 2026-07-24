@@ -79,6 +79,9 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_STORAGE_BACKEND = os.getenv("MEDIA_STORAGE_BACKEND", "local").strip() or "local"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -109,8 +112,5 @@ AUTHENTICATION_BACKENDS = [
 # MakeMyTrip (Incabs) API Settings
 MAKEMYTRIP_MOCK_SERVER_URL = "https://private-7902fd-incabsapipartnerdocumentationv3.apiary-mock.com/tracking/pp2"
 MAKEMYTRIP_HEADERS = {}
-
-# ImageKit Settings
-IMAGEKIT_PRIVATE_KEY = os.getenv("IMAGEKIT_PRIVATE_KEY", "").strip()
 
 

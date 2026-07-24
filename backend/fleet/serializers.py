@@ -11,6 +11,9 @@ from .models import (
     Driver,
     DriverStatus,
     Trip,
+    TripChecklist,
+    TripLocationLog,
+    TripOTP,
     TripStatus,
     Vehicle,
     VehicleStatus,
@@ -255,10 +258,9 @@ class CorporateContractSerializer(serializers.ModelSerializer):
                     ContractAllowance.objects.create(contract=instance, **allowance_item)
 
         return instance
-# >>>>>>> fb782d6 (Implement Customer Management and Corporate Contract Pricing feature)
-
-
 class DriverSerializer(serializers.ModelSerializer):
+    user_username = serializers.ReadOnlyField(source="user.username")
+    user_email = serializers.ReadOnlyField(source="user.email")
     aadhaar_card = UploadedAssetSerializer(read_only=True)
     aadhaar_card_id = serializers.PrimaryKeyRelatedField(
         queryset=UploadedAsset.objects.all(),
@@ -288,6 +290,9 @@ class DriverSerializer(serializers.ModelSerializer):
         model = Driver
         fields = [
             "id",
+            "user",
+            "user_username",
+            "user_email",
             "name",
             "phone",
             "license_number",
@@ -348,6 +353,8 @@ class TripSerializer(serializers.ModelSerializer):
     vehicle = VehicleSerializer(read_only=True)
     driver = DriverSerializer(read_only=True)
     customer_details = CorporateCustomerSerializer(source="customer", read_only=True)
+    checklist = serializers.SerializerMethodField()
+    otp_verified = serializers.SerializerMethodField()
     customer_id = serializers.PrimaryKeyRelatedField(
         queryset=CorporateCustomer.objects.all(),
         source="customer",
@@ -369,10 +376,13 @@ class TripSerializer(serializers.ModelSerializer):
             "duty_type",
             "vehicle_category_requested",
             "customer_name",
+            "customer_phone",
             "customer_display_name_snapshot",
             "pricing_snapshot",
             "pickup_city",
             "drop_city",
+            "pickup_address",
+            "drop_address",
             "pickup_at",
             "estimated_drop_at",
             "status",
@@ -386,6 +396,8 @@ class TripSerializer(serializers.ModelSerializer):
             "drop_latitude",
             "drop_longitude",
             "distance_km",
+            "checklist",
+            "otp_verified",
         ]
         read_only_fields = [
             "id",
@@ -453,6 +465,16 @@ class TripSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def get_checklist(self, obj):
+        checklist = getattr(obj, "checklist", None)
+        if not checklist:
+            return None
+        return TripChecklistSerializer(checklist, context=self.context).data
+
+    def get_otp_verified(self, obj):
+        otp_session = getattr(obj, "otp_session", None)
+        return bool(otp_session and otp_session.is_verified)
+
 
 class AssignTripSerializer(serializers.Serializer):
     vehicle_id = serializers.PrimaryKeyRelatedField(queryset=Vehicle.objects.all(), source="vehicle")
@@ -500,6 +522,8 @@ class TransitionTripSerializer(serializers.Serializer):
         if trip.vehicle_id:
             if trip.status == TripStatus.EN_ROUTE_PICKUP:
                 trip.vehicle.status = VehicleStatus.EN_ROUTE_PICKUP
+            elif trip.status == TripStatus.ARRIVED_AT_PICKUP:
+                trip.vehicle.status = VehicleStatus.EN_ROUTE_PICKUP
             elif trip.status == TripStatus.ACTIVE:
                 trip.vehicle.status = VehicleStatus.ACTIVE_TRIP
             elif trip.status in [TripStatus.COMPLETED, TripStatus.CANCELLED]:
@@ -510,7 +534,7 @@ class TransitionTripSerializer(serializers.Serializer):
             trip.vehicle.save()
 
         if trip.driver_id:
-            if trip.status in [TripStatus.EN_ROUTE_PICKUP, TripStatus.ACTIVE]:
+            if trip.status in [TripStatus.EN_ROUTE_PICKUP, TripStatus.ARRIVED_AT_PICKUP, TripStatus.ACTIVE]:
                 trip.driver.status = DriverStatus.ON_TRIP
             elif trip.status in [TripStatus.COMPLETED, TripStatus.CANCELLED]:
                 trip.driver.status = DriverStatus.AVAILABLE
@@ -519,6 +543,105 @@ class TransitionTripSerializer(serializers.Serializer):
             trip.driver.save()
 
         return trip
+
+
+class TripChecklistSerializer(serializers.ModelSerializer):
+    start_odometer_asset = UploadedAssetSerializer(read_only=True)
+    end_odometer_asset = UploadedAssetSerializer(read_only=True)
+
+    class Meta:
+        model = TripChecklist
+        fields = [
+            "id",
+            "trip",
+            "start_odometer_km",
+            "start_odometer_asset",
+            "end_odometer_km",
+            "end_odometer_asset",
+            "cleanliness_ok",
+            "fuel_level_percent",
+            "tire_pressure_ok",
+            "notes",
+            "start_idempotency_key",
+            "complete_idempotency_key",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class TripChecklistSubmitSerializer(serializers.Serializer):
+    start_odometer_km = serializers.IntegerField(min_value=0)
+    start_odometer_asset_id = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        required=False,
+        allow_null=True,
+        source="start_odometer_asset",
+    )
+    start_odometer_photo = serializers.FileField(required=False, write_only=True)
+    cleanliness_ok = serializers.BooleanField(default=True)
+    fuel_level_percent = serializers.IntegerField(min_value=0, max_value=100, default=100)
+    tire_pressure_ok = serializers.BooleanField(default=True)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+
+    def validate(self, attrs):
+        if not attrs.get("start_odometer_asset") and not attrs.get("start_odometer_photo"):
+            raise serializers.ValidationError("Provide start_odometer_asset_id or start_odometer_photo.")
+        return attrs
+
+
+class TripCompleteSerializer(serializers.Serializer):
+    end_odometer_km = serializers.IntegerField(min_value=0)
+    end_odometer_asset_id = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        required=False,
+        allow_null=True,
+        source="end_odometer_asset",
+    )
+    end_odometer_photo = serializers.FileField(required=False, write_only=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+
+    def validate(self, attrs):
+        if not attrs.get("end_odometer_asset") and not attrs.get("end_odometer_photo"):
+            raise serializers.ValidationError("Provide end_odometer_asset_id or end_odometer_photo.")
+        return attrs
+
+
+class TripLocationLogSerializer(serializers.ModelSerializer):
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+
+    class Meta:
+        model = TripLocationLog
+        fields = [
+            "id",
+            "trip",
+            "latitude",
+            "longitude",
+            "speed_kmh",
+            "heading",
+            "timestamp",
+            "idempotency_key",
+        ]
+        read_only_fields = ["id", "trip"]
+
+
+class TripOTPSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripOTP
+        fields = ["id", "trip", "code", "is_verified", "created_at", "updated_at"]
+        read_only_fields = fields
+
+
+class TripGenerateOTPSerializer(serializers.Serializer):
+    digits = serializers.IntegerField(min_value=4, max_value=6, default=6)
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+
+
+class TripVerifyOTPSerializer(serializers.Serializer):
+    code = serializers.CharField(min_length=4, max_length=6)
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
 
 
 class AvailabilitySerializer(serializers.Serializer):

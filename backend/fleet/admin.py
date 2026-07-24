@@ -8,6 +8,9 @@ from .models import (
     CustomerContact,
     Driver,
     Trip,
+    TripChecklist,
+    TripLocationLog,
+    TripOTP,
     Vehicle,
 )
 
@@ -31,6 +34,26 @@ class TripAdmin(admin.ModelAdmin):
     list_display = ["customer_name", "pickup_city", "drop_city", "pickup_at", "status", "vehicle", "driver"]
     search_fields = ["customer_name", "pickup_city", "drop_city"]
     list_filter = ["status", "ota_source"]
+
+
+@admin.register(TripChecklist)
+class TripChecklistAdmin(admin.ModelAdmin):
+    list_display = ["trip", "start_odometer_km", "end_odometer_km", "fuel_level_percent", "created_at"]
+    search_fields = ["trip__customer_name", "trip__pickup_city", "trip__drop_city"]
+
+
+@admin.register(TripLocationLog)
+class TripLocationLogAdmin(admin.ModelAdmin):
+    list_display = ["trip", "latitude", "longitude", "speed_kmh", "timestamp"]
+    search_fields = ["trip__customer_name", "trip__pickup_city", "trip__drop_city"]
+    list_filter = ["timestamp"]
+
+
+@admin.register(TripOTP)
+class TripOTPAdmin(admin.ModelAdmin):
+    list_display = ["trip", "code", "is_verified", "created_at", "verified_at"]
+    search_fields = ["trip__customer_name", "code"]
+    list_filter = ["is_verified"]
 
 
 @admin.register(CorporateCustomer)

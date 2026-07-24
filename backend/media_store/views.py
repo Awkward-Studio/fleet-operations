@@ -1,25 +1,18 @@
 import logging
 
-from django.conf import settings
 from django.db import DatabaseError
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from imagekitio import APIConnectionError, APIStatusError, ImageKit
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import UploadedAsset
+from .models import UploadedAsset, UploadedAssetAccessAudit
 from .serializers import UploadedAssetSerializer
+from .storage import StorageConfigurationError, audit_asset_access, upload_asset
 
 
 logger = logging.getLogger(__name__)
-
-
-def get_imagekit_client():
-    if not settings.IMAGEKIT_PRIVATE_KEY:
-        return None
-    return ImageKit(private_key=settings.IMAGEKIT_PRIVATE_KEY)
 
 
 class AssetUploadBaseView(APIView):
@@ -44,49 +37,15 @@ class AssetUploadBaseView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        imagekit = get_imagekit_client()
-        if imagekit is None:
-            logger.error("IMAGEKIT_PRIVATE_KEY is not configured.")
-            return Response(
-                {"error": "ImageKit is not configured on this server."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
         try:
-            response = imagekit.files.upload(
-                file=upload.read(),
-                file_name=upload.name,
-            )
-        except APIStatusError as exc:
-            upstream_status = getattr(exc, "status_code", None)
-            logger.exception("ImageKit upload failed with status %s.", upstream_status)
-            return Response(
-                {
-                    "error": "ImageKit rejected the upload.",
-                    "upstreamStatus": upstream_status,
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        except APIConnectionError:
-            logger.exception("Could not connect to ImageKit.")
-            return Response(
-                {"error": "Could not connect to ImageKit."},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-        except Exception:
-            logger.exception("Unexpected ImageKit upload error.")
-            return Response(
-                {"error": "Unexpected ImageKit upload error."},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        try:
-            asset = UploadedAsset.objects.create(
+            asset = upload_asset(
+                upload,
                 kind=self.asset_kind,
-                file_url=response.url,
-                original_name=upload.name,
-                content_type=getattr(upload, "content_type", "") or "",
+                folder=f"uploads/{self.asset_kind}",
+                request=request,
             )
+        except StorageConfigurationError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except DatabaseError as exc:
             return Response(
                 {"error": f"Unable to save upload: {exc}"},
@@ -128,5 +87,6 @@ class AssetUrlView(APIView):
     )
     def get(self, request, asset_id):
         asset = get_object_or_404(UploadedAsset, pk=asset_id)
+        audit_asset_access(asset, request, UploadedAssetAccessAudit.ACTION_ACCESSED)
         serializer = UploadedAssetSerializer(asset, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)

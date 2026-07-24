@@ -1,11 +1,18 @@
+import random
+from decimal import Decimal
 from datetime import timedelta
 
 from django.db import models
 from django.db.models import Count, Q
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+
+from media_store.models import UploadedAsset
+from media_store.storage import upload_asset
 
 from .models import (
     ContractAllowance,
@@ -17,6 +24,9 @@ from .models import (
     Driver,
     DriverStatus,
     Trip,
+    TripChecklist,
+    TripLocationLog,
+    TripOTP,
     TripStatus,
     Vehicle,
     VehicleStatus,
@@ -36,6 +46,13 @@ from .serializers import (
     CorporateCustomerSerializer,
     CustomerContactSerializer,
     DriverSerializer,
+    TripChecklistSerializer,
+    TripChecklistSubmitSerializer,
+    TripCompleteSerializer,
+    TripGenerateOTPSerializer,
+    TripLocationLogSerializer,
+    TripOTPSerializer,
+    TripVerifyOTPSerializer,
     TransitionTripSerializer,
     TripSerializer,
     VehicleSerializer,
@@ -45,9 +62,94 @@ from .serializers import (
 from rest_framework import permissions
 
 
+def _get_idempotency_key(request, serializer=None):
+    if serializer is not None and getattr(serializer, "validated_data", None):
+        key = serializer.validated_data.get("idempotency_key")
+        if key:
+            return key
+    return request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")
+
+
+def _store_private_trip_asset(upload, folder, request):
+    return upload_asset(
+        upload,
+        kind=UploadedAsset.KIND_IMAGE,
+        folder=f"trip-assets/{folder}",
+        request=request,
+        metadata={"source": "fleet.trip_operation", "folder": folder},
+    )
+
+
+def _assert_driver_can_operate_trip(request, trip):
+    if not trip.driver_id:
+        return Response({"detail": "Trip has no assigned driver."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if request.user.is_authenticated and hasattr(request.user, "driver_profile"):
+        if request.user.driver_profile.id != trip.driver_id:
+            return Response({"detail": "This trip is not assigned to the logged-in driver."}, status=status.HTTP_403_FORBIDDEN)
+
+    return None
+
+
+def _assert_trip_compliance(trip):
+    if not trip.vehicle_id:
+        return Response({"detail": "Trip has no assigned vehicle."}, status=status.HTTP_400_BAD_REQUEST)
+    if not trip.vehicle.is_compliant:
+        return Response(
+            {"detail": "Vehicle compliance documents block trip start.", "blockers": trip.vehicle.compliance_blockers},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not trip.driver_id:
+        return Response({"detail": "Trip has no assigned driver."}, status=status.HTTP_400_BAD_REQUEST)
+    if not trip.driver.driving_license:
+        return Response({"detail": "Driver driving license document is missing."}, status=status.HTTP_400_BAD_REQUEST)
+    if trip.driver.driving_license_expiry_date and trip.driver.driving_license_expiry_date < timezone.localdate():
+        return Response({"detail": "Driver driving license is expired."}, status=status.HTTP_400_BAD_REQUEST)
+    return None
+
+
+@api_view(["GET"])
+def current_driver_trip(request):
+    if not request.user.is_authenticated:
+        return Response({"detail": "Authentication credentials were not provided."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        driver = request.user.driver_profile
+    except Driver.DoesNotExist:
+        return Response(None, status=status.HTTP_200_OK)
+
+    trip = (
+        Trip.objects.select_related("vehicle", "driver")
+        .filter(
+            driver=driver,
+            status__in=[
+                TripStatus.ASSIGNED,
+                TripStatus.EN_ROUTE_PICKUP,
+                TripStatus.ARRIVED_AT_PICKUP,
+                TripStatus.ACTIVE,
+            ],
+        )
+        .order_by("pickup_at")
+        .first()
+    )
+    if not trip:
+        return Response(None, status=status.HTTP_200_OK)
+
+    return Response(TripSerializer(trip, context={"request": request}).data, status=status.HTTP_200_OK)
+
+
 class DriverViewSet(viewsets.ModelViewSet):
     queryset = Driver.objects.all().order_by("name")
     serializer_class = DriverSerializer
+
+    @action(detail=False, methods=["get"])
+    def me(self, request):
+        try:
+            driver = request.user.driver_profile
+        except Driver.DoesNotExist:
+            return Response({"detail": "No driver profile is linked to this user."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(self.get_serializer(driver).data)
 
 
 class VehicleViewSet(viewsets.ModelViewSet):
@@ -58,6 +160,7 @@ class VehicleViewSet(viewsets.ModelViewSet):
 class TripViewSet(viewsets.ModelViewSet):
     queryset = Trip.objects.select_related("vehicle", "driver").all()
     serializer_class = TripSerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
@@ -86,6 +189,193 @@ class TripViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         trip = serializer.save()
         return Response(TripSerializer(trip).data)
+
+    @action(detail=True, methods=["post"])
+    def checklist(self, request, pk=None):
+        trip = self.get_object()
+        permission_error = _assert_driver_can_operate_trip(request, trip)
+        if permission_error:
+            return permission_error
+
+        serializer = TripChecklistSubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = _get_idempotency_key(request, serializer)
+        if idempotency_key:
+            existing = TripChecklist.objects.filter(start_idempotency_key=idempotency_key).first()
+            if existing:
+                return Response(TripChecklistSerializer(existing, context={"request": request}).data, status=status.HTTP_200_OK)
+
+        compliance_error = _assert_trip_compliance(trip)
+        if compliance_error:
+            return compliance_error
+
+        start_asset = serializer.validated_data.get("start_odometer_asset")
+        upload = serializer.validated_data.get("start_odometer_photo")
+        if upload:
+            start_asset = _store_private_trip_asset(upload, "odometers/start", request)
+
+        with transaction.atomic():
+            checklist, created = TripChecklist.objects.update_or_create(
+                trip=trip,
+                defaults={
+                    "start_odometer_km": serializer.validated_data["start_odometer_km"],
+                    "start_odometer_asset": start_asset,
+                    "cleanliness_ok": serializer.validated_data["cleanliness_ok"],
+                    "fuel_level_percent": serializer.validated_data["fuel_level_percent"],
+                    "tire_pressure_ok": serializer.validated_data["tire_pressure_ok"],
+                    "notes": serializer.validated_data.get("notes", ""),
+                    "start_idempotency_key": idempotency_key,
+                    "created_by": request.user if request.user.is_authenticated else None,
+                },
+            )
+            trip.status = TripStatus.EN_ROUTE_PICKUP
+            trip.save(update_fields=["status", "updated_at"])
+            if trip.vehicle_id:
+                trip.vehicle.status = VehicleStatus.EN_ROUTE_PICKUP
+                trip.vehicle.save(update_fields=["status"])
+            if trip.driver_id:
+                trip.driver.status = DriverStatus.ON_TRIP
+                trip.driver.save(update_fields=["status"])
+
+        return Response(
+            TripChecklistSerializer(checklist, context={"request": request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def location(self, request, pk=None):
+        trip = self.get_object()
+        permission_error = _assert_driver_can_operate_trip(request, trip)
+        if permission_error:
+            return permission_error
+
+        serializer = TripLocationLogSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = _get_idempotency_key(request, serializer)
+        if idempotency_key:
+            existing = TripLocationLog.objects.filter(idempotency_key=idempotency_key).first()
+            if existing:
+                return Response(TripLocationLogSerializer(existing).data, status=status.HTTP_200_OK)
+
+        location_log = serializer.save(
+            trip=trip,
+            idempotency_key=idempotency_key,
+            recorded_by=request.user if request.user.is_authenticated else None,
+        )
+        return Response(TripLocationLogSerializer(location_log).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="generate-otp")
+    def generate_otp(self, request, pk=None):
+        trip = self.get_object()
+        permission_error = _assert_driver_can_operate_trip(request, trip)
+        if permission_error:
+            return permission_error
+
+        serializer = TripGenerateOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = _get_idempotency_key(request, serializer)
+        if idempotency_key:
+            existing = TripOTP.objects.filter(idempotency_key=idempotency_key).first()
+            if existing:
+                return Response(TripOTPSerializer(existing).data, status=status.HTTP_200_OK)
+
+        digits = serializer.validated_data["digits"]
+        lower = 10 ** (digits - 1)
+        upper = (10 ** digits) - 1
+        code = str(random.randint(lower, upper))
+        otp_session, _ = TripOTP.objects.update_or_create(
+            trip=trip,
+            defaults={
+                "code": code,
+                "is_verified": False,
+                "idempotency_key": idempotency_key,
+                "generated_by": request.user if request.user.is_authenticated else None,
+                "verified_by": None,
+                "verified_at": None,
+            },
+        )
+        return Response(TripOTPSerializer(otp_session).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="verify-otp")
+    def verify_otp(self, request, pk=None):
+        trip = self.get_object()
+        permission_error = _assert_driver_can_operate_trip(request, trip)
+        if permission_error:
+            return permission_error
+
+        serializer = TripVerifyOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data["code"]
+        otp_session = getattr(trip, "otp_session", None)
+        expected_codes = set()
+        if otp_session:
+            expected_codes.add(otp_session.code)
+        mmt_code = (trip.pricing_snapshot or {}).get("verification_code")
+        if mmt_code:
+            expected_codes.add(str(mmt_code))
+
+        if code not in expected_codes:
+            return Response({"detail": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not otp_session:
+            otp_session = TripOTP.objects.create(trip=trip, code=code)
+        otp_session.is_verified = True
+        otp_session.verified_by = request.user if request.user.is_authenticated else None
+        otp_session.verified_at = timezone.now()
+        otp_session.save(update_fields=["is_verified", "verified_by", "verified_at", "updated_at"])
+        return Response(TripOTPSerializer(otp_session).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        trip = self.get_object()
+        permission_error = _assert_driver_can_operate_trip(request, trip)
+        if permission_error:
+            return permission_error
+
+        serializer = TripCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        idempotency_key = _get_idempotency_key(request, serializer)
+        if idempotency_key:
+            existing = TripChecklist.objects.filter(complete_idempotency_key=idempotency_key).first()
+            if existing:
+                return Response(TripChecklistSerializer(existing, context={"request": request}).data, status=status.HTTP_200_OK)
+
+        try:
+            checklist = trip.checklist
+        except TripChecklist.DoesNotExist:
+            return Response({"detail": "Start checklist must be submitted before completing trip."}, status=status.HTTP_400_BAD_REQUEST)
+
+        end_odometer_km = serializer.validated_data["end_odometer_km"]
+        if end_odometer_km < checklist.start_odometer_km:
+            return Response({"detail": "End odometer cannot be less than start odometer."}, status=status.HTTP_400_BAD_REQUEST)
+
+        end_asset = serializer.validated_data.get("end_odometer_asset")
+        upload = serializer.validated_data.get("end_odometer_photo")
+        if upload:
+            end_asset = _store_private_trip_asset(upload, "odometers/end", request)
+
+        with transaction.atomic():
+            checklist.end_odometer_km = end_odometer_km
+            checklist.end_odometer_asset = end_asset
+            checklist.complete_idempotency_key = idempotency_key
+            checklist.completed_by = request.user if request.user.is_authenticated else None
+            if serializer.validated_data.get("notes"):
+                checklist.notes = serializer.validated_data["notes"]
+            checklist.save()
+
+            trip.status = TripStatus.COMPLETED
+            trip.distance_km = Decimal(end_odometer_km - checklist.start_odometer_km)
+            trip.save(update_fields=["status", "distance_km", "updated_at"])
+            if trip.vehicle_id:
+                trip.vehicle.status = VehicleStatus.IDLE
+                trip.vehicle.current_city = trip.drop_city
+                trip.vehicle.odometer_km = end_odometer_km
+                trip.vehicle.save(update_fields=["status", "current_city", "odometer_km"])
+            if trip.driver_id:
+                trip.driver.status = DriverStatus.AVAILABLE
+                trip.driver.save(update_fields=["status"])
+
+        return Response(TripChecklistSerializer(checklist, context={"request": request}).data, status=status.HTTP_200_OK)
 
 
 class CorporateCustomerViewSet(viewsets.ModelViewSet):

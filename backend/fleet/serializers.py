@@ -14,6 +14,10 @@ from .models import (
     TripStatus,
     Vehicle,
     VehicleStatus,
+    FuelTransaction,
+    FuelTransactionStatus,
+    FuelType,
+    FuelUnit,
 )
 from media_store.models import UploadedAsset
 from media_store.serializers import UploadedAssetSerializer
@@ -251,7 +255,7 @@ class CorporateContractSerializer(serializers.ModelSerializer):
                     ContractAllowance.objects.create(contract=instance, **allowance_item)
 
         return instance
->>>>>>> fb782d6 (Implement Customer Management and Corporate Contract Pricing feature)
+# >>>>>>> fb782d6 (Implement Customer Management and Corporate Contract Pricing feature)
 
 
 class DriverSerializer(serializers.ModelSerializer):
@@ -331,6 +335,12 @@ class VehicleSerializer(serializers.ModelSerializer):
             "odometer_km",
             "compliance_blockers",
             "is_compliant",
+            "fuel_type",
+            "fuel_unit",
+            "tank_capacity",
+            "expected_mileage_min",
+            "expected_mileage_max",
+            "baseline_mileage",
         ]
 
 
@@ -519,4 +529,102 @@ class AvailabilitySerializer(serializers.Serializer):
     available_city = serializers.CharField()
     driver_name = serializers.CharField(allow_null=True)
     compliance_blockers = serializers.ListField(child=serializers.CharField())
+
+
+class FuelTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FuelTransaction
+        fields = [
+            "id",
+            "vehicle",
+            "driver",
+            "vendor",
+            "invoice_number",
+            "transaction_datetime",
+            "odometer_km",
+            "quantity",
+            "unit_price",
+            "tax_amount",
+            "total_amount",
+            "is_full_fill",
+            "source",
+            "notes",
+            "status",
+            "receipt_asset",
+            "odometer_asset",
+            "is_correction",
+            "corrected_by_transaction",
+            "corrected_from_transaction",
+            "approved_by",
+            "approved_at",
+            "has_anomaly",
+            "anomaly_flags",
+            "anomaly_review_notes",
+            "anomaly_reviewed_by",
+            "anomaly_reviewed_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "status",
+            "is_correction",
+            "corrected_by_transaction",
+            "corrected_from_transaction",
+            "approved_by",
+            "approved_at",
+            "expense_posted",
+            "posted_at",
+            "has_anomaly",
+            "anomaly_flags",
+            "anomaly_review_notes",
+            "anomaly_reviewed_by",
+            "anomaly_reviewed_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        quantity = attrs.get("quantity")
+        unit_price = attrs.get("unit_price")
+        tax_amount = attrs.get("tax_amount", 0)
+        total_amount = attrs.get("total_amount")
+
+        if quantity is not None and unit_price is not None and total_amount is not None:
+            expected_total = quantity * unit_price + tax_amount
+            from decimal import Decimal
+            if abs(total_amount - expected_total) > Decimal("0.05"):
+                raise serializers.ValidationError(
+                    {"total_amount": f"Reconciliation failed: quantity ({quantity}) * price ({unit_price}) + tax ({tax_amount}) = {expected_total}, but total is {total_amount}."}
+                )
+
+        if quantity is not None and quantity <= 0:
+            raise serializers.ValidationError({"quantity": "Quantity must be greater than zero."})
+
+        if total_amount is not None and total_amount < 0:
+            raise serializers.ValidationError({"total_amount": "Total amount cannot be negative."})
+
+        source = attrs.get("source", "console")
+        if source == "mobile_app":
+            if not attrs.get("receipt_asset"):
+                raise serializers.ValidationError({"receipt_asset": "Receipt evidence photo is required for mobile submissions."})
+            if not attrs.get("odometer_asset"):
+                raise serializers.ValidationError({"odometer_asset": "Odometer verification photo is required for mobile submissions."})
+
+        return attrs
+
+
+class FuelTransactionDetailSerializer(FuelTransactionSerializer):
+    vehicle_details = VehicleSerializer(source="vehicle", read_only=True)
+    driver_details = DriverSerializer(source="driver", read_only=True)
+    receipt_asset_details = UploadedAssetSerializer(source="receipt_asset", read_only=True)
+    odometer_asset_details = UploadedAssetSerializer(source="odometer_asset", read_only=True)
+
+    class Meta(FuelTransactionSerializer.Meta):
+        fields = FuelTransactionSerializer.Meta.fields + [
+            "vehicle_details",
+            "driver_details",
+            "receipt_asset_details",
+            "odometer_asset_details",
+        ]
 

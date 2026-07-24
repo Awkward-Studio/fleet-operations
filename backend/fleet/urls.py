@@ -10,6 +10,7 @@ from .views import (
     DriverViewSet,
     TripViewSet,
     VehicleViewSet,
+    FuelTransactionViewSet,
     availability,
     dashboard_summary,
     quote_api,
@@ -19,6 +20,7 @@ router = DefaultRouter()
 router.register("drivers", DriverViewSet)
 router.register("vehicles", VehicleViewSet)
 router.register("trips", TripViewSet)
+router.register("fuel-transactions", FuelTransactionViewSet, basename="fuel-transaction")
 router.register("customers", CorporateCustomerViewSet, basename="customer")
 router.register("contacts", CustomerContactViewSet, basename="contact")
 router.register("contracts", CorporateContractViewSet, basename="contract")

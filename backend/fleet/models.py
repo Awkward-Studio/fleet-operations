@@ -117,6 +117,17 @@ class Driver(models.Model):
 
     def __str__(self):
         return self.name
+class FuelType(models.TextChoices):
+    PETROL = "petrol", "Petrol"
+    DIESEL = "diesel", "Diesel"
+    CNG = "cng", "CNG"
+    ELECTRIC = "electric", "Electric"
+
+
+class FuelUnit(models.TextChoices):
+    LITRES = "litres", "Litres"
+    KG = "kg", "Kg"
+    KWH = "kwh", "kWh"
 
 
 class Vehicle(models.Model):
@@ -138,6 +149,40 @@ class Vehicle(models.Model):
     pollution_expires_on = models.DateField()
     fitness_expires_on = models.DateField()
     odometer_km = models.PositiveIntegerField(default=0)
+    fuel_type = models.CharField(
+        max_length=24,
+        choices=FuelType.choices,
+        default=FuelType.PETROL,
+    )
+    fuel_unit = models.CharField(
+        max_length=24,
+        choices=FuelUnit.choices,
+        default=FuelUnit.LITRES,
+    )
+    tank_capacity = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    expected_mileage_min = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    expected_mileage_max = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    baseline_mileage = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -392,3 +437,127 @@ class Trip(models.Model):
     def __str__(self):
         name = self.customer_display_name_snapshot or self.customer_name or "Trip"
         return f"{name}: {self.pickup_city} to {self.drop_city} at {self.pickup_at:%Y-%m-%d %H:%M}"
+
+
+class FuelTransactionStatus(models.TextChoices):
+    SUBMITTED = "submitted", "Submitted"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+    REVERSED = "reversed", "Reversed"
+    CORRECTED = "corrected", "Corrected"
+
+
+class FuelTransaction(models.Model):
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.PROTECT, related_name="fuel_transactions")
+    driver = models.ForeignKey(Driver, on_delete=models.PROTECT, related_name="fuel_transactions", null=True, blank=True)
+    vendor = models.CharField(max_length=150, blank=True)
+    invoice_number = models.CharField(max_length=100, blank=True)
+    transaction_datetime = models.DateTimeField()
+    odometer_km = models.PositiveIntegerField()
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    is_full_fill = models.BooleanField(default=True)
+    source = models.CharField(max_length=50, default="console")
+    notes = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=24,
+        choices=FuelTransactionStatus.choices,
+        default=FuelTransactionStatus.SUBMITTED,
+    )
+
+    # Correction mapping
+    corrected_by_transaction = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="corrected_transactions",
+    )
+    is_correction = models.BooleanField(default=False)
+    corrected_from_transaction = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="correction_history",
+    )
+
+    # Attachments
+    receipt_asset = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fuel_receipts",
+    )
+    odometer_asset = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fuel_odometers",
+    )
+
+    # Approval audit
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_fuel_transactions",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    # Posting references
+    expense_posted = models.ForeignKey(
+        "billing.TripExpense",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fuel_transaction",
+    )
+    posted_at = models.DateTimeField(null=True, blank=True)
+
+    # Anomaly reporting
+    has_anomaly = models.BooleanField(default=False)
+    anomaly_flags = models.JSONField(default=list, blank=True)
+    anomaly_review_notes = models.TextField(blank=True)
+    anomaly_reviewed_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_fuel_anomalies",
+    )
+    anomaly_reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-transaction_datetime"]
+        indexes = [
+            models.Index(fields=["vehicle", "transaction_datetime"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["invoice_number", "vendor"]),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.quantity is not None and self.unit_price is not None and self.total_amount is not None:
+            expected_total = self.quantity * self.unit_price + (self.tax_amount or Decimal("0.00"))
+            if abs(self.total_amount - expected_total) > Decimal("0.05"):
+                raise ValidationError(
+                    {
+                        "total_amount": f"Reconciliation failed: quantity ({self.quantity}) * price ({self.unit_price}) + tax ({self.tax_amount}) = {expected_total}, but total_amount is {self.total_amount}."
+                    }
+                )
+        if self.quantity is not None and self.quantity <= 0:
+            raise ValidationError({"quantity": "Quantity must be greater than zero."})
+        if self.total_amount is not None and self.total_amount < 0:
+            raise ValidationError({"total_amount": "Total amount cannot be negative."})
+
+    def __str__(self):
+        return f"Fuel Tx {self.id or 'Draft'} - {self.vehicle.registration_number} (₹{self.total_amount})"

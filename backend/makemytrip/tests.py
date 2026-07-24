@@ -137,7 +137,7 @@ class MakeMyTripServicesTestCase(APITestCase):
         """
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"response": {"distance_booked": 900}}
+        mock_response.text = '{"response": {"distance_booked": 900}}'
         mock_request.return_value = mock_response
 
         payload = {"dummy": "data"}

@@ -168,7 +168,7 @@ class InvoiceService:
 
 class PostingEngine:
     @staticmethod
-    def post_invoice_journal(invoice: Invoice) -> JournalEntry:
+    def post_invoice_journal(invoice: Invoice) -> "JournalEntry":
         from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
 
         with transaction.atomic():
@@ -242,6 +242,179 @@ class PostingEngine:
                     debit_amount=Decimal("0.00"),
                     credit_amount=invoice.sgst_amount,
                     narration="Output SGST @ 2.5%",
+                )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
+    def post_fuel_journal(fuel_transaction, trip_expense) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+        with transaction.atomic():
+            fuel_exp_acc, _ = LedgerAccount.objects.get_or_create(
+                code="5100",
+                defaults={"name": "Fuel Expense", "account_type": AccountType.EXPENSE, "external_mapping_code": "EXP_5100"}
+            )
+            gst_in_acc, _ = LedgerAccount.objects.get_or_create(
+                code="1200",
+                defaults={"name": "Input GST Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "TAX_1200"}
+            )
+            payable_acc, _ = LedgerAccount.objects.get_or_create(
+                code="2300",
+                defaults={"name": "Fuel Payables / Cash", "account_type": AccountType.LIABILITY, "external_mapping_code": "PAY_2300"}
+            )
+
+            today = datetime.date.today()
+            fy = FinancialYear.objects.filter(start_date__lte=today, end_date__gte=today, is_closed=False).first()
+            if not fy:
+                fy = FinancialYear.objects.filter(is_closed=False).order_by("-start_date").first()
+            if not fy:
+                fy = FinancialYear.objects.create(
+                    name=f"FY {today.year}-{str(today.year+1)[-2:]}",
+                    start_date=datetime.date(today.year, 4, 1),
+                    end_date=datetime.date(today.year+1, 3, 31),
+                )
+            period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=today, end_date__gte=today).first()
+            if not period:
+                period = fy.periods.first()
+
+            legal_entity = LegalEntity.objects.filter(is_active=True).first()
+            if not legal_entity:
+                legal_entity = LegalEntity.objects.create(
+                    legal_name="Primary Fleet Entity",
+                    is_active=True,
+                )
+
+            entry_number = f"JV/FUEL/{fuel_transaction.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": today,
+                    "source_type": "FUEL",
+                    "source_id": str(fuel_transaction.id),
+                    "narration": f"Journal entry for Fuel purchase for {fuel_transaction.vehicle.registration_number} @ {fuel_transaction.vendor}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            taxable_amt = fuel_transaction.total_amount - fuel_transaction.tax_amount
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=fuel_exp_acc,
+                debit_amount=taxable_amt,
+                credit_amount=Decimal("0.00"),
+                narration=f"Fuel cost excl tax",
+            )
+            if fuel_transaction.tax_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=gst_in_acc,
+                    debit_amount=fuel_transaction.tax_amount,
+                    credit_amount=Decimal("0.00"),
+                    narration="Input GST on fuel purchase",
+                )
+
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=payable_acc,
+                debit_amount=Decimal("0.00"),
+                credit_amount=fuel_transaction.total_amount,
+                narration=f"Amount payable to {fuel_transaction.vendor}",
+            )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
+    def post_fuel_reversal_journal(fuel_transaction) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+        with transaction.atomic():
+            fuel_exp_acc, _ = LedgerAccount.objects.get_or_create(
+                code="5100",
+                defaults={"name": "Fuel Expense", "account_type": AccountType.EXPENSE, "external_mapping_code": "EXP_5100"}
+            )
+            gst_in_acc, _ = LedgerAccount.objects.get_or_create(
+                code="1200",
+                defaults={"name": "Input GST Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "TAX_1200"}
+            )
+            payable_acc, _ = LedgerAccount.objects.get_or_create(
+                code="2300",
+                defaults={"name": "Fuel Payables / Cash", "account_type": AccountType.LIABILITY, "external_mapping_code": "PAY_2300"}
+            )
+
+            today = datetime.date.today()
+            fy = FinancialYear.objects.filter(start_date__lte=today, end_date__gte=today, is_closed=False).first()
+            if not fy:
+                fy = FinancialYear.objects.filter(is_closed=False).order_by("-start_date").first()
+            if not fy:
+                fy = FinancialYear.objects.create(
+                    name=f"FY {today.year}-{str(today.year+1)[-2:]}",
+                    start_date=datetime.date(today.year, 4, 1),
+                    end_date=datetime.date(today.year+1, 3, 31),
+                )
+            period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=today, end_date__gte=today).first()
+            if not period:
+                period = fy.periods.first()
+
+            legal_entity = LegalEntity.objects.filter(is_active=True).first()
+            if not legal_entity:
+                legal_entity = LegalEntity.objects.create(
+                    legal_name="Primary Fleet Entity",
+                    is_active=True,
+                )
+
+            entry_number = f"JV/FUEL/REV/{fuel_transaction.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": today,
+                    "source_type": "FUEL_REVERSAL",
+                    "source_id": str(fuel_transaction.id),
+                    "narration": f"Reversal of Fuel purchase for {fuel_transaction.vehicle.registration_number} @ {fuel_transaction.vendor} (Orig JV/FUEL/{fuel_transaction.id})",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=payable_acc,
+                debit_amount=fuel_transaction.total_amount,
+                credit_amount=Decimal("0.00"),
+                narration=f"Reversal of payable for {fuel_transaction.vendor}",
+            )
+
+            taxable_amt = fuel_transaction.total_amount - fuel_transaction.tax_amount
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=fuel_exp_acc,
+                debit_amount=Decimal("0.00"),
+                credit_amount=taxable_amt,
+                narration=f"Reversal of fuel cost",
+            )
+
+            if fuel_transaction.tax_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=gst_in_acc,
+                    debit_amount=Decimal("0.00"),
+                    credit_amount=fuel_transaction.tax_amount,
+                    narration="Reversal of Input GST on fuel",
                 )
 
             total_debits = sum(line.debit_amount for line in journal.lines.all())

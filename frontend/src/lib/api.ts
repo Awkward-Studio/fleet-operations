@@ -37,6 +37,12 @@ export type Vehicle = {
   compliance_blockers: string[];
   is_compliant: boolean;
   odometer_km: number;
+  fuel_type?: string;
+  fuel_unit?: string;
+  tank_capacity?: string | number;
+  expected_mileage_min?: string | number;
+  expected_mileage_max?: string | number;
+  baseline_mileage?: string | number;
 };
 
 export type Trip = {
@@ -411,6 +417,12 @@ export function updateVehicle(id: number, payload: Partial<{
   pollution_expires_on: string;
   fitness_expires_on: string;
   odometer_km: number;
+  fuel_type?: string;
+  fuel_unit?: string;
+  tank_capacity?: string | number;
+  expected_mileage_min?: string | number;
+  expected_mileage_max?: string | number;
+  baseline_mileage?: string | number;
 }>) {
   return request<Vehicle>(`/vehicles/${id}/`, {
     method: "PATCH",
@@ -738,5 +750,103 @@ export function getPricingQuote(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type FuelTransaction = {
+  id: number;
+  vehicle: number;
+  vehicle_details?: Vehicle;
+  driver?: number | null;
+  driver_details?: Driver | null;
+  vendor: string;
+  invoice_number: string;
+  transaction_datetime: string;
+  odometer_km: number;
+  quantity: string | number;
+  unit_price: string | number;
+  tax_amount: string | number;
+  total_amount: string | number;
+  is_full_fill: boolean;
+  source: string;
+  notes: string;
+  status: "submitted" | "approved" | "rejected" | "reversed" | "corrected";
+  receipt_asset?: UploadedAsset | null;
+  odometer_asset?: UploadedAsset | null;
+  is_correction: boolean;
+  corrected_by_transaction?: number | null;
+  corrected_from_transaction?: number | null;
+  approved_by?: number | null;
+  approved_at?: string | null;
+  has_anomaly: boolean;
+  anomaly_flags: string[];
+  anomaly_review_notes: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FuelMetrics = {
+  [txId: number]: {
+    delta_distance: number | null;
+    mileage: string | null;
+    consumption_rate: string | null;
+    cost_per_km: string | null;
+    tax_per_km: string | null;
+    is_authoritative: boolean;
+    calculation_notes: string;
+  };
+};
+
+export function getFuelTransactions() {
+  return request<FuelTransaction[]>("/fuel-transactions/");
+}
+
+export function createFuelTransaction(payload: Partial<FuelTransaction>) {
+  return request<FuelTransaction>("/fuel-transactions/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateFuelTransaction(id: number, payload: Partial<FuelTransaction>) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveFuelTransaction(id: number) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/approve/`, {
+    method: "POST",
+  });
+}
+
+export function rejectFuelTransaction(id: number) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/reject/`, {
+    method: "POST",
+  });
+}
+
+export function reverseFuelTransaction(id: number) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/reverse/`, {
+    method: "POST",
+  });
+}
+
+export function correctFuelTransaction(id: number, payload: Partial<FuelTransaction>) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/correct/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resolveAnomaly(id: number, payload: { anomaly_review_notes: string }) {
+  return request<FuelTransaction>(`/fuel-transactions/${id}/resolve_anomaly/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getVehicleMileage(vehicleId: number) {
+  return request<FuelMetrics>(`/fuel-transactions/vehicle_mileage/?vehicle=${vehicleId}`);
 }
 

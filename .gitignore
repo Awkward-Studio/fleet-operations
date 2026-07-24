@@ -13,3 +13,4 @@ dist/
 coverage/
 dump_endpoints_markdown.py
 jsapi_response.json
+.agents

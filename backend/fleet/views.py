@@ -20,8 +20,12 @@ from .models import (
     TripStatus,
     Vehicle,
     VehicleStatus,
+    FuelTransaction,
+    FuelTransactionStatus,
+    FuelType,
+    FuelUnit,
 )
-from .permissions import IsCommercialAdminOrReadOnly
+from .permissions import IsCommercialAdminOrReadOnly, IsCommercialAdmin
 from .pricing_service import PricingError, calculate_quote
 from .serializers import (
     AssignTripSerializer,
@@ -35,7 +39,10 @@ from .serializers import (
     TransitionTripSerializer,
     TripSerializer,
     VehicleSerializer,
+    FuelTransactionSerializer,
+    FuelTransactionDetailSerializer,
 )
+from rest_framework import permissions
 
 
 class DriverViewSet(viewsets.ModelViewSet):
@@ -412,4 +419,215 @@ def quote_api(request):
         return Response(quote, status=status.HTTP_200_OK)
     except PricingError as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FuelTransactionViewSet(viewsets.ModelViewSet):
+    queryset = FuelTransaction.objects.all().order_by("-transaction_datetime")
+    serializer_class = FuelTransactionSerializer
+
+    def get_serializer_class(self):
+        if self.action in ["retrieve", "list"]:
+            return FuelTransactionDetailSerializer
+        return FuelTransactionSerializer
+
+    def get_permissions(self):
+        if self.action in ["approve", "reject", "reverse", "correct", "resolve_anomaly"]:
+            return [permissions.IsAuthenticated(), IsCommercialAdmin()]
+        return [permissions.IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        tx = serializer.save()
+        from .fuel_service import detect_anomalies
+        has_anom, flags = detect_anomalies(tx)
+        tx.has_anomaly = has_anom
+        tx.anomaly_flags = flags
+        tx.save(update_fields=["has_anomaly", "anomaly_flags"])
+
+    def perform_update(self, serializer):
+        tx = serializer.save()
+        from .fuel_service import detect_anomalies
+        has_anom, flags = detect_anomalies(tx)
+        tx.has_anomaly = has_anom
+        tx.anomaly_flags = flags
+        tx.save(update_fields=["has_anomaly", "anomaly_flags"])
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        tx = self.get_object()
+        if tx.status != FuelTransactionStatus.SUBMITTED:
+            return Response(
+                {"error": f"Cannot approve transaction with status: {tx.status}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tx.status = FuelTransactionStatus.APPROVED
+        tx.approved_by = request.user
+        tx.approved_at = timezone.now()
+        tx.save(update_fields=["status", "approved_by", "approved_at"])
+
+        # Post to Fleet Accounting (Task 7)
+        try:
+            from billing.models import TripExpense, ExpenseCategory, ExpenseStatus, SupplierProfile
+            supplier, _ = SupplierProfile.objects.get_or_create(
+                name=tx.vendor or "Fuel Supplier",
+                defaults={"is_active": True}
+            )
+
+            expense = TripExpense.objects.create(
+                trip=None,
+                supplier=supplier,
+                category=ExpenseCategory.FUEL,
+                amount=tx.total_amount,
+                tax_amount=tx.tax_amount,
+                status=ExpenseStatus.APPROVED,
+                evidence_url=tx.receipt_asset.file_url if tx.receipt_asset else "",
+                description=f"Fuel Fill: {tx.vehicle.registration_number} @ {tx.vendor}. Odo: {tx.odometer_km}",
+                approved_by=request.user,
+            )
+
+            tx.expense_posted = expense
+            tx.posted_at = timezone.now()
+            tx.save(update_fields=["expense_posted", "posted_at"])
+
+            from billing.services import PostingEngine
+            PostingEngine.post_fuel_journal(tx, expense)
+
+        except Exception as exc:
+            # Revert status changes if posting fails
+            tx.status = FuelTransactionStatus.SUBMITTED
+            tx.approved_by = None
+            tx.approved_at = None
+            tx.expense_posted = None
+            tx.posted_at = None
+            tx.save()
+            return Response(
+                {"error": f"Accounting posting failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(FuelTransactionDetailSerializer(tx).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        tx = self.get_object()
+        if tx.status != FuelTransactionStatus.SUBMITTED:
+            return Response(
+                {"error": f"Cannot reject transaction with status: {tx.status}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tx.status = FuelTransactionStatus.REJECTED
+        tx.save(update_fields=["status"])
+        return Response(FuelTransactionDetailSerializer(tx).data)
+
+    @action(detail=True, methods=["post"])
+    def reverse(self, request, pk=None):
+        tx = self.get_object()
+        if tx.status != FuelTransactionStatus.APPROVED:
+            return Response(
+                {"error": f"Only approved transactions can be reversed. Current: {tx.status}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tx.status = FuelTransactionStatus.REVERSED
+        tx.save(update_fields=["status"])
+
+        if tx.expense_posted:
+            try:
+                from billing.models import ExpenseStatus
+                expense = tx.expense_posted
+                expense.status = ExpenseStatus.REJECTED
+                expense.save(update_fields=["status"])
+
+                from billing.services import PostingEngine
+                PostingEngine.post_fuel_reversal_journal(tx)
+            except Exception as exc:
+                tx.status = FuelTransactionStatus.APPROVED
+                tx.save(update_fields=["status"])
+                return Response(
+                    {"error": f"Reversal posting failed: {str(exc)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        return Response(FuelTransactionDetailSerializer(tx).data)
+
+    @action(detail=True, methods=["post"])
+    def correct(self, request, pk=None):
+        tx = self.get_object()
+        if tx.status not in [FuelTransactionStatus.APPROVED, FuelTransactionStatus.SUBMITTED]:
+            return Response(
+                {"error": f"Cannot correct transaction with status: {tx.status}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = FuelTransactionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        from django.db import transaction
+        with transaction.atomic():
+            if tx.status == FuelTransactionStatus.APPROVED and tx.expense_posted:
+                from billing.models import ExpenseStatus
+                expense = tx.expense_posted
+                expense.status = ExpenseStatus.REJECTED
+                expense.save(update_fields=["status"])
+                from billing.services import PostingEngine
+                PostingEngine.post_fuel_reversal_journal(tx)
+
+            tx.status = FuelTransactionStatus.CORRECTED
+            tx.save(update_fields=["status"])
+
+            corrected_tx = serializer.save(
+                is_correction=True,
+                corrected_from_transaction=tx,
+                status=FuelTransactionStatus.SUBMITTED,
+            )
+
+            tx.corrected_by_transaction = corrected_tx
+            tx.save(update_fields=["corrected_by_transaction"])
+
+            from .fuel_service import detect_anomalies
+            has_anom, flags = detect_anomalies(corrected_tx)
+            corrected_tx.has_anomaly = has_anom
+            corrected_tx.anomaly_flags = flags
+            corrected_tx.save(update_fields=["has_anomaly", "anomaly_flags"])
+
+        return Response(FuelTransactionDetailSerializer(corrected_tx).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def resolve_anomaly(self, request, pk=None):
+        tx = self.get_object()
+        if not tx.has_anomaly:
+            return Response(
+                {"error": "Transaction has no active anomalies."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        review_notes = request.data.get("anomaly_review_notes", "")
+        tx.anomaly_review_notes = review_notes
+        tx.anomaly_reviewed_by = request.user
+        tx.anomaly_reviewed_at = timezone.now()
+        tx.has_anomaly = False
+        tx.save(update_fields=["anomaly_review_notes", "anomaly_reviewed_by", "anomaly_reviewed_at", "has_anomaly"])
+
+        return Response(FuelTransactionDetailSerializer(tx).data)
+
+    @action(detail=False, methods=["get"])
+    def vehicle_mileage(self, request):
+        vehicle_id = request.query_params.get("vehicle")
+        if not vehicle_id:
+            return Response(
+                {"error": "Query parameter 'vehicle' (id) is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            vehicle = Vehicle.objects.get(pk=vehicle_id)
+        except Vehicle.DoesNotExist:
+            return Response(
+                {"error": f"Vehicle with id {vehicle_id} does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from .fuel_service import calculate_vehicle_mileage
+        metrics = calculate_vehicle_mileage(vehicle)
+        return Response(metrics)
 

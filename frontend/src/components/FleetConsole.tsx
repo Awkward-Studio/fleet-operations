@@ -50,6 +50,7 @@ import dynamic from "next/dynamic";
 import CustomerManager from "./CustomerManager";
 import ContractManager from "./ContractManager";
 import BillingManager from "./BillingManager";
+import FuelMileageManager from "./FuelMileageManager";
 
 const MapComponent = dynamic(() => import("./MapComponent"), { ssr: false });
 
@@ -83,7 +84,7 @@ import {
 import { DocumentUpload } from "@/components/DocumentUpload";
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
 
 const navItems = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -93,6 +94,7 @@ const navItems = [
   { href: "/customers", section: "customers", label: "Customers", icon: Building2 },
   { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText },
   { href: "/billing", section: "billing", label: "Fleet Billing", icon: Receipt },
+  { href: "/fuel", section: "fuel", label: "Fuel & Mileage", icon: Fuel },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
   { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned },
@@ -575,6 +577,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
           {section === "customers" ? <CustomerManager /> : null}
           {section === "contracts" ? <ContractManager /> : null}
           {section === "billing" ? <BillingManager /> : null}
+          {section === "fuel" ? <FuelMileageManager /> : null}
 
           {section === "dashboard" ? (
             <DashboardView

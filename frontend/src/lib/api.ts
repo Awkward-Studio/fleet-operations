@@ -106,6 +106,7 @@ export type CustomerContact = {
   phone: string;
   email: string;
   is_primary: boolean;
+  designation?: string;
   created_at?: string;
   updated_at?: string;
 };
@@ -170,10 +171,14 @@ export type CorporateContract = {
   id: number;
   customer: number;
   customer_display_name?: string;
+  contract_code?: string;
   title: string;
   version_name: string;
   effective_start: string;
   effective_end?: string | null;
+  start_date?: string;
+  end_date?: string;
+  rates_count?: number;
   status: "DRAFT" | "ACTIVE" | "EXPIRED" | "TERMINATED" | "ARCHIVED";
   currency: string;
   cgst_rate: string | number;
@@ -239,6 +244,12 @@ export type PricingQuote = {
   explanation: string;
 };
 
+export type UserMembership = {
+  company_id: number;
+  company_name: string;
+  role: "admin" | "approver" | "requester" | "finance" | "support" | "read_only";
+};
+
 export type User = {
   id: number;
   username: string;
@@ -247,6 +258,7 @@ export type User = {
   last_name: string;
   role?: string;
   permissions?: string[];
+  active_memberships?: UserMembership[];
 };
 
 export type AuthResponse = {

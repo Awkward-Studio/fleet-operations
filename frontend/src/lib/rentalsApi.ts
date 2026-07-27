@@ -353,3 +353,174 @@ export function submitFuelLog(payload: {
     body: JSON.stringify(payload),
   });
 }
+
+// Portal Guest Profile Type
+export type GuestProfile = {
+  id: number;
+  company: number;
+  company_name?: string;
+  name: string;
+  phone: string;
+  email?: string;
+  employee_id?: string;
+  is_active: boolean;
+};
+
+// Portal Corporate Approval Policy Type
+export type CorporateApprovalPolicy = {
+  id: number;
+  company: number;
+  company_name?: string;
+  require_po: boolean;
+  require_cost_centre: boolean;
+  approval_threshold_amount: string | number;
+};
+
+// Portal Booking Request Status
+export type BookingRequestStatus =
+  | "draft"
+  | "submitted"
+  | "approval_required"
+  | "approved"
+  | "accepted"
+  | "dispatched"
+  | "active"
+  | "completed"
+  | "cancelled"
+  | "rejected";
+
+// Portal Booking Request Amendment Type
+export type BookingRequestAmendment = {
+  id: number;
+  booking_request: number;
+  amended_by: number;
+  amended_by_username?: string;
+  changes: Record<string, any>;
+  reason: string;
+  created_at: string;
+};
+
+// Portal Booking Request Type
+export type BookingRequest = {
+  id: number;
+  booking_number: string;
+  company: number;
+  company_name?: string;
+  requester: number;
+  requester_username?: string;
+  guest?: number | null;
+  guest_details?: GuestProfile | null;
+  passenger_name: string;
+  passenger_phone: string;
+  passenger_email?: string;
+  pickup_address: string;
+  drop_address?: string;
+  pickup_city: string;
+  pickup_at: string;
+  expected_return_at: string;
+  package: number;
+  package_name?: string;
+  vehicle_category: string;
+  cost_centre?: string;
+  po_reference?: string;
+  status: BookingRequestStatus;
+  approver?: number | null;
+  approved_at?: string | null;
+  quote_base_price?: string | number;
+  quote_extra_km_rate?: string | number;
+  quote_extra_hour_rate?: string | number;
+  quote_driver_allowance?: string | number;
+  amendments?: BookingRequestAmendment[];
+  created_at: string;
+  updated_at: string;
+};
+
+// Portal Signed Quote Response
+export type SignedQuoteResponse = {
+  company_id: number;
+  pickup_city: string;
+  package_id: number;
+  package_name: string;
+  vehicle_category: string;
+  base_price: string;
+  extra_km_rate: string;
+  extra_hour_rate: string;
+  driver_allowance: string;
+  included_km: number;
+  included_hours: number;
+  expires_at: string;
+  signature: string;
+};
+
+// Portal Discovery API
+export function getPortalPackages(companyId?: number, city?: string) {
+  let query = "";
+  const params: string[] = [];
+  if (companyId) params.push(`company_id=${companyId}`);
+  if (city) params.push(`city=${encodeURIComponent(city)}`);
+  if (params.length > 0) query = `?${params.join("&")}`;
+  return request<RentalPackage[]>(`/portal/packages/${query}`);
+}
+
+// Portal Quoting API
+export function getPortalQuote(payload: {
+  company_id: number;
+  pickup_city: string;
+  package_id: number;
+  vehicle_category?: string;
+}) {
+  return request<SignedQuoteResponse>("/portal/quote/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// Portal Guest Profiles API
+export function getGuestProfiles() {
+  return request<GuestProfile[]>("/portal/guests/");
+}
+
+export function createGuestProfile(payload: Partial<GuestProfile>) {
+  return request<GuestProfile>("/portal/guests/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// Portal Booking Requests API
+export function getBookingRequests() {
+  return request<BookingRequest[]>("/portal/booking-requests/");
+}
+
+export function createBookingRequest(payload: Partial<BookingRequest> & { quote_signature?: string }) {
+  return request<BookingRequest>("/portal/booking-requests/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveBookingRequest(id: number) {
+  return request<BookingRequest>(`/portal/booking-requests/${id}/approve/`, {
+    method: "POST",
+  });
+}
+
+export function rejectBookingRequest(id: number) {
+  return request<BookingRequest>(`/portal/booking-requests/${id}/reject/`, {
+    method: "POST",
+  });
+}
+
+export function cancelBookingRequest(id: number) {
+  return request<BookingRequest>(`/portal/booking-requests/${id}/cancel/`, {
+    method: "POST",
+  });
+}
+
+export function amendBookingRequest(id: number, payload: Partial<BookingRequest> & { reason: string }) {
+  return request<BookingRequest>(`/portal/booking-requests/${id}/amend/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+

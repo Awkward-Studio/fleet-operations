@@ -2841,7 +2841,8 @@ function pageTitle(section: ConsoleSection) {
     tracking: "Vehicle Tracking",
     availability: "Predictive Availability",
     compliance: "Compliance",
-    ota: "OTA Bidding"
+    ota: "OTA Bidding",
+    fuel: "Fuel & Mileage Log"
   };
   return titles[section];
 }
@@ -2860,7 +2861,8 @@ function pageSubtitle(section: ConsoleSection) {
     tracking: "Monitor each car by status, active trip, city, and predicted next location",
     availability: "See where every car can accept its next booking and when",
     compliance: "Prevent non-compliant cars from being used for outstation work",
-    ota: "Prepare route acquisition decisions from OTA opportunities"
+    ota: "Prepare route acquisition decisions from OTA opportunities",
+    fuel: "Log fuel refilling, track fuel receipts, analyze fuel consumption anomalies, and calculate true vehicle mileage"
   };
   return subtitles[section];
 }

@@ -109,7 +109,7 @@ export default function CustomerManager() {
     try {
       const [contactsData, contractsData] = await Promise.all([
         getCustomerContacts(customerId),
-        getContracts({ customer_id: customerId }),
+        getContracts({ customer: customerId }),
       ]);
       setCustomerContacts(contactsData);
       setCustomerContracts(contractsData);
@@ -165,7 +165,7 @@ export default function CustomerManager() {
     try {
       setError(null);
       if (editingContact.id) {
-        await updateCustomerContact(selectedCustomer.id, editingContact.id, editingContact);
+        await updateCustomerContact(editingContact.id, editingContact);
         setSuccess("Contact updated.");
       } else {
         await createCustomerContact(selectedCustomer.id, editingContact);
@@ -184,7 +184,7 @@ export default function CustomerManager() {
     if (!confirm("Are you sure you want to delete this contact person?")) return;
     try {
       setError(null);
-      await deleteCustomerContact(selectedCustomer.id, contactId);
+      await deleteCustomerContact(contactId);
       setSuccess("Contact removed.");
       fetchCustomerDetails(selectedCustomer.id);
     } catch (err: any) {

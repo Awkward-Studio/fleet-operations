@@ -171,3 +171,116 @@ class TripOperationsAPITest(APITestCase):
         self.assertEqual(str(self.trip.distance_km), "37.00")
         self.assertEqual(self.vehicle.odometer_km, 1042)
         self.assertEqual(self.driver.status, DriverStatus.AVAILABLE)
+
+    def test_create_driver_with_email_and_password_creates_user(self):
+        payload = {
+            "name": "New Driver User",
+            "phone": "+91 91111 22222",
+            "license_number": "DL-DRV-NEW999",
+            "home_base": "Jaipur",
+            "email": "newdriver@example.com",
+            "password": "driverpassword123",
+        }
+        response = self.client.post("/api/fleet/drivers/", payload, format="json")
+        self.assertEqual(response.status_code, 201)
+        
+        # Verify Driver is created and links to a user
+        driver = Driver.objects.get(license_number="DL-DRV-NEW999")
+        self.assertIsNotNone(driver.user)
+        self.assertEqual(driver.user.email, "newdriver@example.com")
+        self.assertEqual(driver.user.role, "driver")
+        
+        # Verify the user can authenticate
+        from django.contrib.auth import authenticate
+        authenticated_user = authenticate(username="newdriver@example.com", password="driverpassword123")
+        self.assertEqual(authenticated_user, driver.user)
+
+    def test_create_trip_with_direct_driver_and_vehicle_assignment(self):
+        # Create a new available driver and vehicle
+        available_driver = Driver.objects.create(
+            name="Free Driver",
+            phone="+91 92222 33333",
+            license_number="DL-DRV-FREE1",
+            home_base="Delhi",
+            status=DriverStatus.AVAILABLE,
+        )
+        idle_vehicle = Vehicle.objects.create(
+            registration_number="DLFREE001",
+            make="Maruti",
+            model="Swift",
+            category="Sedan",
+            current_city="Delhi",
+            status=VehicleStatus.IDLE,
+            permit_expires_on=timezone.localdate() + timedelta(days=90),
+            insurance_expires_on=timezone.localdate() + timedelta(days=90),
+            pollution_expires_on=timezone.localdate() + timedelta(days=90),
+            fitness_expires_on=timezone.localdate() + timedelta(days=90),
+            odometer_km=5000,
+        )
+        
+        trip_payload = {
+            "booking_type": "ADHOC",
+            "customer_name": "Direct Passenger",
+            "pickup_city": "Delhi",
+            "drop_city": "Gurgaon",
+            "pickup_at": (timezone.now() + timedelta(hours=5)).isoformat(),
+            "estimated_drop_at": (timezone.now() + timedelta(hours=7)).isoformat(),
+            "driver_id": available_driver.id,
+            "vehicle_id": idle_vehicle.id,
+            "fare_amount": "1200.00",
+        }
+        
+        response = self.client.post("/api/fleet/trips/", trip_payload, format="json")
+        self.assertEqual(response.status_code, 201)
+        
+        # Check trip status and side effects
+        trip = Trip.objects.get(id=response.data["id"])
+        self.assertEqual(trip.status, TripStatus.ASSIGNED)
+        self.assertEqual(trip.driver, available_driver)
+        self.assertEqual(trip.vehicle, idle_vehicle)
+        
+        available_driver.refresh_from_db()
+        idle_vehicle.refresh_from_db()
+        self.assertEqual(available_driver.status, DriverStatus.ASSIGNED)
+        self.assertEqual(idle_vehicle.assigned_driver, available_driver)
+
+    def test_create_trip_with_conflict_driver_assignment_fails(self):
+        # Create another trip payload with the same driver in the same time window
+        available_driver = Driver.objects.create(
+            name="Conflicting Driver",
+            phone="+91 92222 44444",
+            license_number="DL-DRV-CONFLICT",
+            home_base="Delhi",
+            status=DriverStatus.AVAILABLE,
+        )
+        
+        trip_payload1 = {
+            "booking_type": "ADHOC",
+            "customer_name": "Passenger 1",
+            "pickup_city": "Delhi",
+            "drop_city": "Gurgaon",
+            "pickup_at": (timezone.now() + timedelta(hours=5)).isoformat(),
+            "estimated_drop_at": (timezone.now() + timedelta(hours=7)).isoformat(),
+            "driver_id": available_driver.id,
+            "fare_amount": "1000.00",
+        }
+        
+        # Create first trip successfully (which marks the driver status as ASSIGNED)
+        response1 = self.client.post("/api/fleet/trips/", trip_payload1, format="json")
+        self.assertEqual(response1.status_code, 201)
+        
+        # Now try to create second trip with same driver in overlapping window
+        trip_payload2 = {
+            "booking_type": "ADHOC",
+            "customer_name": "Passenger 2",
+            "pickup_city": "Delhi",
+            "drop_city": "Gurgaon",
+            "pickup_at": (timezone.now() + timedelta(hours=6)).isoformat(),
+            "estimated_drop_at": (timezone.now() + timedelta(hours=8)).isoformat(),
+            "driver_id": available_driver.id,
+            "fare_amount": "1000.00",
+        }
+        
+        response2 = self.client.post("/api/fleet/trips/", trip_payload2, format="json")
+        # Should fail validation due to overlapping window and driver not being AVAILABLE
+        self.assertEqual(response2.status_code, 400)

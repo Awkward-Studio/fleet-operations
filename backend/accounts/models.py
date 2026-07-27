@@ -7,6 +7,7 @@ class UserRole(models.TextChoices):
     DISPATCHER = "dispatcher", "Dispatcher"
     ACCOUNTANT = "accountant", "Accountant"
     COMMERCIAL = "commercial", "Commercial"
+    DRIVER = "driver", "Driver"
 
 
 class User(AbstractUser):
@@ -30,5 +31,7 @@ class User(AbstractUser):
             return ["read_customers", "write_customers", "read_contracts", "write_contracts", "dispatch_trips"]
         elif self.role in [UserRole.COMMERCIAL, UserRole.ACCOUNTANT]:
             return ["read_customers", "write_customers", "read_contracts", "write_contracts"]
+        elif self.role == UserRole.DRIVER:
+            return []
         else:
             return ["read_customers", "dispatch_trips"]

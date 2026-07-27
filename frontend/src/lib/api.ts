@@ -15,6 +15,8 @@ export type Driver = {
   home_base: string;
   status: string;
   rating: string;
+  user_username?: string | null;
+  user_email?: string | null;
   aadhaar_card?: UploadedAsset | null;
   driving_license?: UploadedAsset | null;
   driving_license_expiry_date?: string | null;
@@ -451,6 +453,8 @@ export function createDriver(payload: {
   driving_license_id?: string | null;
   driving_license_expiry_date?: string | null;
   police_clearance_certificate_id?: string | null;
+  email?: string;
+  password?: string;
 }) {
   return request<Driver>("/drivers/", {
     method: "POST",
@@ -509,6 +513,8 @@ export function createTrip(payload: {
   drop_latitude?: string | number | null;
   drop_longitude?: string | number | null;
   distance_km?: string | number | null;
+  driver_id?: number | null;
+  vehicle_id?: number | null;
 }) {
   return request<Trip>("/trips/", {
     method: "POST",

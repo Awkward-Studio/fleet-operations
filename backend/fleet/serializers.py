@@ -261,6 +261,12 @@ class CorporateContractSerializer(serializers.ModelSerializer):
 class DriverSerializer(serializers.ModelSerializer):
     user_username = serializers.ReadOnlyField(source="user.username")
     user_email = serializers.ReadOnlyField(source="user.email")
+    email = serializers.EmailField(required=False, write_only=True)
+    password = serializers.CharField(
+        required=False,
+        write_only=True,
+        style={"input_type": "password"},
+    )
     aadhaar_card = UploadedAssetSerializer(read_only=True)
     aadhaar_card_id = serializers.PrimaryKeyRelatedField(
         queryset=UploadedAsset.objects.all(),
@@ -293,6 +299,8 @@ class DriverSerializer(serializers.ModelSerializer):
             "user",
             "user_username",
             "user_email",
+            "email",
+            "password",
             "name",
             "phone",
             "license_number",
@@ -307,6 +315,47 @@ class DriverSerializer(serializers.ModelSerializer):
             "police_clearance_certificate",
             "police_clearance_certificate_id",
         ]
+
+    def validate_email(self, value):
+        if value:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            if User.objects.filter(email__iexact=value).exists():
+                raise serializers.ValidationError("A user with this email already exists.")
+        return value.lower()
+
+    def validate(self, attrs):
+        email = attrs.get("email")
+        password = attrs.get("password")
+        if email and not password:
+            raise serializers.ValidationError({"password": "Password is required when email is provided."})
+        if password and not email:
+            raise serializers.ValidationError({"email": "Email is required when password is provided."})
+        if password and len(password) < 6:
+            raise serializers.ValidationError({"password": "Password must be at least 6 characters long."})
+        return attrs
+
+    def create(self, validated_data):
+        email = validated_data.pop("email", None)
+        password = validated_data.pop("password", None)
+        
+        from django.db import transaction
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        with transaction.atomic():
+            user = None
+            if email and password:
+                user = User.objects.create_user(
+                    username=email,
+                    email=email,
+                    password=password,
+                    role="driver",
+                    first_name=validated_data.get("name", "").split(" ")[0],
+                    last_name=" ".join(validated_data.get("name", "").split(" ")[1:]) if len(validated_data.get("name", "").split(" ")) > 1 else "",
+                )
+            driver = Driver.objects.create(user=user, **validated_data)
+            return driver
 
 
 class VehicleSerializer(serializers.ModelSerializer):
@@ -351,7 +400,21 @@ class VehicleSerializer(serializers.ModelSerializer):
 
 class TripSerializer(serializers.ModelSerializer):
     vehicle = VehicleSerializer(read_only=True)
+    vehicle_id = serializers.PrimaryKeyRelatedField(
+        queryset=Vehicle.objects.all(),
+        source="vehicle",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
     driver = DriverSerializer(read_only=True)
+    driver_id = serializers.PrimaryKeyRelatedField(
+        queryset=Driver.objects.all(),
+        source="driver",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
     customer_details = CorporateCustomerSerializer(source="customer", read_only=True)
     checklist = serializers.SerializerMethodField()
     otp_verified = serializers.SerializerMethodField()
@@ -387,7 +450,9 @@ class TripSerializer(serializers.ModelSerializer):
             "estimated_drop_at",
             "status",
             "vehicle",
+            "vehicle_id",
             "driver",
+            "driver_id",
             "ota_source",
             "fare_amount",
             "notes",
@@ -463,7 +528,98 @@ class TripSerializer(serializers.ModelSerializer):
             cust_name = attrs.get("customer_name", getattr(self.instance, "customer_name", ""))
             attrs["customer_display_name_snapshot"] = cust_name
 
+        # Validate driver and vehicle assignments
+        driver = attrs.get("driver")
+        vehicle = attrs.get("vehicle")
+
+        if driver:
+            if driver.status not in [DriverStatus.AVAILABLE, DriverStatus.ASSIGNED]:
+                raise serializers.ValidationError({"driver_id": "Driver is not available."})
+            
+            if pickup_at and drop_at:
+                driver_overlap = Trip.objects.filter(
+                    driver=driver,
+                    pickup_at__lt=drop_at,
+                    estimated_drop_at__gt=pickup_at,
+                ).exclude(status__in=[TripStatus.COMPLETED, TripStatus.CANCELLED])
+                if self.instance:
+                    driver_overlap = driver_overlap.exclude(pk=self.instance.pk)
+                if driver_overlap.exists():
+                    raise serializers.ValidationError({"driver_id": "Driver is already booked for this time window."})
+
+        if vehicle:
+            if vehicle.status not in [VehicleStatus.IDLE]:
+                raise serializers.ValidationError({"vehicle_id": "Vehicle is not idle."})
+            if not vehicle.is_compliant:
+                raise serializers.ValidationError({"vehicle_id": "Vehicle has expired compliance documents."})
+
+            if pickup_at and drop_at:
+                overlap = Trip.objects.filter(
+                    vehicle=vehicle,
+                    pickup_at__lt=drop_at,
+                    estimated_drop_at__gt=pickup_at,
+                ).exclude(status__in=[TripStatus.COMPLETED, TripStatus.CANCELLED])
+                if self.instance:
+                    overlap = overlap.exclude(pk=self.instance.pk)
+                if overlap.exists():
+                    raise serializers.ValidationError({"vehicle_id": "Vehicle is already booked for this time window."})
+
         return attrs
+
+    def create(self, validated_data):
+        driver = validated_data.get("driver")
+        vehicle = validated_data.get("vehicle")
+
+        if driver or vehicle:
+            validated_data["status"] = TripStatus.ASSIGNED
+
+        from django.db import transaction
+        with transaction.atomic():
+            trip = super().create(validated_data)
+
+            if driver:
+                driver.status = DriverStatus.ASSIGNED
+                driver.save(update_fields=["status"])
+
+            if vehicle:
+                if driver:
+                    vehicle.assigned_driver = driver
+                vehicle.status = VehicleStatus.IDLE
+                vehicle.save(update_fields=["assigned_driver", "status"])
+
+            return trip
+
+    def update(self, instance, validated_data):
+        old_driver = instance.driver
+        old_vehicle = instance.vehicle
+
+        driver = validated_data.get("driver", old_driver)
+        vehicle = validated_data.get("vehicle", old_vehicle)
+
+        if (driver and not old_driver) or (vehicle and not old_vehicle):
+            validated_data["status"] = TripStatus.ASSIGNED
+
+        from django.db import transaction
+        with transaction.atomic():
+            trip = super().update(instance, validated_data)
+
+            if driver and driver != old_driver:
+                driver.status = DriverStatus.ASSIGNED
+                driver.save(update_fields=["status"])
+                if old_driver and not Trip.objects.filter(driver=old_driver, status__in=[TripStatus.ASSIGNED, TripStatus.EN_ROUTE_PICKUP, TripStatus.ACTIVE]).exclude(pk=trip.pk).exists():
+                    old_driver.status = DriverStatus.AVAILABLE
+                    old_driver.save(update_fields=["status"])
+
+            if vehicle and vehicle != old_vehicle:
+                if driver:
+                    vehicle.assigned_driver = driver
+                vehicle.status = VehicleStatus.IDLE
+                vehicle.save(update_fields=["assigned_driver", "status"])
+                if old_vehicle and not Trip.objects.filter(vehicle=old_vehicle, status__in=[TripStatus.ASSIGNED, TripStatus.EN_ROUTE_PICKUP, TripStatus.ACTIVE]).exclude(pk=trip.pk).exists():
+                    old_vehicle.status = VehicleStatus.IDLE
+                    old_vehicle.save(update_fields=["status"])
+
+            return trip
 
     def get_checklist(self, obj):
         checklist = getattr(obj, "checklist", None)

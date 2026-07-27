@@ -739,6 +739,8 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
             <CreateTripView
               role={role}
               onCreateTrip={handleCreateTrip}
+              drivers={drivers}
+              vehicles={vehicles}
             />
           ) : null}
 
@@ -1389,13 +1391,15 @@ function TripsView(props: {
 function CreateTripView(props: {
   role: Role;
   onCreateTrip: (payload: any, onSuccess: () => void) => void;
+  drivers: Driver[];
+  vehicles: Vehicle[];
 }) {
   return (
     <section className="grid">
 
       {props.role !== "accountant" ? (
         <Panel title="New OTA Trip">
-          <TripForm onCreateTrip={props.onCreateTrip} />
+          <TripForm onCreateTrip={props.onCreateTrip} drivers={props.drivers} vehicles={props.vehicles} />
         </Panel>
       ) : (
         <div className="notice">Accountant mode keeps trip creation disabled and focuses on billing and payout review.</div>
@@ -1851,6 +1855,8 @@ function DriverForm({
   const [homeBase, setHomeBase] = useState(initialData?.home_base || "");
   const [driverStatus, setDriverStatus] = useState(initialData?.status || "available");
   const [rating, setRating] = useState(initialData?.rating || "4.5");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   // Documents state
   const [aadhaarCard, setAadhaarCard] = useState<UploadedAsset | null>(initialData?.aadhaar_card || null);
@@ -1865,6 +1871,16 @@ function DriverForm({
       return;
     }
 
+    if (!initialData && (!email || !password)) {
+      alert("Please enter both email and password to create a driver user account.");
+      return;
+    }
+
+    if (!initialData && password.length < 6) {
+      alert("Password must be at least 6 characters long.");
+      return;
+    }
+
     onSubmit({
       name,
       phone,
@@ -1875,7 +1891,9 @@ function DriverForm({
       aadhaar_card_id: aadhaarCard?.id || null,
       driving_license_id: drivingLicense?.id || null,
       driving_license_expiry_date: dlExpiryDate || null,
-      police_clearance_certificate_id: pcc?.id || null
+      police_clearance_certificate_id: pcc?.id || null,
+      email: !initialData ? email : undefined,
+      password: !initialData ? password : undefined,
     });
   };
 
@@ -1943,6 +1961,30 @@ function DriverForm({
             onChange={(e) => setRating(e.target.value)}
           />
         </div>
+        {!initialData && (
+          <>
+            <div className="field">
+              <label>Email *</label>
+              <input
+                type="email"
+                required
+                placeholder="e.g. driver@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Password *</label>
+              <input
+                type="password"
+                required
+                placeholder="Min 6 characters"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
@@ -2234,7 +2276,15 @@ function TripsTable({ trips, onTransition }: { trips: Trip[]; onTransition: (tri
   );
 }
 
-function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: () => void) => void }) {
+function TripForm({
+  onCreateTrip,
+  drivers = [],
+  vehicles = []
+}: {
+  onCreateTrip: (payload: any, onSuccess: () => void) => void;
+  drivers?: Driver[];
+  vehicles?: Vehicle[];
+}) {
   const [pickupCity, setPickupCity] = useState("");
   const [dropCity, setDropCity] = useState("");
   const [pickupLat, setPickupLat] = useState<number | null>(null);
@@ -2248,6 +2298,17 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
   const [pickupTime, setPickupTime] = useState("");
   const [dropDate, setDropDate] = useState("");
   const [dropTime, setDropTime] = useState("");
+
+  const [selectedDriverId, setSelectedDriverId] = useState<number | null>(null);
+  const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
+
+  const freeDriverUsers = useMemo(() => {
+    return drivers.filter((d) => d.status === "available" && d.user_email);
+  }, [drivers]);
+
+  const idleVehicles = useMemo(() => {
+    return vehicles.filter((v) => v.status === "idle" && v.is_compliant);
+  }, [vehicles]);
 
   useEffect(() => {
     if (pickupDate && pickupTime && distanceKm) {
@@ -2360,6 +2421,8 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       drop_latitude: dropLat,
       drop_longitude: dropLng,
       distance_km: distanceKm,
+      driver_id: selectedDriverId,
+      vehicle_id: selectedVehicleId,
     };
 
     if (bookingType === "CORPORATE") {
@@ -2394,6 +2457,8 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       setDropDate("");
       setDropTime("");
       setQuote(null);
+      setSelectedDriverId(null);
+      setSelectedVehicleId(null);
       setMapKey((prev) => prev + 1);
       formElement.reset();
     });
@@ -2548,6 +2613,37 @@ function TripForm({ onCreateTrip }: { onCreateTrip: (payload: any, onSuccess: ()
       ) : (
         <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
       )}
+
+      <div className="form-grid" style={{ gap: 12, marginTop: 12 }}>
+        <div className="field">
+          <label>Assign Driver (Optional)</label>
+          <select
+            value={selectedDriverId || ""}
+            onChange={(e) => setSelectedDriverId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">-- No Driver Assigned --</option>
+            {freeDriverUsers.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} ({d.phone})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Assign Vehicle (Optional)</label>
+          <select
+            value={selectedVehicleId || ""}
+            onChange={(e) => setSelectedVehicleId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">-- No Vehicle Assigned --</option>
+            {idleVehicles.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.registration_number} ({v.make} {v.model})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {distanceKm !== null && (
         <div style={{ padding: 12, background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: 8, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>

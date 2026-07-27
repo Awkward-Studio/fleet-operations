@@ -134,3 +134,135 @@ class AuthTests(APITestCase):
         response_spaced = self.client.post(self.login_url, login_data_spaced, format="json")
         self.assertEqual(response_spaced.status_code, status.HTTP_200_OK)
 
+
+from rentals.models import CorporateCustomer
+from .models import CorporateMembership, CorporateRole, ROLE_PERMISSIONS
+
+class TenancyTests(APITestCase):
+    def setUp(self):
+        self.me_url = reverse("auth_me")
+        self.customer = CorporateCustomer.objects.create(
+            name="Acme Corp",
+            billing_address="123 Road",
+            email="acme@example.com",
+            contact_person="John Acme",
+            phone="12345678"
+        )
+        self.user = User.objects.create_user(
+            username="acme_admin",
+            email="admin@acme.com",
+            password="password123"
+        )
+        self.membership = CorporateMembership.objects.create(
+            user=self.user,
+            company=self.customer,
+            role=CorporateRole.ADMIN
+        )
+
+    def test_auth_me_returns_memberships_and_permissions(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(self.me_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["corporate_memberships"]), 1)
+        membership_data = response.data["corporate_memberships"][0]
+        self.assertEqual(membership_data["company_name"], "Acme Corp")
+        self.assertEqual(membership_data["role"], "admin")
+        self.assertEqual(membership_data["permissions"], ROLE_PERMISSIONS[CorporateRole.ADMIN])
+
+
+from django.utils import timezone
+from datetime import timedelta
+from .models import CorporateInvitation
+
+class InvitationTests(APITestCase):
+    def setUp(self):
+        self.invitations_url = reverse("portal_invitations")
+        self.customer = CorporateCustomer.objects.create(
+            name="Acme Corp",
+            billing_address="123 Road",
+            email="acme@example.com",
+            contact_person="John Acme",
+            phone="12345678"
+        )
+        self.admin_user = User.objects.create_user(
+            username="acme_admin",
+            email="admin@acme.com",
+            password="password123"
+        )
+        CorporateMembership.objects.create(
+            user=self.admin_user,
+            company=self.customer,
+            role=CorporateRole.ADMIN
+        )
+        self.regular_user = User.objects.create_user(
+            username="regular",
+            email="regular@acme.com",
+            password="password123"
+        )
+
+    def test_create_invitation_success(self):
+        self.client.force_authenticate(user=self.admin_user)
+        data = {
+            "email": "invitee@acme.com",
+            "company": self.customer.id,
+            "role": "travel_desk"
+        }
+        response = self.client.post(self.invitations_url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["email"], "invitee@acme.com")
+        self.assertEqual(response.data["role"], "travel_desk")
+
+    def test_create_invitation_unauthorized(self):
+        self.client.force_authenticate(user=self.regular_user)
+        data = {
+            "email": "invitee@acme.com",
+            "company": self.customer.id,
+            "role": "travel_desk"
+        }
+        response = self.client.post(self.invitations_url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_accept_invitation_success(self):
+        invite = CorporateInvitation.objects.create(
+            email="new_user@acme.com",
+            company=self.customer,
+            role=CorporateRole.TRAVEL_DESK,
+            invited_by=self.admin_user,
+            expires_at=timezone.now() + timedelta(days=1)
+        )
+        accept_url = reverse("portal_accept_invitation", kwargs={"pk": invite.id})
+        detail_url = reverse("portal_invitation_detail", kwargs={"pk": invite.id})
+        
+        # 1. Fetch detail first
+        response = self.client.get(detail_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # 2. Accept
+        register_data = {
+            "username": "new_travel_guy",
+            "password": "newpassword123",
+            "confirm_password": "newpassword123",
+            "first_name": "Travel",
+            "last_name": "Guy"
+        }
+        response = self.client.post(accept_url, register_data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verify user & membership exist
+        user = User.objects.get(username="new_travel_guy")
+        self.assertEqual(user.email, "new_user@acme.com")
+        membership = user.corporate_memberships.first()
+        self.assertIsNotNone(membership)
+        self.assertEqual(membership.company, self.customer)
+        self.assertEqual(membership.role, "travel_desk")
+        
+        # Verify invitation is marked used
+        invite.refresh_from_db()
+        self.assertIsNotNone(invite.used_at)
+        
+        # 3. Try to accept again
+        response2 = self.client.post(accept_url, register_data, format="json")
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+

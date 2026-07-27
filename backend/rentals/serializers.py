@@ -90,3 +90,44 @@ class CreateRentalBookingSerializer(serializers.ModelSerializer):
             "driver",
             "notes",
         ]
+
+
+from .models import GuestProfile, CorporateApprovalPolicy, BookingRequest, BookingRequestAmendment
+
+class GuestProfileSerializer(serializers.ModelSerializer):
+    company_name = serializers.ReadOnlyField(source="company.name")
+
+    class Meta:
+        model = GuestProfile
+        fields = "__all__"
+
+
+class CorporateApprovalPolicySerializer(serializers.ModelSerializer):
+    company_name = serializers.ReadOnlyField(source="company.name")
+
+    class Meta:
+        model = CorporateApprovalPolicy
+        fields = "__all__"
+
+
+class BookingRequestAmendmentSerializer(serializers.ModelSerializer):
+    amended_by_username = serializers.ReadOnlyField(source="amended_by.username")
+
+    class Meta:
+        model = BookingRequestAmendment
+        fields = "__all__"
+
+
+class BookingRequestSerializer(serializers.ModelSerializer):
+    company_name = serializers.ReadOnlyField(source="company.name")
+    requester_username = serializers.ReadOnlyField(source="requester.username")
+    package_name = serializers.ReadOnlyField(source="package.name")
+    guest_details = GuestProfileSerializer(source="guest", read_only=True)
+    amendments = BookingRequestAmendmentSerializer(many=True, read_only=True)
+    quote_signature = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    class Meta:
+        model = BookingRequest
+        fields = "__all__"
+        read_only_fields = ["booking_number", "requester", "status", "approver", "approved_at", "created_at", "updated_at"]
+

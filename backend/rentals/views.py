@@ -32,6 +32,10 @@ from .serializers import (
     RentalInvoiceSerializer,
     RentalPackageSerializer,
     RentalPricingRuleSerializer,
+    GuestProfileSerializer,
+    CorporateApprovalPolicySerializer,
+    BookingRequestSerializer,
+    BookingRequestAmendmentSerializer,
 )
 
 
@@ -371,3 +375,403 @@ def driver_portal_today(request):
         },
         "assigned_rentals": RentalBookingSerializer(bookings, many=True).data
     })
+
+
+import hashlib
+
+def generate_quote_signature(company_id, package_id, city, base_price, extra_km_rate, extra_hour_rate, driver_allowance):
+    secret = "portal-quote-secret-2026"
+    msg = f"{company_id}-{package_id}-{city}-{base_price}-{extra_km_rate}-{extra_hour_rate}-{driver_allowance}-{secret}"
+    return hashlib.sha256(msg.encode("utf-8")).hexdigest()
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def portal_packages(request):
+    memberships = request.user.active_memberships
+    if not memberships.exists() and not request.user.is_superuser:
+        return Response({"detail": "User is not associated with any active corporate customer."}, status=status.HTTP_403_FORBIDDEN)
+    
+    company_id = request.query_params.get("company_id")
+    if not company_id:
+        if request.user.is_superuser:
+            company_id = request.user.corporate_memberships.first().company_id if request.user.corporate_memberships.exists() else None
+        else:
+            company_id = memberships.first().company_id
+
+    city = request.query_params.get("city")
+    
+    pricing_rules = RentalPricingRule.objects.all()
+    if company_id:
+        pricing_rules = pricing_rules.filter(company_id=company_id)
+    if city:
+        pricing_rules = pricing_rules.filter(Q(city__iexact=city) | Q(city=""))
+        
+    package_ids = pricing_rules.values_list("package_id", flat=True)
+    packages = RentalPackage.objects.filter(id__in=package_ids, is_active=True)
+    
+    if not packages.exists():
+        default_rules = RentalPricingRule.objects.filter(company__isnull=True)
+        if city:
+            default_rules = default_rules.filter(Q(city__iexact=city) | Q(city=""))
+        def_pkg_ids = default_rules.values_list("package_id", flat=True)
+        packages = RentalPackage.objects.filter(id__in=def_pkg_ids, is_active=True)
+
+    serializer = RentalPackageSerializer(packages, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def portal_quote(request):
+    memberships = request.user.active_memberships
+    if not memberships.exists() and not request.user.is_superuser:
+        return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        
+    company_id = request.data.get("company_id")
+    if not company_id:
+        company_id = memberships.first().company_id if not request.user.is_superuser else None
+    
+    if not company_id:
+         return Response({"detail": "company_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+         
+    if not request.user.is_superuser and not memberships.filter(company_id=company_id).exists():
+        return Response({"detail": "Access to this corporate customer is forbidden."}, status=status.HTTP_403_FORBIDDEN)
+        
+    pickup_city = request.data.get("pickup_city")
+    package_id = request.data.get("package_id")
+    vehicle_category = request.data.get("vehicle_category", "Sedan")
+    
+    if not pickup_city or not package_id:
+        return Response({"detail": "pickup_city and package_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        package = RentalPackage.objects.get(pk=package_id, is_active=True)
+    except RentalPackage.DoesNotExist:
+        return Response({"detail": "Package not found or inactive."}, status=status.HTTP_404_NOT_FOUND)
+        
+    try:
+        company = CorporateCustomer.objects.get(pk=company_id)
+    except CorporateCustomer.DoesNotExist:
+        return Response({"detail": "Company not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+    rule = RentalPricingRule.objects.filter(
+        company=company,
+        city__iexact=pickup_city,
+        package=package
+    ).first()
+    
+    if not rule:
+        rule = RentalPricingRule.objects.filter(
+            company=company,
+            city="",
+            package=package
+        ).first()
+        
+    if not rule:
+        rule = RentalPricingRule.objects.filter(
+            company__isnull=True,
+            city__iexact=pickup_city,
+            package=package
+        ).first()
+        
+    if rule:
+        base_price = rule.base_price
+        extra_km_rate = rule.extra_km_rate
+        extra_hour_rate = rule.extra_hour_rate
+        driver_allowance = rule.driver_allowance
+    else:
+        base_price = package.default_base_price
+        extra_km_rate = package.extra_km_rate
+        extra_hour_rate = package.extra_hour_rate
+        driver_allowance = package.driver_allowance_per_day
+        
+    expiry = timezone.now() + timedelta(hours=24)
+    sig = generate_quote_signature(company_id, package_id, pickup_city, base_price, extra_km_rate, extra_hour_rate, driver_allowance)
+    
+    return Response({
+        "company_id": company_id,
+        "pickup_city": pickup_city,
+        "package_id": package.id,
+        "package_name": package.name,
+        "vehicle_category": vehicle_category,
+        "base_price": base_price,
+        "extra_km_rate": extra_km_rate,
+        "extra_hour_rate": extra_hour_rate,
+        "driver_allowance": driver_allowance,
+        "included_km": package.included_km,
+        "included_hours": package.included_hours,
+        "expires_at": expiry,
+        "signature": sig
+    })
+
+
+from .models import GuestProfile, CorporateApprovalPolicy, BookingRequest, BookingRequestAmendment, BookingRequestStatus
+from accounts.models import CorporateRole
+from rest_framework.exceptions import ValidationError
+
+class GuestProfileViewSet(viewsets.ModelViewSet):
+    queryset = GuestProfile.objects.all()
+    serializer_class = GuestProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.is_superuser:
+            return qs
+        memberships = self.request.user.active_memberships
+        company_ids = memberships.values_list("company_id", flat=True)
+        return qs.filter(company_id__in=company_ids)
+
+    def perform_create(self, serializer):
+        company = serializer.validated_data["company"]
+        if not self.request.user.is_superuser:
+            if not self.request.user.active_memberships.filter(company=company).exists():
+                raise ValidationError("You do not have permission to add guests to this company.")
+        serializer.save()
+
+
+class CorporateApprovalPolicyViewSet(viewsets.ModelViewSet):
+    queryset = CorporateApprovalPolicy.objects.all()
+    serializer_class = CorporateApprovalPolicySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.is_superuser:
+            return qs
+        memberships = self.request.user.active_memberships
+        company_ids = memberships.values_list("company_id", flat=True)
+        return qs.filter(company_id__in=company_ids)
+
+    def perform_create(self, serializer):
+        company = serializer.validated_data["company"]
+        if not self.request.user.is_superuser:
+            if not self.request.user.active_memberships.filter(company=company, role=CorporateRole.ADMIN).exists():
+                raise ValidationError("Only corporate admins can set approval policies.")
+        serializer.save()
+
+
+def handoff_booking_request_to_rental_booking(booking_request):
+    with transaction.atomic():
+        existing = RentalBooking.objects.filter(booking_number=booking_request.booking_number).first()
+        if existing:
+            return existing
+
+        booking = RentalBooking.objects.create(
+            booking_number=booking_request.booking_number,
+            customer_type="corporate",
+            customer_name=booking_request.passenger_name,
+            customer_phone=booking_request.passenger_phone,
+            customer_email=booking_request.passenger_email,
+            corporate_customer=booking_request.company,
+            pickup_address=booking_request.pickup_address,
+            drop_address=booking_request.drop_address,
+            pickup_city=booking_request.pickup_city,
+            pickup_at=booking_request.pickup_at,
+            expected_return_at=booking_request.expected_return_at,
+            package=booking_request.package,
+            vehicle_category=booking_request.vehicle_category,
+            notes=f"Cost Centre: {booking_request.cost_centre}. PO: {booking_request.po_reference}.",
+            status=RentalStatus.PENDING
+        )
+        return booking
+
+
+class BookingRequestViewSet(viewsets.ModelViewSet):
+    queryset = BookingRequest.objects.all()
+    serializer_class = BookingRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.is_superuser:
+            return qs
+        memberships = self.request.user.active_memberships
+        company_ids = memberships.values_list("company_id", flat=True)
+        return qs.filter(company_id__in=company_ids)
+
+    def perform_create(self, serializer):
+        company = serializer.validated_data["company"]
+        package = serializer.validated_data["package"]
+        city = serializer.validated_data["pickup_city"]
+        
+        memberships = self.request.user.active_memberships
+        user_membership = memberships.filter(company=company).first()
+        if not self.request.user.is_superuser and not user_membership:
+            raise ValidationError("You do not have permission to book for this company.")
+            
+        rule = RentalPricingRule.objects.filter(company=company, city__iexact=city, package=package).first()
+        if not rule:
+            rule = RentalPricingRule.objects.filter(company=company, city="", package=package).first()
+        if not rule:
+            rule = RentalPricingRule.objects.filter(company__isnull=True, city__iexact=city, package=package).first()
+            
+        if rule:
+            base_price = rule.base_price
+            extra_km_rate = rule.extra_km_rate
+            extra_hour_rate = rule.extra_hour_rate
+            driver_allowance = rule.driver_allowance
+        else:
+            base_price = package.default_base_price
+            extra_km_rate = package.extra_km_rate
+            extra_hour_rate = package.extra_hour_rate
+            driver_allowance = package.driver_allowance_per_day
+
+        sig = serializer.validated_data.get("quote_signature")
+        if sig:
+            expected_sig = generate_quote_signature(str(company.id), str(package.id), city, base_price, extra_km_rate, extra_hour_rate, driver_allowance)
+            if sig != expected_sig:
+                raise ValidationError({"quote_signature": "Pricing details have changed since the quote was generated. Please request a new quote."})
+                
+        policy = CorporateApprovalPolicy.objects.filter(company=company).first()
+        require_approval = False
+        if policy:
+            if policy.require_po and not serializer.validated_data.get("po_reference"):
+                raise ValidationError({"po_reference": "PO Reference is required by your corporate policy."})
+            if policy.require_cost_centre and not serializer.validated_data.get("cost_centre"):
+                raise ValidationError({"cost_centre": "Cost Centre is required by your corporate policy."})
+            if policy.approval_threshold_amount > 0 and base_price > policy.approval_threshold_amount:
+                require_approval = True
+                
+        role = user_membership.role if user_membership else "admin"
+        if role in [CorporateRole.APPROVER, CorporateRole.ADMIN] or self.request.user.is_superuser:
+            status_val = BookingRequestStatus.APPROVED
+        elif require_approval:
+            status_val = BookingRequestStatus.APPROVAL_REQUIRED
+        else:
+            status_val = BookingRequestStatus.SUBMITTED
+            
+        booking_number = f"PQ-{timezone.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        
+        booking_req = serializer.save(
+            booking_number=booking_number,
+            requester=self.request.user,
+            status=status_val,
+            quote_base_price=base_price,
+            quote_extra_km_rate=extra_km_rate,
+            quote_extra_hour_rate=extra_hour_rate,
+            quote_driver_allowance=driver_allowance
+        )
+        
+        if status_val == BookingRequestStatus.APPROVED:
+            handoff_booking_request_to_rental_booking(booking_req)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        booking_req = self.get_object()
+        memberships = request.user.active_memberships
+        user_membership = memberships.filter(company=booking_req.company).first()
+        
+        if not request.user.is_superuser:
+            role = user_membership.role if user_membership else None
+            if role not in [CorporateRole.APPROVER, CorporateRole.ADMIN]:
+                return Response({"detail": "Only approvers or corporate admins can approve bookings."}, status=status.HTTP_403_FORBIDDEN)
+                
+        if booking_req.status not in [BookingRequestStatus.SUBMITTED, BookingRequestStatus.APPROVAL_REQUIRED]:
+            return Response({"detail": "This booking request cannot be approved in its current state."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        with transaction.atomic():
+            booking_req.status = BookingRequestStatus.APPROVED
+            booking_req.approver = request.user
+            booking_req.approved_at = timezone.now()
+            booking_req.save()
+            
+            handoff_booking_request_to_rental_booking(booking_req)
+            
+        return Response(BookingRequestSerializer(booking_req).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        booking_req = self.get_object()
+        memberships = request.user.active_memberships
+        user_membership = memberships.filter(company=booking_req.company).first()
+        
+        if not request.user.is_superuser:
+            role = user_membership.role if user_membership else None
+            if role not in [CorporateRole.APPROVER, CorporateRole.ADMIN]:
+                return Response({"detail": "Only approvers or corporate admins can reject bookings."}, status=status.HTTP_403_FORBIDDEN)
+                
+        if booking_req.status not in [BookingRequestStatus.SUBMITTED, BookingRequestStatus.APPROVAL_REQUIRED]:
+            return Response({"detail": "This booking request cannot be rejected in its current state."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        booking_req.status = BookingRequestStatus.REJECTED
+        booking_req.save()
+        
+        return Response(BookingRequestSerializer(booking_req).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        booking_req = self.get_object()
+        memberships = request.user.active_memberships
+        user_membership = memberships.filter(company=booking_req.company).first()
+        
+        if not request.user.is_superuser and not user_membership:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+        if booking_req.status == BookingRequestStatus.CANCELLED:
+            return Response({"detail": "Booking request is already cancelled."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        with transaction.atomic():
+            booking_req.status = BookingRequestStatus.CANCELLED
+            booking_req.save()
+            
+            rental_booking = RentalBooking.objects.filter(booking_number=booking_req.booking_number).first()
+            if rental_booking:
+                rental_booking.status = RentalStatus.CANCELLED
+                rental_booking.save()
+                
+        return Response(BookingRequestSerializer(booking_req).data)
+
+    @action(detail=True, methods=["post"])
+    def amend(self, request, pk=None):
+        booking_req = self.get_object()
+        memberships = request.user.active_memberships
+        user_membership = memberships.filter(company=booking_req.company).first()
+        
+        if not request.user.is_superuser and not user_membership:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+        if booking_req.status in [BookingRequestStatus.CANCELLED, BookingRequestStatus.COMPLETED, BookingRequestStatus.REJECTED]:
+            return Response({"detail": "Cannot amend cancelled, completed, or rejected bookings."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        reason = request.data.get("reason", "Amendment from portal")
+        fields_to_change = ["passenger_name", "passenger_phone", "passenger_email", "pickup_address", "drop_address", "pickup_city", "pickup_at", "expected_return_at", "cost_centre", "po_reference"]
+        
+        changes = {}
+        for field in fields_to_change:
+            if field in request.data:
+                val = request.data[field]
+                old_val = getattr(booking_req, field)
+                if str(old_val) != str(val):
+                    changes[field] = str(val)
+                    setattr(booking_req, field, val)
+                    
+        if not changes:
+            return Response({"detail": "No fields were changed."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        with transaction.atomic():
+            booking_req.save()
+            BookingRequestAmendment.objects.create(
+                booking_request=booking_req,
+                amended_by=request.user,
+                changes=changes,
+                reason=reason
+            )
+            
+            rental_booking = RentalBooking.objects.filter(booking_number=booking_req.booking_number).first()
+            if rental_booking:
+                for field, val in changes.items():
+                    if field == "passenger_name":
+                        rental_booking.customer_name = val
+                    elif field == "passenger_phone":
+                        rental_booking.customer_phone = val
+                    elif field == "passenger_email":
+                        rental_booking.customer_email = val
+                    elif hasattr(rental_booking, field):
+                        setattr(rental_booking, field, val)
+                rental_booking.save()
+                
+        return Response(BookingRequestSerializer(booking_req).data)
+
+

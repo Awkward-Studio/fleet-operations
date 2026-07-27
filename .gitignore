@@ -14,3 +14,5 @@ coverage/
 dump_endpoints_markdown.py
 jsapi_response.json
 .agents
+get_tasks.py
+page.json

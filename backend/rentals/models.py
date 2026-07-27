@@ -203,3 +203,93 @@ class RentalInvoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_number} - ₹{self.final_total}"
+
+
+class GuestProfile(models.Model):
+    company = models.ForeignKey(CorporateCustomer, on_delete=models.CASCADE, related_name="guest_profiles")
+    name = models.CharField(max_length=120)
+    phone = models.CharField(max_length=24)
+    email = models.EmailField(blank=True, default="")
+    employee_id = models.CharField(max_length=50, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [("company", "phone")]
+
+    def __str__(self):
+        return f"{self.name} ({self.company.name})"
+
+
+class CorporateApprovalPolicy(models.Model):
+    company = models.OneToOneField(CorporateCustomer, on_delete=models.CASCADE, related_name="approval_policy")
+    require_po = models.BooleanField(default=False)
+    require_cost_centre = models.BooleanField(default=False)
+    approval_threshold_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    def __str__(self):
+        return f"Policy for {self.company.name}"
+
+
+class BookingRequestStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    SUBMITTED = "submitted", "Submitted"
+    APPROVAL_REQUIRED = "approval_required", "Approval Required"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+    CANCELLED = "cancelled", "Cancelled"
+    COMPLETED = "completed", "Completed"
+
+
+class BookingRequest(models.Model):
+    booking_number = models.CharField(max_length=32, unique=True)
+    company = models.ForeignKey(CorporateCustomer, on_delete=models.CASCADE, related_name="booking_requests")
+    requester = models.ForeignKey("accounts.User", on_delete=models.CASCADE, related_name="booking_requests")
+    guest = models.ForeignKey(GuestProfile, null=True, blank=True, on_delete=models.SET_NULL, related_name="booking_requests")
+    passenger_name = models.CharField(max_length=120)
+    passenger_phone = models.CharField(max_length=24)
+    passenger_email = models.EmailField(blank=True, default="")
+    pickup_address = models.TextField()
+    drop_address = models.TextField(blank=True, default="")
+    pickup_city = models.CharField(max_length=120)
+    pickup_at = models.DateTimeField()
+    expected_return_at = models.DateTimeField()
+    package = models.ForeignKey(RentalPackage, on_delete=models.PROTECT, related_name="booking_requests")
+    vehicle_category = models.CharField(max_length=40, default="Sedan")
+    cost_centre = models.CharField(max_length=80, blank=True, default="")
+    po_reference = models.CharField(max_length=80, blank=True, default="")
+    status = models.CharField(max_length=30, choices=BookingRequestStatus.choices, default=BookingRequestStatus.SUBMITTED)
+    
+    approver = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_requests")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    
+    # pricing rules snapshot
+    quote_base_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    quote_extra_km_rate = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
+    quote_extra_hour_rate = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
+    quote_driver_allowance = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-pickup_at"]
+
+    def __str__(self):
+        return f"{self.booking_number} - {self.passenger_name} ({self.status})"
+
+
+class BookingRequestAmendment(models.Model):
+    booking_request = models.ForeignKey(BookingRequest, on_delete=models.CASCADE, related_name="amendments")
+    amended_by = models.ForeignKey("accounts.User", on_delete=models.CASCADE)
+    amended_at = models.DateTimeField(auto_now_add=True)
+    changes = models.JSONField()
+    reason = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-amended_at"]
+
+    def __str__(self):
+        return f"Amendment to {self.booking_request.booking_number} at {self.amended_at}"
+

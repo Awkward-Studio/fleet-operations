@@ -4,13 +4,34 @@ from rest_framework import serializers
 User = get_user_model()
 
 
+from .models import CorporateMembership, CorporateRole, ROLE_PERMISSIONS, CorporateInvitation
+
+
+class CorporateMembershipSerializer(serializers.ModelSerializer):
+    company_name = serializers.ReadOnlyField(source="company.name")
+    company_id = serializers.ReadOnlyField(source="company.id")
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CorporateMembership
+        fields = ["id", "company_id", "company_name", "role", "is_active", "permissions"]
+
+    def get_permissions(self, obj):
+        return ROLE_PERMISSIONS.get(obj.role, [])
+
+
 class UserSerializer(serializers.ModelSerializer):
     permissions = serializers.ReadOnlyField(source="permissions_list")
+    corporate_memberships = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "first_name", "last_name", "role", "permissions"]
-        read_only_fields = ["id", "permissions"]
+        fields = ["id", "username", "email", "first_name", "last_name", "role", "permissions", "corporate_memberships"]
+        read_only_fields = ["id", "permissions", "corporate_memberships"]
+
+    def get_corporate_memberships(self, obj):
+        return CorporateMembershipSerializer(obj.active_memberships, many=True).data
+
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -74,3 +95,33 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError({"new_password": "New password must be different from old password."})
 
         return data
+
+
+class CorporateInvitationSerializer(serializers.ModelSerializer):
+    invited_by_username = serializers.ReadOnlyField(source="invited_by.username")
+    company_name = serializers.ReadOnlyField(source="company.name")
+
+    class Meta:
+        model = CorporateInvitation
+        fields = [
+            "id", "email", "company", "company_name", "role", 
+            "invited_by", "invited_by_username", "created_at", 
+            "expires_at", "used_at"
+        ]
+        read_only_fields = ["id", "invited_by", "created_at", "used_at", "expires_at"]
+
+
+class AcceptInvitationSerializer(serializers.Serializer):
+    username = serializers.CharField(required=True)
+    password = serializers.CharField(write_only=True, required=True, min_length=6)
+    confirm_password = serializers.CharField(write_only=True, required=True)
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        if data["password"] != data["confirm_password"]:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+        if User.objects.filter(username__iexact=data["username"]).exists():
+            raise serializers.ValidationError({"username": "A user with this username already exists."})
+        return data
+

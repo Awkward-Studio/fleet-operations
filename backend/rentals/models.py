@@ -227,6 +227,7 @@ class CorporateApprovalPolicy(models.Model):
     require_po = models.BooleanField(default=False)
     require_cost_centre = models.BooleanField(default=False)
     approval_threshold_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    location_precision_digits = models.PositiveIntegerField(default=4)
 
     def __str__(self):
         return f"Policy for {self.company.name}"
@@ -292,4 +293,98 @@ class BookingRequestAmendment(models.Model):
 
     def __str__(self):
         return f"Amendment to {self.booking_request.booking_number} at {self.amended_at}"
+
+
+class RentalBookingLocationLog(models.Model):
+    booking = models.ForeignKey(RentalBooking, related_name="location_logs", on_delete=models.CASCADE)
+    latitude = models.DecimalField(max_digits=11, decimal_places=8)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8)
+    timestamp = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [
+            models.Index(fields=["booking", "-timestamp"]),
+        ]
+
+    def __str__(self):
+        return f"Location for Booking {self.booking.booking_number} @ {self.timestamp}"
+
+
+class RentalBookingEvent(models.Model):
+    booking = models.ForeignKey(RentalBooking, related_name="events", on_delete=models.CASCADE)
+    event_type = models.CharField(max_length=50)
+    description = models.TextField()
+    is_customer_visible = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        visible = "Customer-facing" if self.is_customer_visible else "Internal"
+        return f"Event {self.event_type} for Booking {self.booking.booking_number} ({visible})"
+
+
+class RentalNotification(models.Model):
+    booking_number = models.CharField(max_length=32)
+    recipient_email = models.EmailField()
+    recipient_phone = models.CharField(max_length=24, blank=True, default="")
+    notification_type = models.CharField(max_length=50)
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    status = models.CharField(max_length=20, default="pending")  # pending, sent, failed
+    idempotency_key = models.CharField(max_length=120, unique=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    error_log = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Notification {self.notification_type} to {self.recipient_email} ({self.status})"
+
+
+class PortalSupportCase(models.Model):
+    company = models.ForeignKey(CorporateCustomer, on_delete=models.CASCADE, related_name="support_cases")
+    booking = models.ForeignKey(RentalBooking, null=True, blank=True, on_delete=models.SET_NULL, related_name="support_cases")
+    created_by = models.ForeignKey("accounts.User", on_delete=models.CASCADE)
+    subject = models.CharField(max_length=200)
+    description = models.TextField()
+    status = models.CharField(max_length=20, default="open")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Support Case #{self.id} for {self.company.name} ({self.status})"
+
+
+class PortalAuditEvent(models.Model):
+    company = models.ForeignKey(CorporateCustomer, on_delete=models.CASCADE, related_name="audit_events")
+    user = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL)
+    action_type = models.CharField(max_length=50)
+    description = models.TextField()
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        user_str = self.user.username if self.user else "System"
+        return f"Audit {self.action_type} by {user_str} at {self.created_at}"
+
+
+class PortalHandoffQueue(models.Model):
+    booking_request = models.OneToOneField(BookingRequest, on_delete=models.CASCADE, related_name="handoff_queue")
+    status = models.CharField(max_length=20, default="failed")
+    error_message = models.TextField()
+    retry_count = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Handoff failure for {self.booking_request.booking_number} ({self.status})"
 

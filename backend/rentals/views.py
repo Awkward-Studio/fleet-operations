@@ -95,6 +95,17 @@ class RentalBookingViewSet(viewsets.ModelViewSet):
             booking.status = RentalStatus.PENDING
         booking.save()
 
+        # Trigger event and notification if ready
+        booking_req = BookingRequest.objects.filter(booking_number=booking.booking_number).first()
+        if booking.vehicle and booking.driver:
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="driver_allocated",
+                description=f"Chauffeur {booking.driver.name} and vehicle {booking.vehicle.registration_number} have been assigned."
+            )
+            if booking_req:
+                send_rental_notification(booking_req, "driver_allocated", reason=f"Chauffeur {booking.driver.name.split()[0]} ({booking.driver.phone}) assigned. Vehicle: {booking.vehicle.registration_number}")
+
         return Response(RentalBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
@@ -117,6 +128,7 @@ class RentalBookingViewSet(viewsets.ModelViewSet):
             except Driver.DoesNotExist:
                 return Response({"detail": "Driver not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        old_status = booking.status
         if booking.vehicle and booking.driver:
             booking.status = RentalStatus.READY
         elif booking.vehicle:
@@ -125,6 +137,24 @@ class RentalBookingViewSet(viewsets.ModelViewSet):
             booking.status = RentalStatus.DRIVER_ASSIGNED
         
         booking.save()
+
+        # Log event and notify
+        booking_req = BookingRequest.objects.filter(booking_number=booking.booking_number).first()
+        if booking.driver and booking.vehicle and old_status != RentalStatus.READY:
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="driver_allocated",
+                description=f"Chauffeur {booking.driver.name} and vehicle {booking.vehicle.registration_number} have been assigned."
+            )
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="driver_arrived",
+                description="Chauffeur is ready for pickup."
+            )
+            if booking_req:
+                send_rental_notification(booking_req, "driver_allocated", reason=f"Chauffeur {booking.driver.name.split()[0]} ({booking.driver.phone}) assigned. Vehicle: {booking.vehicle.registration_number}")
+                send_rental_notification(booking_req, "arrived")
+
         return Response(RentalBookingSerializer(booking).data)
 
     @action(detail=True, methods=["post"])
@@ -163,6 +193,16 @@ class RentalBookingViewSet(viewsets.ModelViewSet):
                 odometer_reading=int(odometer_reading),
                 notes=checklist_data.get("notes", "Rental started")
             )
+
+            # Log Event & Notify
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="trip_started",
+                description=f"Trip started with starting odometer: {odometer_reading} km."
+            )
+            booking_req = BookingRequest.objects.filter(booking_number=booking.booking_number).first()
+            if booking_req:
+                send_rental_notification(booking_req, "started")
 
         return Response(RentalBookingSerializer(booking).data)
 
@@ -268,20 +308,64 @@ class RentalBookingViewSet(viewsets.ModelViewSet):
                 }
             )
 
+            # Log Event & Notify
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="trip_completed",
+                description=f"Trip completed successfully. Distance: {distance_travelled} km. Duration: {actual_hours} hours."
+            )
+            
+            booking_req = BookingRequest.objects.filter(booking_number=booking.booking_number).first()
+            if booking_req:
+                booking_req.status = BookingRequestStatus.COMPLETED
+                booking_req.save(update_fields=["status"])
+                send_rental_notification(booking_req, "completed")
+
         return Response(RentalBookingSerializer(booking).data)
 
     @action(detail=True, methods=["post"])
     def cancel_rental(self, request, pk=None):
         booking = self.get_object()
-        booking.status = RentalStatus.CANCELLED
-        booking.save()
-        if booking.vehicle and booking.vehicle.status == VehicleStatus.ACTIVE_TRIP:
-            booking.vehicle.status = VehicleStatus.IDLE
-            booking.vehicle.save()
-        if booking.driver and booking.driver.status == DriverStatus.ON_TRIP:
-            booking.driver.status = DriverStatus.AVAILABLE
-            booking.driver.save()
+        with transaction.atomic():
+            booking.status = RentalStatus.CANCELLED
+            booking.save()
+            if booking.vehicle and booking.vehicle.status == VehicleStatus.ACTIVE_TRIP:
+                booking.vehicle.status = VehicleStatus.IDLE
+                booking.vehicle.save()
+            if booking.driver and booking.driver.status == DriverStatus.ON_TRIP:
+                booking.driver.status = DriverStatus.AVAILABLE
+                booking.driver.save()
+
+            # Log Event & Notify
+            RentalBookingEvent.objects.create(
+                booking=booking,
+                event_type="trip_cancelled",
+                description="Trip was cancelled."
+            )
+            
+            booking_req = BookingRequest.objects.filter(booking_number=booking.booking_number).first()
+            if booking_req:
+                booking_req.status = BookingRequestStatus.CANCELLED
+                booking_req.save(update_fields=["status"])
+                send_rental_notification(booking_req, "cancelled")
+
         return Response(RentalBookingSerializer(booking).data)
+
+    @action(detail=True, methods=["post"])
+    def location(self, request, pk=None):
+        booking = self.get_object()
+        latitude = request.data.get("latitude")
+        longitude = request.data.get("longitude")
+        if not latitude or not longitude:
+            return Response({"detail": "latitude and longitude are required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        RentalBookingLocationLog.objects.create(
+            booking=booking,
+            latitude=Decimal(str(latitude)),
+            longitude=Decimal(str(longitude)),
+            timestamp=timezone.now()
+        )
+        return Response({"status": "success"})
 
 
 class RentalChecklistViewSet(viewsets.ModelViewSet):
@@ -506,7 +590,7 @@ def portal_quote(request):
     })
 
 
-from .models import GuestProfile, CorporateApprovalPolicy, BookingRequest, BookingRequestAmendment, BookingRequestStatus
+from .models import GuestProfile, CorporateApprovalPolicy, BookingRequest, BookingRequestAmendment, BookingRequestStatus, RentalBookingLocationLog, RentalBookingEvent, RentalNotification
 from accounts.models import CorporateRole
 from rest_framework.exceptions import ValidationError
 
@@ -550,6 +634,68 @@ class CorporateApprovalPolicyViewSet(viewsets.ModelViewSet):
             if not self.request.user.active_memberships.filter(company=company, role=CorporateRole.ADMIN).exists():
                 raise ValidationError("Only corporate admins can set approval policies.")
         serializer.save()
+
+
+def send_rental_notification(booking_req, notification_type, recipients=None, reason=""):
+    import hashlib
+    emails = []
+    if recipients == "requester" or recipients is None:
+        emails.append(booking_req.requester.email)
+    if recipients == "guest" or recipients is None:
+        if booking_req.passenger_email:
+            emails.append(booking_req.passenger_email)
+        elif booking_req.guest and booking_req.guest.email:
+            emails.append(booking_req.guest.email)
+
+    emails = list(set(filter(None, emails)))
+    if not emails:
+        return None
+
+    emails_str = ",".join(sorted(emails))
+    raw_key = f"{booking_req.booking_number}:{notification_type}:{emails_str}:{reason}"
+    idempotency_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    existing = RentalNotification.objects.filter(idempotency_key=idempotency_key).first()
+    if existing:
+        return existing
+
+    subject = f"Travel Alert: {notification_type.upper().replace('_', ' ')} for Booking {booking_req.booking_number}"
+    body = f"Hello,\n\nThis is an automated notification regarding your booking {booking_req.booking_number}.\n"
+    body += f"Event: {notification_type.upper().replace('_', ' ')}\n"
+    if reason:
+        body += f"Details: {reason}\n"
+    body += f"Passenger: {booking_req.passenger_name}\n"
+    body += f"Pickup: {booking_req.pickup_city} - {booking_req.pickup_address} at {booking_req.pickup_at.strftime('%Y-%m-%d %H:%M')}\n"
+
+    notif = RentalNotification.objects.create(
+        booking_number=booking_req.booking_number,
+        recipient_email=emails_str,
+        notification_type=notification_type,
+        subject=subject,
+        body=body,
+        status="pending",
+        idempotency_key=idempotency_key
+    )
+
+    try:
+        from django.core.mail import send_mail
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email="no-reply@indexfleet.com",
+            recipient_list=emails,
+            fail_silently=False
+        )
+        notif.status = "sent"
+        notif.last_attempt_at = timezone.now()
+        notif.save(update_fields=["status", "last_attempt_at"])
+    except Exception as e:
+        notif.status = "failed"
+        notif.last_attempt_at = timezone.now()
+        notif.error_log = str(e)
+        notif.save(update_fields=["status", "last_attempt_at", "error_log"])
+
+    return notif
 
 
 def handoff_booking_request_to_rental_booking(booking_request):
@@ -656,6 +802,11 @@ class BookingRequestViewSet(viewsets.ModelViewSet):
         
         if status_val == BookingRequestStatus.APPROVED:
             handoff_booking_request_to_rental_booking(booking_req)
+            send_rental_notification(booking_req, "confirmed")
+        elif status_val == BookingRequestStatus.APPROVAL_REQUIRED:
+            send_rental_notification(booking_req, "approval_required")
+        else:
+            send_rental_notification(booking_req, "submitted")
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
@@ -678,6 +829,7 @@ class BookingRequestViewSet(viewsets.ModelViewSet):
             booking_req.save()
             
             handoff_booking_request_to_rental_booking(booking_req)
+            send_rental_notification(booking_req, "confirmed")
             
         return Response(BookingRequestSerializer(booking_req).data)
 
@@ -697,6 +849,7 @@ class BookingRequestViewSet(viewsets.ModelViewSet):
             
         booking_req.status = BookingRequestStatus.REJECTED
         booking_req.save()
+        send_rental_notification(booking_req, "rejected")
         
         return Response(BookingRequestSerializer(booking_req).data)
 
@@ -720,6 +873,8 @@ class BookingRequestViewSet(viewsets.ModelViewSet):
             if rental_booking:
                 rental_booking.status = RentalStatus.CANCELLED
                 rental_booking.save()
+                
+            send_rental_notification(booking_req, "cancelled")
                 
         return Response(BookingRequestSerializer(booking_req).data)
 
@@ -772,6 +927,537 @@ class BookingRequestViewSet(viewsets.ModelViewSet):
                         setattr(rental_booking, field, val)
                 rental_booking.save()
                 
+            send_rental_notification(booking_req, "amended", reason=reason)
+                
         return Response(BookingRequestSerializer(booking_req).data)
+
+    @action(detail=True, methods=["get"])
+    def status(self, request, pk=None):
+        booking_req = self.get_object()
+        rental_booking = RentalBooking.objects.filter(booking_number=booking_req.booking_number).first()
+        
+        op_status = booking_req.status
+        driver_details = None
+        vehicle_details = None
+        live_location = None
+        milestones = []
+
+        milestones.append({
+            "milestone": "requested",
+            "title": "Booking Requested",
+            "description": f"Trip requested by {booking_req.requester.username}.",
+            "timestamp": booking_req.created_at,
+            "completed": True
+        })
+
+        if booking_req.status == BookingRequestStatus.APPROVAL_REQUIRED:
+            milestones.append({
+                "milestone": "approval_pending",
+                "title": "Manager Approval Pending",
+                "description": "Exceeds policy limits. Awaiting manager approval.",
+                "timestamp": booking_req.created_at,
+                "completed": False
+            })
+        elif booking_req.status == BookingRequestStatus.REJECTED:
+            milestones.append({
+                "milestone": "rejected",
+                "title": "Booking Rejected",
+                "description": "Request was rejected by the manager.",
+                "timestamp": booking_req.updated_at,
+                "completed": True
+            })
+
+        if booking_req.approved_at:
+            milestones.append({
+                "milestone": "approved",
+                "title": "Booking Approved",
+                "description": f"Approved by {booking_req.approver.username if booking_req.approver else 'Manager'}.",
+                "timestamp": booking_req.approved_at,
+                "completed": True
+            })
+
+        if rental_booking:
+            op_status = rental_booking.status
+            
+            milestones.append({
+                "milestone": "dispatched",
+                "title": "Trip Confirmed",
+                "description": "Operational booking confirmed.",
+                "timestamp": rental_booking.created_at,
+                "completed": True
+            })
+
+            driver_assigned = rental_booking.driver is not None
+            vehicle_assigned = rental_booking.vehicle is not None
+
+            milestones.append({
+                "milestone": "driver_assigned",
+                "title": "Chauffeur & Car Assigned",
+                "description": f"Vehicle: {rental_booking.vehicle.category if vehicle_assigned else 'Pending'}. Chauffeur: {rental_booking.driver.name.split()[0] if driver_assigned else 'Pending'}.",
+                "timestamp": rental_booking.updated_at if (driver_assigned or vehicle_assigned) else None,
+                "completed": driver_assigned and vehicle_assigned
+            })
+
+            milestones.append({
+                "milestone": "started",
+                "title": "Trip Started",
+                "description": "Chauffeur has started the trip.",
+                "timestamp": rental_booking.start_time,
+                "completed": rental_booking.start_time is not None
+            })
+
+            milestones.append({
+                "milestone": "completed",
+                "title": "Trip Completed",
+                "description": "Ride has completed successfully.",
+                "timestamp": rental_booking.end_time,
+                "completed": rental_booking.status == RentalStatus.COMPLETED
+            })
+
+            if rental_booking.status in [RentalStatus.DRIVER_ASSIGNED, RentalStatus.VEHICLE_ASSIGNED, RentalStatus.READY, RentalStatus.STARTED, RentalStatus.IN_PROGRESS, RentalStatus.COMPLETED]:
+                if driver_assigned:
+                    driver_details = {
+                        "first_name": rental_booking.driver.name.split()[0],
+                        "phone": rental_booking.driver.phone,
+                    }
+                if vehicle_assigned:
+                    vehicle_details = {
+                        "category": rental_booking.vehicle.category,
+                        "registration_number": rental_booking.vehicle.registration_number,
+                    }
+
+            if rental_booking.status in [RentalStatus.STARTED, RentalStatus.IN_PROGRESS]:
+                latest_log = rental_booking.location_logs.first()
+                if latest_log:
+                    policy = CorporateApprovalPolicy.objects.filter(company=booking_req.company).first()
+                    precision = policy.location_precision_digits if policy else 4
+                    
+                    live_location = {
+                        "latitude": round(float(latest_log.latitude), precision),
+                        "longitude": round(float(latest_log.longitude), precision),
+                        "timestamp": latest_log.timestamp
+                    }
+
+        events_qs = []
+        if rental_booking:
+            events_qs = rental_booking.events.filter(is_customer_visible=True)
+        events_data = [{
+            "id": e.id,
+            "event_type": e.event_type,
+            "description": e.description,
+            "created_at": e.created_at
+        } for e in events_qs]
+
+        return Response({
+            "booking_number": booking_req.booking_number,
+            "status": op_status,
+            "driver": driver_details,
+            "vehicle": vehicle_details,
+            "live_location": live_location,
+            "milestones": milestones,
+            "events": events_data
+        })
+
+
+from billing.models import Invoice as BillingInvoice, InvoiceStatus as BillingInvoiceStatus
+from rentals.models import RentalInvoice
+
+class PortalInvoiceViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        memberships = request.user.active_memberships
+        if not memberships.exists() and not request.user.is_superuser:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+        company_ids = list(memberships.values_list("company_id", flat=True)) if not request.user.is_superuser else None
+        
+        search = request.query_params.get("search")
+        po_reference = request.query_params.get("po_reference")
+        
+        from django.db.models import Q
+        from fleet.models import CorporateCustomer as FleetCorporateCustomer
+        
+        fleet_company_ids = []
+        if company_ids:
+            rent_companies = CorporateCustomer.objects.filter(id__in=company_ids)
+            for rc in rent_companies:
+                fc = FleetCorporateCustomer.objects.filter(legal_name__iexact=rc.name).first()
+                if fc:
+                    fleet_company_ids.append(fc.id)
+
+        # 1. Fetch Fleet Invoices (billing.Invoice)
+        fleet_qs = BillingInvoice.objects.all()
+        if company_ids:
+            fleet_qs = fleet_qs.filter(customer_id__in=fleet_company_ids)
+        fleet_qs = fleet_qs.exclude(status__in=[BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.REVIEW])
+        
+        if search:
+            fleet_qs = fleet_qs.filter(Q(invoice_number__icontains=search) | Q(po_number__icontains=search))
+        if po_reference:
+            fleet_qs = fleet_qs.filter(po_number__icontains=po_reference)
+
+        # 2. Fetch Chauffeur Rental Invoices (rentals.RentalInvoice)
+        rental_qs = RentalInvoice.objects.all()
+        if company_ids:
+            rental_qs = rental_qs.filter(booking__corporate_customer_id__in=company_ids)
+            
+        if search:
+            rental_qs = rental_qs.filter(Q(invoice_number__icontains=search) | Q(booking__booking_number__icontains=search))
+            
+        results = []
+        for inv in fleet_qs:
+            results.append({
+                "id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "type": "trip",
+                "type_display": "Fleet Dispatch Invoice",
+                "issue_date": inv.issue_date,
+                "due_date": inv.due_date,
+                "po_number": inv.po_number,
+                "total_amount": float(inv.total_amount),
+                "balance_amount": float(inv.balance_amount),
+                "status": inv.status
+            })
+            
+        for inv in rental_qs:
+            results.append({
+                "id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "type": "chauffeur",
+                "type_display": "Chauffeur Rental Invoice",
+                "issue_date": inv.issued_at.date(),
+                "due_date": inv.issued_at.date() + timedelta(days=15),
+                "po_number": inv.booking.notes,
+                "total_amount": float(inv.final_total),
+                "balance_amount": 0.0 if inv.booking.status == "completed" else float(inv.final_total),
+                "status": "ISSUED" if inv.booking.status != "completed" else "PAID"
+            })
+            
+        results.sort(key=lambda x: x["issue_date"], reverse=True)
+        return Response(results)
+
+    @action(detail=True, methods=["get"])
+    def download(self, request, pk=None):
+        inv_type = request.query_params.get("type", "trip")
+        from django.http import HttpResponse
+        
+        memberships = request.user.active_memberships
+        company_ids = list(memberships.values_list("company_id", flat=True)) if not request.user.is_superuser else None
+
+        if inv_type == "trip":
+            try:
+                inv = BillingInvoice.objects.get(id=pk)
+                if company_ids:
+                    from fleet.models import CorporateCustomer as FleetCorporateCustomer
+                    rent_companies = CorporateCustomer.objects.filter(id__in=company_ids)
+                    rent_names = [rc.name.lower() for rc in rent_companies]
+                    if not inv.customer or inv.customer.legal_name.lower() not in rent_names:
+                        return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+                
+                from billing.pdf_service import PDFService
+                html = PDFService.render_invoice_html(inv)
+                return HttpResponse(html, content_type="text/html")
+            except BillingInvoice.DoesNotExist:
+                return Response({"detail": "Invoice not found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                inv = RentalInvoice.objects.get(id=pk)
+                if company_ids and inv.booking.corporate_customer_id not in company_ids:
+                    return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+                
+                html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Invoice {inv.invoice_number}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; padding: 40px; color: #333; }}
+        .header {{ border-bottom: 2px solid #10b981; padding-bottom: 20px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 30px; }}
+        th {{ background: #f3f4f6; padding: 10px; text-align: left; }}
+        td {{ padding: 10px; border-bottom: 1px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>CHAUFFEUR RENTAL INVOICE</h2>
+        <h3>Invoice No: {inv.invoice_number}</h3>
+        <p>Booking No: {inv.booking.booking_number}</p>
+        <p>Date: {inv.issued_at.strftime('%Y-%m-%d')}</p>
+    </div>
+    <div style="margin-top: 20px;">
+        <p><strong>Customer Name:</strong> {inv.booking.customer_name}</p>
+        <p><strong>Pickup City:</strong> {inv.booking.pickup_city}</p>
+        <p><strong>Pickup Address:</strong> {inv.booking.pickup_address}</p>
+        <p><strong>Duration:</strong> {inv.hours_used} Hours | Distance: {inv.distance_travelled} km</p>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Description</th>
+                <th style="text-align: right;">Amount (INR)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Package Rate ({inv.booking.package.name})</td>
+                <td style="text-align: right;">₹{inv.package_price:.2f}</td>
+            </tr>
+            <tr>
+                <td>Extra Km Charges ({inv.extra_km} km)</td>
+                <td style="text-align: right;">₹{inv.extra_km_charges:.2f}</td>
+            </tr>
+            <tr>
+                <td>Extra Hour Charges ({inv.extra_hours} hrs)</td>
+                <td style="text-align: right;">₹{inv.extra_hour_charges:.2f}</td>
+            </tr>
+            <tr>
+                <td>Driver Allowance</td>
+                <td style="text-align: right;">₹{inv.driver_allowance:.2f}</td>
+            </tr>
+            <tr style="font-weight: bold; border-top: 2px solid #333;">
+                <td>Subtotal</td>
+                <td style="text-align: right;">₹{inv.subtotal:.2f}</td>
+            </tr>
+            <tr>
+                <td>Tax Amount ({inv.tax_rate_percent}%)</td>
+                <td style="text-align: right;">₹{inv.tax_amount:.2f}</td>
+            </tr>
+            <tr style="font-weight: bold; font-size: 1.2em; color: #10b981;">
+                <td>Total</td>
+                <td style="text-align: right;">₹{inv.final_total:.2f}</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>"""
+                return HttpResponse(html, content_type="text/html")
+            except RentalInvoice.DoesNotExist:
+                return Response({"detail": "Invoice not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class PortalStatementsViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        memberships = request.user.active_memberships
+        if not memberships.exists() and not request.user.is_superuser:
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+        company_id = request.query_params.get("company_id")
+        if not company_id:
+            company_id = memberships.first().company_id if not request.user.is_superuser else None
+            
+        if not company_id:
+            return Response({"detail": "company_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if not request.user.is_superuser and not memberships.filter(company_id=company_id).exists():
+            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+        start_date_str = request.query_params.get("start_date")
+        end_date_str = request.query_params.get("end_date")
+        
+        from django.utils.dateparse import parse_date
+        import datetime
+        start_date = parse_date(start_date_str) if start_date_str else datetime.date.today() - timedelta(days=30)
+        end_date = parse_date(end_date_str) if end_date_str else datetime.date.today()
+
+        from fleet.models import CorporateCustomer as FleetCorporateCustomer
+        rent_comp = CorporateCustomer.objects.filter(id=company_id).first()
+        fleet_company_id = None
+        if rent_comp:
+            fc = FleetCorporateCustomer.objects.filter(legal_name__iexact=rent_comp.name).first()
+            if fc:
+                fleet_company_id = fc.id
+                
+        if not fleet_company_id:
+            return Response({
+                "company_id": company_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "opening_balance": 0.0,
+                "closing_balance": 0.0,
+                "entries": []
+            })
+            
+        billing_invoices = BillingInvoice.objects.filter(
+            customer_id=fleet_company_id,
+            issue_date__range=(start_date, end_date)
+        ).exclude(status__in=[BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.REVIEW])
+        
+        prior_invoices = BillingInvoice.objects.filter(
+            customer_id=fleet_company_id,
+            issue_date__lt=start_date
+        ).exclude(status__in=[BillingInvoiceStatus.DRAFT, BillingInvoiceStatus.REVIEW])
+        
+        prior_invoice_sum = sum(inv.total_amount for inv in prior_invoices)
+        prior_paid_sum = sum(inv.paid_amount for inv in prior_invoices)
+        opening_balance = float(prior_invoice_sum - prior_paid_sum)
+        
+        entries = []
+        for inv in billing_invoices:
+            entries.append({
+                "date": inv.issue_date,
+                "type": "invoice",
+                "reference": inv.invoice_number,
+                "description": f"Tax Invoice {inv.invoice_number}",
+                "debit": float(inv.total_amount),
+                "credit": 0.0,
+            })
+            
+            from billing.models import PaymentAllocation
+            allocs = PaymentAllocation.objects.filter(
+                invoice=inv,
+                receipt__receipt_date__range=(start_date, end_date)
+            )
+            for alloc in allocs:
+                entries.append({
+                    "date": alloc.receipt.receipt_date,
+                    "type": "payment",
+                    "reference": alloc.receipt.receipt_number,
+                    "description": f"Payment allocation from receipt {alloc.receipt.receipt_number}",
+                    "debit": 0.0,
+                    "credit": float(alloc.allocated_amount),
+                })
+                
+        entries.sort(key=lambda x: x["date"])
+        
+        current_bal = opening_balance
+        for entry in entries:
+            current_bal += entry["debit"] - entry["credit"]
+            entry["balance"] = current_bal
+            
+        return Response({
+            "company_id": company_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "opening_balance": opening_balance,
+            "closing_balance": current_bal,
+            "entries": entries
+        })
+
+
+from .models import PortalSupportCase, PortalAuditEvent, PortalHandoffQueue
+from .serializers import PortalSupportCaseSerializer, PortalAuditEventSerializer
+from accounts.models import User, UserRole
+
+class PortalSupportCaseViewSet(viewsets.ModelViewSet):
+    serializer_class = PortalSupportCaseSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.is_superuser:
+            return PortalSupportCase.objects.all()
+        memberships = self.request.user.active_memberships
+        company_ids = memberships.values_list("company_id", flat=True)
+        return PortalSupportCase.objects.filter(company_id__in=company_ids)
+
+    def perform_create(self, serializer):
+        company = serializer.validated_data.get("company")
+        if not company:
+            memberships = self.request.user.active_memberships
+            if not memberships.exists():
+                raise ValidationError("You must belong to a company to create a support case.")
+            company = memberships.first().company
+        else:
+            if not self.request.user.is_superuser and not self.request.user.active_memberships.filter(company=company).exists():
+                raise ValidationError("Forbidden company.")
+                
+        case = serializer.save(company=company, created_by=self.request.user)
+        
+        # Log Audit Log
+        PortalAuditEvent.objects.create(
+            company=company,
+            user=self.request.user,
+            action_type="support_ticket",
+            description=f"Created support case #{case.id}: '{case.subject}'"
+        )
+
+
+class PortalAuditingViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PortalAuditEventSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        memberships = self.request.user.active_memberships
+        user_membership = memberships.first()
+        if not self.request.user.is_superuser:
+            if not user_membership or user_membership.role != CorporateRole.ADMIN:
+                return PortalAuditEvent.objects.none()
+                
+        if self.request.user.is_superuser:
+            return PortalAuditEvent.objects.all()
+            
+        return PortalAuditEvent.objects.filter(company_id=user_membership.company_id)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def portal_support_impersonate(request):
+    is_authorized = request.user.is_superuser or request.user.role in [UserRole.ADMIN, UserRole.COMMERCIAL]
+    if not is_authorized:
+        is_authorized = request.user.active_memberships.filter(role=CorporateRole.SUPPORT).exists()
+        
+    if not is_authorized:
+        return Response({"detail": "You do not have permission to impersonate corporate users."}, status=status.HTTP_403_FORBIDDEN)
+        
+    target_user_id = request.data.get("user_id")
+    company_id = request.data.get("company_id")
+    
+    if not target_user_id or not company_id:
+        return Response({"detail": "user_id and company_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        target_user = User.objects.get(pk=target_user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "Target user not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+    try:
+        company = CorporateCustomer.objects.get(pk=company_id)
+    except CorporateCustomer.DoesNotExist:
+        return Response({"detail": "Corporate Customer not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+    PortalAuditEvent.objects.create(
+        company=company,
+        user=request.user,
+        action_type="impersonation",
+        description=f"Support user '{request.user.username}' started impersonating '{target_user.username}' for company '{company.name}'."
+    )
+    
+    from rest_framework_simplejwt.tokens import RefreshToken
+    refresh = RefreshToken.for_user(target_user)
+    
+    return Response({
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "impersonation_active": True,
+        "impersonator": request.user.username,
+        "impersonated_user": target_user.username,
+        "company_name": company.name
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def portal_health_metrics(request):
+    is_authorized = request.user.is_superuser or request.user.role in [UserRole.ADMIN, UserRole.COMMERCIAL]
+    if not is_authorized:
+        memberships = request.user.active_memberships
+        is_authorized = memberships.filter(role=CorporateRole.ADMIN).exists()
+        
+    if not is_authorized:
+        return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+            
+    failed_handoffs = PortalHandoffQueue.objects.filter(status="failed").count()
+    failed_notifications = RentalNotification.objects.filter(status="failed").count()
+    total_bookings = BookingRequest.objects.count()
+    
+    return Response({
+        "status": "healthy",
+        "failed_handoffs": failed_handoffs,
+        "failed_notifications": failed_notifications,
+        "total_bookings": total_bookings
+    })
 
 

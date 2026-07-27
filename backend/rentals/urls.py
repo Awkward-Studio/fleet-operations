@@ -15,6 +15,12 @@ from .views import (
     GuestProfileViewSet,
     CorporateApprovalPolicyViewSet,
     BookingRequestViewSet,
+    PortalInvoiceViewSet,
+    PortalStatementsViewSet,
+    PortalSupportCaseViewSet,
+    PortalAuditingViewSet,
+    portal_support_impersonate,
+    portal_health_metrics,
 )
 
 router = DefaultRouter()
@@ -28,6 +34,10 @@ router.register("invoices", RentalInvoiceViewSet)
 router.register("portal/guests", GuestProfileViewSet, basename="portal_guests")
 router.register("portal/approval-policies", CorporateApprovalPolicyViewSet, basename="portal_approval_policies")
 router.register("portal/booking-requests", BookingRequestViewSet, basename="portal_booking_requests")
+router.register("portal/invoices", PortalInvoiceViewSet, basename="portal_invoices")
+router.register("portal/statements", PortalStatementsViewSet, basename="portal_statements")
+router.register("portal/support-cases", PortalSupportCaseViewSet, basename="portal_support_cases")
+router.register("portal/audit-logs", PortalAuditingViewSet, basename="portal_audit_logs")
 
 urlpatterns = [
     path("", include(router.urls)),
@@ -35,4 +45,6 @@ urlpatterns = [
     path("driver-portal/today/", driver_portal_today, name="driver_portal_today"),
     path("portal/packages/", portal_packages, name="portal_packages"),
     path("portal/quote/", portal_quote, name="portal_quote"),
+    path("portal/support/impersonate/", portal_support_impersonate, name="portal_support_impersonate"),
+    path("portal/health/", portal_health_metrics, name="portal_health_metrics"),
 ]

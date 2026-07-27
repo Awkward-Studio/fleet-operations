@@ -22,14 +22,14 @@ class CorporateMembershipSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     permissions = serializers.ReadOnlyField(source="permissions_list")
-    corporate_memberships = serializers.SerializerMethodField()
+    active_memberships = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "first_name", "last_name", "role", "permissions", "corporate_memberships"]
-        read_only_fields = ["id", "permissions", "corporate_memberships"]
+        fields = ["id", "username", "email", "first_name", "last_name", "role", "permissions", "active_memberships"]
+        read_only_fields = ["id", "permissions", "active_memberships"]
 
-    def get_corporate_memberships(self, obj):
+    def get_active_memberships(self, obj):
         return CorporateMembershipSerializer(obj.active_memberships, many=True).data
 
 

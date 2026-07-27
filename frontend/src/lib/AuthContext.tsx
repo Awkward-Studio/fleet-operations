@@ -61,7 +61,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const u = await getCurrentUser();
       setUser(u);
-      router.push("/");
+      const isCorporate = u.active_memberships && u.active_memberships.length > 0;
+      if (isCorporate) {
+        router.push("/portal");
+      } else {
+        router.push("/");
+      }
     } catch (err) {
       setUser(null);
       throw err;
@@ -86,7 +91,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const u = await getCurrentUser();
       setUser(u);
-      router.push("/");
+      const isCorporate = u.active_memberships && u.active_memberships.length > 0;
+      if (isCorporate) {
+        router.push("/portal");
+      } else {
+        router.push("/");
+      }
     } catch (err) {
       setUser(null);
       throw err;

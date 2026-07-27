@@ -15,7 +15,12 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      router.push("/");
+      const isCorporate = user.active_memberships && user.active_memberships.length > 0;
+      if (isCorporate) {
+        router.push("/portal");
+      } else {
+        router.push("/");
+      }
     }
   }, [user, loading, router]);
 

@@ -131,3 +131,44 @@ class BookingRequestSerializer(serializers.ModelSerializer):
         fields = "__all__"
         read_only_fields = ["booking_number", "requester", "status", "approver", "approved_at", "created_at", "updated_at"]
 
+
+from .models import RentalBookingLocationLog, RentalBookingEvent, RentalNotification
+
+class RentalBookingLocationLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RentalBookingLocationLog
+        fields = "__all__"
+
+
+class RentalBookingEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RentalBookingEvent
+        fields = "__all__"
+
+
+class RentalNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RentalNotification
+        fields = "__all__"
+
+
+from .models import PortalSupportCase, PortalAuditEvent
+
+class PortalSupportCaseSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.ReadOnlyField(source="created_by.username")
+    booking_number = serializers.ReadOnlyField(source="booking.booking_number")
+
+    class Meta:
+        model = PortalSupportCase
+        fields = "__all__"
+        read_only_fields = ["created_by", "company", "created_at", "updated_at"]
+
+
+class PortalAuditEventSerializer(serializers.ModelSerializer):
+    user_username = serializers.ReadOnlyField(source="user.username")
+
+    class Meta:
+        model = PortalAuditEvent
+        fields = "__all__"
+        read_only_fields = ["created_at"]
+

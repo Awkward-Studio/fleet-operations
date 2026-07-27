@@ -70,7 +70,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
 
   const menuItems = [
     { href: "/portal", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/portal/booking-requests", label: "Bookings", icon: CalendarClock },
+    { href: "/portal/booking-requests/new", label: "Bookings", icon: CalendarClock },
     { href: "/portal/guests", label: "Guests", icon: Users },
   ];
 

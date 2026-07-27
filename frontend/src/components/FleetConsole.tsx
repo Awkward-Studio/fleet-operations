@@ -110,6 +110,13 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
+
+  useEffect(() => {
+    if (user && user.active_memberships && user.active_memberships.length > 0 && !user.permissions?.includes("superuser")) {
+      router.push("/portal");
+    }
+  }, [user, router]);
+
   const [role, setRole] = useState<Role>("dispatcher");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);

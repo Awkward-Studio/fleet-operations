@@ -10,6 +10,7 @@ from .models import (
     CustomerContact,
     Driver,
     DriverStatus,
+    PricingAmountStatus,
     Trip,
     TripChecklist,
     TripLocationLog,
@@ -455,6 +456,13 @@ class TripSerializer(serializers.ModelSerializer):
             "driver_id",
             "ota_source",
             "fare_amount",
+            "pricing_amount_status",
+            "quoted_taxable_amount",
+            "quoted_tax_amount",
+            "quoted_total_amount",
+            "final_taxable_amount",
+            "final_tax_amount",
+            "final_total_amount",
             "notes",
             "pickup_latitude",
             "pickup_longitude",
@@ -470,6 +478,13 @@ class TripSerializer(serializers.ModelSerializer):
             "pricing_snapshot",
             "contract",
             "contract_rate",
+            "pricing_amount_status",
+            "quoted_taxable_amount",
+            "quoted_tax_amount",
+            "quoted_total_amount",
+            "final_taxable_amount",
+            "final_tax_amount",
+            "final_total_amount",
         ]
 
     def to_internal_value(self, data):
@@ -517,7 +532,11 @@ class TripSerializer(serializers.ModelSerializer):
                     planned_km=distance_km or 0,
                 )
                 from decimal import Decimal
-                attrs["fare_amount"] = Decimal(quote["total_amount"])
+                attrs["fare_amount"] = Decimal(quote["gross_amount"])
+                attrs["pricing_amount_status"] = PricingAmountStatus.QUOTED
+                attrs["quoted_taxable_amount"] = Decimal(quote["taxable_amount"])
+                attrs["quoted_tax_amount"] = Decimal(quote["tax_amount"])
+                attrs["quoted_total_amount"] = Decimal(quote["gross_amount"])
                 attrs["customer_display_name_snapshot"] = customer.display_name
                 attrs["pricing_snapshot"] = quote
                 attrs["contract_id"] = quote["contract"]["id"]
@@ -906,4 +925,3 @@ class FuelTransactionDetailSerializer(FuelTransactionSerializer):
             "receipt_asset_details",
             "odometer_asset_details",
         ]
-

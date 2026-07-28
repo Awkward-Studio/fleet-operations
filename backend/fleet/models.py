@@ -389,6 +389,12 @@ class BookingType(models.TextChoices):
     OTA = "OTA", "OTA / Aggregator"
 
 
+class PricingAmountStatus(models.TextChoices):
+    LEGACY_UNCLASSIFIED = "LEGACY_UNCLASSIFIED", "Legacy / tax treatment unknown"
+    QUOTED = "QUOTED", "Server-priced quote"
+    FINALIZED = "FINALIZED", "Approved final charge"
+
+
 class Trip(models.Model):
     booking_type = models.CharField(
         max_length=24,
@@ -433,6 +439,47 @@ class Trip(models.Model):
     vehicle = models.ForeignKey(Vehicle, related_name="trips", null=True, blank=True, on_delete=models.SET_NULL)
     driver = models.ForeignKey(Driver, related_name="trips", null=True, blank=True, on_delete=models.SET_NULL)
     ota_source = models.CharField(max_length=80, blank=True)
+    pricing_amount_status = models.CharField(
+        max_length=32,
+        choices=PricingAmountStatus.choices,
+        default=PricingAmountStatus.LEGACY_UNCLASSIFIED,
+    )
+    quoted_taxable_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    quoted_tax_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    quoted_total_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    final_taxable_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    final_tax_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    final_total_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     fare_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     pickup_latitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
@@ -449,6 +496,64 @@ class Trip(models.Model):
     def __str__(self):
         name = self.customer_display_name_snapshot or self.customer_name or "Trip"
         return f"{name}: {self.pickup_city} to {self.drop_city} at {self.pickup_at:%Y-%m-%d %H:%M}"
+
+    def clean(self):
+        super().clean()
+        amount_sets = (
+            (
+                "quoted",
+                self.quoted_taxable_amount,
+                self.quoted_tax_amount,
+                self.quoted_total_amount,
+            ),
+            (
+                "final",
+                self.final_taxable_amount,
+                self.final_tax_amount,
+                self.final_total_amount,
+            ),
+        )
+        errors = {}
+        for prefix, taxable, tax, total in amount_sets:
+            supplied = (taxable is not None, tax is not None, total is not None)
+            if any(supplied) and not all(supplied):
+                errors[f"{prefix}_total_amount"] = (
+                    f"{prefix.title()} taxable, tax, and total amounts must be supplied together."
+                )
+            elif all(supplied):
+                if taxable < Decimal("0.00") or tax < Decimal("0.00"):
+                    errors[f"{prefix}_total_amount"] = (
+                        f"{prefix.title()} taxable and tax amounts cannot be negative."
+                    )
+                elif total != taxable + tax:
+                    errors[f"{prefix}_total_amount"] = (
+                        f"{prefix.title()} total must equal taxable amount plus tax amount."
+                    )
+
+        if self.pricing_amount_status == PricingAmountStatus.QUOTED and not all(
+            value is not None
+            for value in (
+                self.quoted_taxable_amount,
+                self.quoted_tax_amount,
+                self.quoted_total_amount,
+            )
+        ):
+            errors["pricing_amount_status"] = (
+                "A server-priced quote requires explicit quoted taxable, tax, and total amounts."
+            )
+        if self.pricing_amount_status == PricingAmountStatus.FINALIZED and not all(
+            value is not None
+            for value in (
+                self.final_taxable_amount,
+                self.final_tax_amount,
+                self.final_total_amount,
+            )
+        ):
+            errors["pricing_amount_status"] = (
+                "A finalized price requires explicit final taxable, tax, and total amounts."
+            )
+        if errors:
+            raise ValidationError(errors)
 
 
 class TripChecklist(models.Model):

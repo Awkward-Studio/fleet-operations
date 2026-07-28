@@ -11,6 +11,8 @@ from .models import (
     DutyType,
 )
 
+CALCULATION_VERSION = "contract-quote-v1"
+
 
 class PricingError(Exception):
     pass
@@ -148,7 +150,8 @@ def calculate_quote(
     cgst_amount = quantize_decimal(subtotal * (cgst_rate / Decimal("100.00")))
     sgst_amount = quantize_decimal(subtotal * (sgst_rate / Decimal("100.00")))
 
-    total_amount = subtotal + cgst_amount + sgst_amount
+    tax_amount = cgst_amount + sgst_amount
+    total_amount = subtotal + tax_amount
 
     explanation = (
         f"Base fare ₹{base_charge} for {rate.included_hours}h/{rate.included_km}km. "
@@ -158,6 +161,7 @@ def calculate_quote(
     )
 
     return {
+        "calculation_version": CALCULATION_VERSION,
         "customer": {
             "id": customer.id,
             "code": customer.code,
@@ -204,6 +208,9 @@ def calculate_quote(
             "sgst_amount": str(sgst_amount),
             "total_amount": str(total_amount),
         },
+        "taxable_amount": str(subtotal),
+        "tax_amount": str(tax_amount),
+        "gross_amount": str(total_amount),
         "total_amount": str(total_amount),
         "explanation": explanation,
     }

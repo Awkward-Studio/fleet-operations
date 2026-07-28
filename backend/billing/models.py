@@ -196,6 +196,12 @@ class InvoiceStatus(models.TextChoices):
     CREDITED = "CREDITED", "Credited / Refunded"
 
 
+class TaxRegime(models.TextChoices):
+    INTRA_STATE = "INTRA_STATE", "Intra-state CGST/SGST"
+    INTER_STATE = "INTER_STATE", "Inter-state IGST"
+    ZERO_RATED = "ZERO_RATED", "Zero rated / exempt"
+
+
 class Invoice(models.Model):
     legal_entity = models.ForeignKey(LegalEntity, related_name="invoices", on_delete=models.PROTECT)
     customer = models.ForeignKey("fleet.CorporateCustomer", related_name="invoices", null=True, blank=True, on_delete=models.SET_NULL)
@@ -207,6 +213,13 @@ class Invoice(models.Model):
     due_date = models.DateField(default=datetime.date.today)
     currency = models.CharField(max_length=10, default="INR")
     place_of_supply = models.CharField(max_length=100, default="Maharashtra (27)")
+    supplier_state_code_snapshot = models.CharField(max_length=2, blank=True)
+    customer_state_code_snapshot = models.CharField(max_length=2, blank=True)
+    tax_regime = models.CharField(
+        max_length=24,
+        choices=TaxRegime.choices,
+        default=TaxRegime.INTRA_STATE,
+    )
     po_number = models.CharField(max_length=80, blank=True)
     billing_name_snapshot = models.CharField(max_length=150, blank=True)
     billing_address_snapshot = models.TextField(blank=True)
@@ -258,6 +271,17 @@ class InvoiceLine(models.Model):
     cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     sgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=2.50)
     sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax_regime = models.CharField(
+        max_length=24,
+        choices=TaxRegime.choices,
+        default=TaxRegime.INTRA_STATE,
+    )
+    source_type = models.CharField(max_length=32, blank=True)
+    source_id = models.CharField(max_length=64, blank=True)
+    calculation_version = models.CharField(max_length=40, blank=True)
+    pricing_snapshot = models.JSONField(default=dict, blank=True)
     line_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     def __str__(self):
@@ -421,8 +445,6 @@ class TripExpense(models.Model):
 
     def __str__(self):
         return f"{self.category}: ₹{self.amount} ({self.status})"
-
-
 
 
 

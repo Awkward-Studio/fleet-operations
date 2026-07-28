@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework.test import APITestCase
 from rest_framework import status
 from billing.models import LegalEntity, FinancialYear, FiscalPeriod, Invoice, InvoiceStatus
-from fleet.models import Trip, Vehicle, Driver, CorporateCustomer
+from fleet.models import CorporateCustomer, Driver, PricingAmountStatus, Trip, Vehicle
 from accounts.models import User
 
 
@@ -57,6 +57,17 @@ class BillingAPITests(APITestCase):
             vehicle=self.vehicle,
             driver=self.driver,
             fare_amount=Decimal("2400.00"),
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("2400.00"),
+            quoted_tax_amount=Decimal("120.00"),
+            quoted_total_amount=Decimal("2520.00"),
+            pricing_snapshot={
+                "calculation_version": "contract-quote-v1",
+                "itemized_charges": {
+                    "cgst_rate": "2.50",
+                    "sgst_rate": "2.50",
+                },
+            },
         )
 
     def test_generate_invoice_draft_api(self):

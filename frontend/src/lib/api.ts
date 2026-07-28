@@ -194,6 +194,7 @@ export type CorporateContract = {
 };
 
 export type PricingQuote = {
+  calculation_version: string;
   customer: {
     id: number;
     code: string;
@@ -240,6 +241,10 @@ export type PricingQuote = {
     sgst_amount: string;
     total_amount: string;
   };
+  taxable_amount: string;
+  tax_amount: string;
+  gross_amount: string;
+  /** @deprecated Use gross_amount. */
   total_amount: string;
   explanation: string;
 };
@@ -867,4 +872,3 @@ export function resolveAnomaly(id: number, payload: { anomaly_review_notes: stri
 export function getVehicleMileage(vehicleId: number) {
   return request<FuelMetrics>(`/fuel-transactions/vehicle_mileage/?vehicle=${vehicleId}`);
 }
-

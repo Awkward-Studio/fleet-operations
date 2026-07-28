@@ -13,7 +13,13 @@ from billing.models import (
     ChargeCategory,
 )
 from billing.services import InvoiceService
-from fleet.models import Trip, Vehicle, Driver, CorporateCustomer
+from fleet.models import (
+    CorporateCustomer,
+    Driver,
+    PricingAmountStatus,
+    Trip,
+    Vehicle,
+)
 
 
 class InvoiceServiceTests(TestCase):
@@ -65,6 +71,17 @@ class InvoiceServiceTests(TestCase):
             vehicle=self.vehicle,
             driver=self.driver,
             fare_amount=Decimal("2400.00"),
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("2400.00"),
+            quoted_tax_amount=Decimal("120.00"),
+            quoted_total_amount=Decimal("2520.00"),
+            pricing_snapshot={
+                "calculation_version": "contract-quote-v1",
+                "itemized_charges": {
+                    "cgst_rate": "2.50",
+                    "sgst_rate": "2.50",
+                },
+            },
         )
         self.closeout1 = TripCloseout.objects.create(
             trip=self.trip1,
@@ -86,6 +103,14 @@ class InvoiceServiceTests(TestCase):
         self.assertEqual(invoice.subtotal, Decimal("2500.00"))  # 2400 + 100
         self.assertEqual(invoice.cgst_amount, Decimal("62.50"))  # 5% GST total (2.5% CGST = 62.50)
         self.assertEqual(invoice.total_amount, Decimal("2625.00"))
+        trip_line = invoice.lines.get(source_type="TRIP_PRICING")
+        self.assertEqual(trip_line.taxable_value, Decimal("2400.00"))
+        self.assertEqual(trip_line.source_id, str(self.trip1.id))
+        self.assertEqual(trip_line.calculation_version, "contract-quote-v1")
+        self.assertEqual(
+            trip_line.pricing_snapshot["calculation_version"],
+            "contract-quote-v1",
+        )
 
         issued = InvoiceService.issue_invoice(invoice)
         self.assertEqual(issued.status, InvoiceStatus.ISSUED)
@@ -103,6 +128,83 @@ class InvoiceServiceTests(TestCase):
         InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
         with self.assertRaises(ValidationError):
             InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
+
+    def test_rejects_legacy_unclassified_trip_amount(self):
+        self.trip1.pricing_amount_status = PricingAmountStatus.LEGACY_UNCLASSIFIED
+        self.trip1.save(update_fields=["pricing_amount_status"])
+
+        with self.assertRaisesMessage(
+            ValidationError, "legacy or unclassified pricing"
+        ):
+            InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
+
+    def test_interstate_invoice_posts_igst_liability(self):
+        self.customer.gstin = "29AAACA1234A1Z5"
+        self.customer.save(update_fields=["gstin"])
+
+        invoice = InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
+        self.assertEqual(invoice.cgst_amount, Decimal("0.00"))
+        self.assertEqual(invoice.sgst_amount, Decimal("0.00"))
+        self.assertEqual(invoice.igst_amount, Decimal("125.00"))
+
+        InvoiceService.issue_invoice(invoice)
+        from billing.models import JournalEntry
+
+        journal = JournalEntry.objects.get(source_id=str(invoice.id))
+        igst_line = journal.lines.get(account__code="2250")
+        self.assertEqual(igst_line.credit_amount, Decimal("125.00"))
+        self.assertEqual(
+            sum(line.debit_amount for line in journal.lines.all()),
+            sum(line.credit_amount for line in journal.lines.all()),
+        )
+
+    def test_zero_rate_snapshot_produces_no_tax_liability(self):
+        self.trip1.pricing_snapshot["itemized_charges"].update(
+            {"cgst_rate": "0.00", "sgst_rate": "0.00"}
+        )
+        self.trip1.quoted_tax_amount = Decimal("0.00")
+        self.trip1.quoted_total_amount = Decimal("2400.00")
+        self.trip1.save(
+            update_fields=[
+                "pricing_snapshot",
+                "quoted_tax_amount",
+                "quoted_total_amount",
+            ]
+        )
+
+        invoice = InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
+        self.assertEqual(invoice.total_amount, Decimal("2500.00"))
+        self.assertEqual(invoice.cgst_amount + invoice.sgst_amount + invoice.igst_amount, Decimal("0.00"))
+
+    def test_adhoc_trip_with_explicit_pricing_is_traceable_and_invoiceable(self):
+        adhoc = Trip.objects.create(
+            booking_type="ADHOC",
+            customer_name="Direct Guest",
+            pickup_city="Mumbai",
+            drop_city="Pune",
+            pickup_at=datetime.datetime(2026, 7, 24, 10, tzinfo=datetime.timezone.utc),
+            estimated_drop_at=datetime.datetime(2026, 7, 24, 14, tzinfo=datetime.timezone.utc),
+            status="COMPLETED",
+            fare_amount=Decimal("1575.00"),
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("1500.00"),
+            quoted_tax_amount=Decimal("75.00"),
+            quoted_total_amount=Decimal("1575.00"),
+            pricing_snapshot={
+                "calculation_version": "adhoc-quote-v1",
+                "itemized_charges": {
+                    "cgst_rate": "2.50",
+                    "sgst_rate": "2.50",
+                },
+            },
+        )
+
+        invoice = InvoiceService.generate_invoice_draft(self.entity, [adhoc.id])
+        line = invoice.lines.get()
+        self.assertEqual(invoice.billing_name_snapshot, "Direct Guest")
+        self.assertEqual(invoice.total_amount, Decimal("1575.00"))
+        self.assertEqual(line.source_id, str(adhoc.id))
+        self.assertEqual(line.calculation_version, "adhoc-quote-v1")
 
     def test_payment_receipt_and_allocation(self):
         from billing.services import PaymentService
@@ -122,4 +224,3 @@ class InvoiceServiceTests(TestCase):
         self.assertEqual(receipt.unapplied_amount, Decimal("0.00"))
         self.assertEqual(issued.status, InvoiceStatus.PAID)
         self.assertEqual(issued.balance_amount, Decimal("0.00"))
-

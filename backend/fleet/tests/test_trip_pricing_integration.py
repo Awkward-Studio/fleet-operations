@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from fleet.models import (
     CorporateCustomer,
     CorporateContract,
@@ -11,6 +12,7 @@ from fleet.models import (
     DutyType,
     Trip,
     BookingType,
+    PricingAmountStatus,
 )
 
 User = get_user_model()
@@ -71,6 +73,11 @@ class TripPricingIntegrationTests(APITestCase):
         trip = Trip.objects.get(id=res.data["id"])
         # Total base 2500 + 5% tax (125) = 2625.00 (Forged fare 1.00 rejected!)
         self.assertEqual(trip.fare_amount, Decimal("2625.00"))
+        self.assertEqual(trip.pricing_amount_status, PricingAmountStatus.QUOTED)
+        self.assertEqual(trip.quoted_taxable_amount, Decimal("2500.00"))
+        self.assertEqual(trip.quoted_tax_amount, Decimal("125.00"))
+        self.assertEqual(trip.quoted_total_amount, Decimal("2625.00"))
+        self.assertEqual(res.data["quoted_taxable_amount"], "2500.00")
         self.assertEqual(trip.customer_display_name_snapshot, "Delta Corp")
         self.assertIn("contract", trip.pricing_snapshot)
         self.assertEqual(trip.contract_id, self.contract.id)
@@ -89,6 +96,10 @@ class TripPricingIntegrationTests(APITestCase):
         res = self.client.post("/api/trips/", payload, format="json")
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["fare_amount"], "3000.00")
+        self.assertEqual(
+            res.data["pricing_amount_status"],
+            PricingAmountStatus.LEGACY_UNCLASSIFIED,
+        )
 
     def test_immutability_of_trip_snapshot_on_customer_change(self):
         self.client.force_authenticate(user=self.user)
@@ -114,3 +125,33 @@ class TripPricingIntegrationTests(APITestCase):
         trip = Trip.objects.get(id=trip_id)
         self.assertEqual(trip.customer_display_name_snapshot, "Delta Corp")
         self.assertEqual(trip.fare_amount, Decimal("2625.00"))
+
+    def test_explicit_quote_amounts_must_reconcile(self):
+        trip = Trip(
+            pickup_city="Mumbai",
+            drop_city="Pune",
+            pickup_at=datetime.datetime(2026, 7, 25, 10, tzinfo=datetime.timezone.utc),
+            estimated_drop_at=datetime.datetime(2026, 7, 25, 14, tzinfo=datetime.timezone.utc),
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("2500.00"),
+            quoted_tax_amount=Decimal("125.00"),
+            quoted_total_amount=Decimal("2750.00"),
+        )
+
+        with self.assertRaises(ValidationError):
+            trip.full_clean()
+
+    def test_legacy_fare_remains_explicitly_unclassified(self):
+        trip = Trip.objects.create(
+            pickup_city="Mumbai",
+            drop_city="Pune",
+            pickup_at=datetime.datetime(2026, 7, 25, 10, tzinfo=datetime.timezone.utc),
+            estimated_drop_at=datetime.datetime(2026, 7, 25, 14, tzinfo=datetime.timezone.utc),
+            fare_amount=Decimal("3000.00"),
+        )
+
+        self.assertEqual(
+            trip.pricing_amount_status,
+            PricingAmountStatus.LEGACY_UNCLASSIFIED,
+        )
+        self.assertIsNone(trip.quoted_taxable_amount)

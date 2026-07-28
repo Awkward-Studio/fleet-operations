@@ -89,6 +89,10 @@ class PricingEngineTests(APITestCase):
         self.assertEqual(charges["cgst_amount"], "50.00")
         self.assertEqual(charges["sgst_amount"], "50.00")
         self.assertEqual(quote["total_amount"], "2100.00")
+        self.assertEqual(quote["calculation_version"], "contract-quote-v1")
+        self.assertEqual(quote["taxable_amount"], "2000.00")
+        self.assertEqual(quote["tax_amount"], "100.00")
+        self.assertEqual(quote["gross_amount"], "2100.00")
 
     def test_local_excess_hours_and_km_with_allowance(self):
         quote = calculate_quote(

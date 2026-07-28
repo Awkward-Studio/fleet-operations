@@ -2444,7 +2444,7 @@ function TripForm({
       payload.customer_id = selectedCustomerId;
       payload.duty_type = dutyType;
       payload.vehicle_category_requested = vehicleCategory;
-      payload.fare_amount = quote.total_amount;
+      payload.fare_amount = quote.gross_amount;
     } else {
       payload.customer_name = String(formData.get("customer_name"));
       payload.ota_source = String(formData.get("ota_source"));
@@ -2602,15 +2602,19 @@ function TripForm({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
                 <span>Taxes (CGST {quote.itemized_charges.cgst_rate}% + SGST {quote.itemized_charges.sgst_rate}%):</span>
-                <span style={{ color: "#fff" }}>₹{(Number(quote.itemized_charges.cgst_amount) + Number(quote.itemized_charges.sgst_amount)).toFixed(2)}</span>
+                <span style={{ color: "#fff" }}>₹{quote.tax_amount}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
+                <span>Taxable subtotal:</span>
+                <span style={{ color: "#fff" }}>₹{quote.taxable_amount}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
                 <span>Metering Policy:</span>
                 <span style={{ color: "var(--accent)" }}>{quote.contract.metering_policy}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "1px solid var(--line)", fontSize: 15 }}>
-                <strong style={{ color: "#fff" }}>Calculated Fare:</strong>
-                <strong style={{ color: "#10b981" }}>₹{quote.total_amount}</strong>
+                <strong style={{ color: "#fff" }}>Gross quoted fare:</strong>
+                <strong style={{ color: "#10b981" }}>₹{quote.gross_amount}</strong>
               </div>
             </div>
           ) : (

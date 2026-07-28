@@ -15,7 +15,8 @@ from .models import (
     TripCloseout,
     CloseoutStatus,
 )
-from fleet.models import Trip
+from .tax_service import TaxService, money
+from fleet.models import PricingAmountStatus, Trip
 
 
 class InvoiceService:
@@ -24,7 +25,11 @@ class InvoiceService:
         if not trip_ids:
             raise ValidationError("At least one trip must be provided to generate an invoice draft.")
 
-        trips = list(Trip.objects.filter(id__in=trip_ids).select_related("customer", "closeout"))
+        trips = list(
+            Trip.objects.filter(id__in=trip_ids).select_related(
+                "customer", "closeout", "contract"
+            )
+        )
         if len(trips) != len(trip_ids):
             raise ValidationError("One or more specified trips could not be found.")
 
@@ -36,6 +41,40 @@ class InvoiceService:
 
             if InvoiceTrip.objects.filter(trip=t).exists():
                 raise ValidationError(f"Trip #{t.id} has already been invoiced.")
+
+            if t.pricing_amount_status not in (
+                PricingAmountStatus.QUOTED,
+                PricingAmountStatus.FINALIZED,
+            ):
+                raise ValidationError(
+                    f"Trip #{t.id} has legacy or unclassified pricing. Reprice and approve "
+                    "the trip before generating an invoice."
+                )
+
+            amount_prefix = (
+                "final"
+                if t.pricing_amount_status == PricingAmountStatus.FINALIZED
+                else "quoted"
+            )
+            values = [
+                getattr(t, f"{amount_prefix}_taxable_amount"),
+                getattr(t, f"{amount_prefix}_tax_amount"),
+                getattr(t, f"{amount_prefix}_total_amount"),
+            ]
+            if any(value is None for value in values) or money(values[0] + values[1]) != money(values[2]):
+                raise ValidationError(
+                    f"Trip #{t.id} pricing components are incomplete or unreconciled."
+                )
+
+            if (
+                hasattr(t, "closeout")
+                and t.closeout
+                and t.closeout.extra_charges.exists()
+                and t.closeout.status != CloseoutStatus.APPROVED
+            ):
+                raise ValidationError(
+                    f"Trip #{t.id} has extra charges that must be approved before invoicing."
+                )
 
         today = datetime.date.today()
         # Find active financial year & period
@@ -63,6 +102,11 @@ class InvoiceService:
                 )
 
         with transaction.atomic():
+            context = TaxService.determine_context(
+                legal_entity=legal_entity,
+                customer_gstin=customer.gstin if customer else "",
+                place_of_supply="Maharashtra (27)",
+            )
             invoice = Invoice.objects.create(
                 legal_entity=legal_entity,
                 customer=customer,
@@ -74,70 +118,116 @@ class InvoiceService:
                 billing_name_snapshot=customer.display_name if customer else (trips[0].customer_name or "Retail Cash Customer"),
                 billing_address_snapshot=customer.billing_address if customer else "",
                 gstin_snapshot=customer.gstin if customer else "",
+                supplier_state_code_snapshot=context.supplier_state_code,
+                customer_state_code_snapshot=context.customer_state_code,
+                tax_regime=context.regime,
                 created_by=created_by,
             )
 
             total_taxable = Decimal("0.00")
             total_cgst = Decimal("0.00")
             total_sgst = Decimal("0.00")
+            total_igst = Decimal("0.00")
 
             for t in trips:
                 InvoiceTrip.objects.create(invoice=invoice, trip=t)
 
-                # Line 1: Trip Base Fare
-                base_fare = t.fare_amount or Decimal("0.00")
-                cgst = (base_fare * Decimal("0.025")).quantize(Decimal("0.01"))
-                sgst = (base_fare * Decimal("0.025")).quantize(Decimal("0.01"))
-                line_tot = base_fare + cgst + sgst
+                amount_prefix = (
+                    "final"
+                    if t.pricing_amount_status == PricingAmountStatus.FINALIZED
+                    else "quoted"
+                )
+                taxable = getattr(t, f"{amount_prefix}_taxable_amount")
+                snapshot = t.pricing_snapshot or {}
+                itemized = snapshot.get("itemized_charges", {})
+                contract = t.contract
+                cgst_rate = (
+                    contract.cgst_rate if contract else itemized.get("cgst_rate", 0)
+                )
+                sgst_rate = (
+                    contract.sgst_rate if contract else itemized.get("sgst_rate", 0)
+                )
+                tax = TaxService.calculate_line(
+                    taxable_value=taxable,
+                    cgst_rate=cgst_rate,
+                    sgst_rate=sgst_rate,
+                    context=context,
+                )
 
                 InvoiceLine.objects.create(
                     invoice=invoice,
                     description=f"Trip #{t.id}: {t.pickup_city} to {t.drop_city} ({t.duty_type or 'Local/Outstation'})",
                     quantity=Decimal("1.00"),
-                    unit_rate=base_fare,
-                    taxable_value=base_fare,
-                    cgst_rate=Decimal("2.50"),
-                    cgst_amount=cgst,
-                    sgst_rate=Decimal("2.50"),
-                    sgst_amount=sgst,
-                    line_total=line_tot,
+                    unit_rate=tax.taxable_value,
+                    taxable_value=tax.taxable_value,
+                    cgst_rate=tax.cgst_rate,
+                    cgst_amount=tax.cgst_amount,
+                    sgst_rate=tax.sgst_rate,
+                    sgst_amount=tax.sgst_amount,
+                    igst_rate=tax.igst_rate,
+                    igst_amount=tax.igst_amount,
+                    tax_regime=tax.regime,
+                    source_type="TRIP_PRICING",
+                    source_id=str(t.id),
+                    calculation_version=snapshot.get("calculation_version", ""),
+                    pricing_snapshot=snapshot,
+                    line_total=tax.line_total,
                 )
 
-                total_taxable += base_fare
-                total_cgst += cgst
-                total_sgst += sgst
+                total_taxable += tax.taxable_value
+                total_cgst += tax.cgst_amount
+                total_sgst += tax.sgst_amount
+                total_igst += tax.igst_amount
 
-                # Extra Charges line items from closeout if available
-                if hasattr(t, "closeout") and t.closeout:
+                if (
+                    hasattr(t, "closeout")
+                    and t.closeout
+                    and t.closeout.status == CloseoutStatus.APPROVED
+                ):
                     for charge in t.closeout.extra_charges.all():
-                        c_amount = charge.amount
-                        c_cgst = (c_amount * Decimal("0.025")).quantize(Decimal("0.01"))
-                        c_sgst = (c_amount * Decimal("0.025")).quantize(Decimal("0.01"))
-                        c_tot = c_amount + c_cgst + c_sgst
+                        charge_tax = TaxService.calculate_line(
+                            taxable_value=charge.amount,
+                            cgst_rate=cgst_rate,
+                            sgst_rate=sgst_rate,
+                            context=context,
+                        )
 
                         InvoiceLine.objects.create(
                             invoice=invoice,
                             description=f"Trip #{t.id} Extra: {charge.get_category_display()} - {charge.description or ''}".strip(),
                             quantity=Decimal("1.00"),
-                            unit_rate=c_amount,
-                            taxable_value=c_amount,
-                            cgst_rate=Decimal("2.50"),
-                            cgst_amount=c_cgst,
-                            sgst_rate=Decimal("2.50"),
-                            sgst_amount=c_sgst,
-                            line_total=c_tot,
+                            unit_rate=charge_tax.taxable_value,
+                            taxable_value=charge_tax.taxable_value,
+                            cgst_rate=charge_tax.cgst_rate,
+                            cgst_amount=charge_tax.cgst_amount,
+                            sgst_rate=charge_tax.sgst_rate,
+                            sgst_amount=charge_tax.sgst_amount,
+                            igst_rate=charge_tax.igst_rate,
+                            igst_amount=charge_tax.igst_amount,
+                            tax_regime=charge_tax.regime,
+                            source_type="TRIP_CHARGE",
+                            source_id=str(charge.id),
+                            calculation_version=snapshot.get("calculation_version", ""),
+                            pricing_snapshot={
+                                "trip_id": t.id,
+                                "charge_category": charge.category,
+                                "approved_closeout_id": t.closeout.id,
+                            },
+                            line_total=charge_tax.line_total,
                         )
-                        total_taxable += c_amount
-                        total_cgst += c_cgst
-                        total_sgst += c_sgst
+                        total_taxable += charge_tax.taxable_value
+                        total_cgst += charge_tax.cgst_amount
+                        total_sgst += charge_tax.sgst_amount
+                        total_igst += charge_tax.igst_amount
 
             subtotal = total_taxable
-            grand_total = subtotal + total_cgst + total_sgst
+            grand_total = subtotal + total_cgst + total_sgst + total_igst
 
             invoice.subtotal = subtotal
             invoice.taxable_amount = total_taxable
             invoice.cgst_amount = total_cgst
             invoice.sgst_amount = total_sgst
+            invoice.igst_amount = total_igst
             invoice.total_amount = grand_total
             invoice.balance_amount = grand_total
             invoice.save()
@@ -188,6 +278,14 @@ class PostingEngine:
                 code="2200",
                 defaults={"name": "Output SGST Payable", "account_type": AccountType.LIABILITY, "external_mapping_code": "TAX_2200"},
             )
+            igst_account, _ = LedgerAccount.objects.get_or_create(
+                code="2250",
+                defaults={
+                    "name": "Output IGST Payable",
+                    "account_type": AccountType.LIABILITY,
+                    "external_mapping_code": "TAX_2250",
+                },
+            )
 
             entry_number = f"JV/INV/{invoice.id}"
             journal, _ = JournalEntry.objects.get_or_create(
@@ -231,7 +329,7 @@ class PostingEngine:
                     account=cgst_account,
                     debit_amount=Decimal("0.00"),
                     credit_amount=invoice.cgst_amount,
-                    narration="Output CGST @ 2.5%",
+                    narration="Output CGST",
                 )
 
             # Cr SGST
@@ -241,7 +339,16 @@ class PostingEngine:
                     account=sgst_account,
                     debit_amount=Decimal("0.00"),
                     credit_amount=invoice.sgst_amount,
-                    narration="Output SGST @ 2.5%",
+                    narration="Output SGST",
+                )
+
+            if invoice.igst_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=igst_account,
+                    debit_amount=Decimal("0.00"),
+                    credit_amount=invoice.igst_amount,
+                    narration="Output IGST",
                 )
 
             total_debits = sum(line.debit_amount for line in journal.lines.all())
@@ -478,5 +585,3 @@ class PaymentService:
             invoice.save()
 
             return allocation
-
-

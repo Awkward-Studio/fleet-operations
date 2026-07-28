@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import UploadedAsset
+from .storage import get_asset_url
 
 
 class UploadedAssetSerializer(serializers.ModelSerializer):
@@ -22,7 +23,7 @@ class UploadedAssetSerializer(serializers.ModelSerializer):
 
     def get_href(self, obj):
         request = self.context.get("request")
-        if not obj.file_url:
+        url = get_asset_url(obj)
+        if not url:
             return None
-        url = obj.file_url
         return request.build_absolute_uri(url) if request else url

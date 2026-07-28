@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -81,7 +82,58 @@ USE_TZ = True
 STATIC_URL = "static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
-MEDIA_STORAGE_BACKEND = os.getenv("MEDIA_STORAGE_BACKEND", "local").strip() or "local"
+RAILWAY_BUCKET_ENDPOINT_URL = (
+    os.getenv("RAILWAY_BUCKET_ENDPOINT_URL")
+    or os.getenv("RAILWAY_BUCKET_ENPOINT_URL")
+    or ""
+).strip()
+RAILWAY_BUCKET_REGION = os.getenv("RAILWAY_BUCKET_REGION", "auto").strip() or "auto"
+RAILWAY_BUCKET_NAME = os.getenv("RAILWAY_BUCKET_NAME", "").strip()
+RAILWAY_BUCKET_ACCESS_KEY_ID = os.getenv("RAILWAY_BUCKET_ACCESS_KEY_ID", "").strip()
+RAILWAY_BUCKET_SECRET_KEY = os.getenv("RAILWAY_BUCKET_SECRET_KEY", "").strip()
+RAILWAY_BUCKET_CUSTOM_DOMAIN = os.getenv("RAILWAY_BUCKET_CUSTOM_DOMAIN", "").strip()
+_configured_media_backend = os.getenv("MEDIA_STORAGE_BACKEND")
+MEDIA_STORAGE_BACKEND = (
+    _configured_media_backend.strip()
+    if _configured_media_backend
+    else (
+        "railway"
+        if "test" not in sys.argv
+        and all(
+            [
+                RAILWAY_BUCKET_ENDPOINT_URL,
+                RAILWAY_BUCKET_NAME,
+                RAILWAY_BUCKET_ACCESS_KEY_ID,
+                RAILWAY_BUCKET_SECRET_KEY,
+            ]
+        )
+        else "local"
+    )
+)
+
+if MEDIA_STORAGE_BACKEND.lower() in {"railway", "railway_bucket", "s3"}:
+    STORAGES = {
+        "default": {
+            "BACKEND": "config.storage_backends.RailwayBucketStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+    AWS_ACCESS_KEY_ID = RAILWAY_BUCKET_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY = RAILWAY_BUCKET_SECRET_KEY
+    AWS_STORAGE_BUCKET_NAME = RAILWAY_BUCKET_NAME
+    AWS_S3_ENDPOINT_URL = RAILWAY_BUCKET_ENDPOINT_URL
+    AWS_S3_REGION_NAME = RAILWAY_BUCKET_REGION
+    AWS_S3_ADDRESSING_STYLE = "path"
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = True
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_S3_OBJECT_PARAMETERS = {
+        "CacheControl": "private, max-age=0, no-cache",
+    }
+    if RAILWAY_BUCKET_CUSTOM_DOMAIN:
+        AWS_S3_CUSTOM_DOMAIN = RAILWAY_BUCKET_CUSTOM_DOMAIN
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = True

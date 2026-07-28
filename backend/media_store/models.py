@@ -23,7 +23,7 @@ class UploadedAsset(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     kind = models.CharField(max_length=20, choices=KIND_CHOICES)
-    file_url = models.URLField(null=True, blank=True)
+    file_url = models.URLField(max_length=1000, null=True, blank=True)
     storage_key = models.CharField(max_length=500, blank=True)
     checksum_sha256 = models.CharField(max_length=64, blank=True)
     is_private = models.BooleanField(default=True)

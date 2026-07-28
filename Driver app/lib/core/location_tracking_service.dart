@@ -15,6 +15,7 @@ import 'api_client.dart';
 const _trackingTripIdKey = 'activeLocationTrackingTripId';
 const _trackingLastLatitudeKey = 'activeLocationTrackingLastLatitude';
 const _trackingLastLongitudeKey = 'activeLocationTrackingLastLongitude';
+const _trackingPollInterval = Duration(seconds: 60);
 
 class LocationTrackingService {
   const LocationTrackingService._();
@@ -180,7 +181,7 @@ void locationTrackingServiceEntryPoint(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  Timer.periodic(const Duration(seconds: 15), (timer) async {
+  Timer.periodic(_trackingPollInterval, (timer) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     final tripId = prefs.getInt(_trackingTripIdKey);
@@ -259,7 +260,7 @@ Future<Position?> _readPosition() async {
           ? AndroidSettings(
               accuracy: LocationAccuracy.high,
               distanceFilter: 50,
-              intervalDuration: const Duration(seconds: 15),
+              intervalDuration: _trackingPollInterval,
               foregroundNotificationConfig: const ForegroundNotificationConfig(
                 notificationTitle: 'Live GPS Tracking Active',
                 notificationText: 'Streaming active trip location',

@@ -208,7 +208,7 @@ Implemented locally:
 - Backend stores `TripLocationLog`.
 - Driver app starts GPS tracking for `ACTIVE` trips.
 - Driver app uses Android foreground/background service.
-- Driver app posts telemetry every 15 seconds, with a 50-meter movement threshold.
+- Driver app posts telemetry every 60 seconds, with a 50-meter movement threshold.
 - Driver app stops local tracking when the trip is no longer `ACTIVE`.
 
 Still open:

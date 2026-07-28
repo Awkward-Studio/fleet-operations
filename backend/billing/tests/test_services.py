@@ -14,6 +14,7 @@ from billing.models import (
 )
 from billing.services import InvoiceService
 from fleet.models import (
+    BookingType,
     CorporateCustomer,
     Driver,
     PricingAmountStatus,
@@ -63,11 +64,12 @@ class InvoiceServiceTests(TestCase):
 
         self.trip1 = Trip.objects.create(
             customer=self.customer,
+            booking_type=BookingType.CORPORATE,
             pickup_city="Mumbai",
             drop_city="Mumbai",
             pickup_at=datetime.datetime(2026, 7, 23, 10, 0, tzinfo=datetime.timezone.utc),
             estimated_drop_at=datetime.datetime(2026, 7, 23, 18, 0, tzinfo=datetime.timezone.utc),
-            status="COMPLETED",
+            status="completed",
             vehicle=self.vehicle,
             driver=self.driver,
             fare_amount=Decimal("2400.00"),
@@ -133,14 +135,14 @@ class InvoiceServiceTests(TestCase):
         self.trip1.pricing_amount_status = PricingAmountStatus.LEGACY_UNCLASSIFIED
         self.trip1.save(update_fields=["pricing_amount_status"])
 
-        with self.assertRaisesMessage(
-            ValidationError, "legacy or unclassified pricing"
-        ):
+        with self.assertRaisesMessage(ValidationError, "AMOUNT_UNCLASSIFIED"):
             InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
 
     def test_interstate_invoice_posts_igst_liability(self):
         self.customer.gstin = "29AAACA1234A1Z5"
         self.customer.save(update_fields=["gstin"])
+        self.trip1.bill_to_gstin_snapshot = self.customer.gstin
+        self.trip1.save(update_fields=["bill_to_gstin_snapshot"])
 
         invoice = InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
         self.assertEqual(invoice.cgst_amount, Decimal("0.00"))
@@ -184,7 +186,7 @@ class InvoiceServiceTests(TestCase):
             drop_city="Pune",
             pickup_at=datetime.datetime(2026, 7, 24, 10, tzinfo=datetime.timezone.utc),
             estimated_drop_at=datetime.datetime(2026, 7, 24, 14, tzinfo=datetime.timezone.utc),
-            status="COMPLETED",
+            status="completed",
             fare_amount=Decimal("1575.00"),
             pricing_amount_status=PricingAmountStatus.QUOTED,
             quoted_taxable_amount=Decimal("1500.00"),
@@ -198,6 +200,12 @@ class InvoiceServiceTests(TestCase):
                 },
             },
         )
+        TripCloseout.objects.create(
+            trip=adhoc,
+            start_odometer_km=200,
+            end_odometer_km=260,
+            status=CloseoutStatus.APPROVED,
+        )
 
         invoice = InvoiceService.generate_invoice_draft(self.entity, [adhoc.id])
         line = invoice.lines.get()
@@ -205,6 +213,108 @@ class InvoiceServiceTests(TestCase):
         self.assertEqual(invoice.total_amount, Decimal("1575.00"))
         self.assertEqual(line.source_id, str(adhoc.id))
         self.assertEqual(line.calculation_version, "adhoc-quote-v1")
+
+    def test_similar_named_direct_customers_never_merge_without_shared_identity(self):
+        def create_direct(phone):
+            trip = Trip.objects.create(
+                booking_type=BookingType.ADHOC,
+                customer_name="Rahul Sharma",
+                customer_phone=phone,
+                pickup_city="Mumbai",
+                drop_city="Pune",
+                pickup_at=datetime.datetime(2026, 7, 26, 10, tzinfo=datetime.timezone.utc),
+                estimated_drop_at=datetime.datetime(2026, 7, 26, 14, tzinfo=datetime.timezone.utc),
+                status="completed",
+                pricing_amount_status=PricingAmountStatus.QUOTED,
+                quoted_taxable_amount=Decimal("1000.00"),
+                quoted_tax_amount=Decimal("50.00"),
+                quoted_total_amount=Decimal("1050.00"),
+                pricing_snapshot={"itemized_charges": {"cgst_rate": "2.50", "sgst_rate": "2.50"}},
+            )
+            TripCloseout.objects.create(
+                trip=trip,
+                start_odometer_km=100,
+                end_odometer_km=150,
+                status=CloseoutStatus.APPROVED,
+            )
+            return trip
+
+        first = create_direct("+919000000001")
+        second = create_direct("+919000000002")
+        self.assertNotEqual(first.bill_to_key, second.bill_to_key)
+
+        with self.assertRaisesMessage(ValidationError, "BILL_TO_MISMATCH"):
+            InvoiceService.generate_invoice_draft(
+                self.entity, [first.id, second.id]
+            )
+
+    def test_uncompleted_trip_is_rejected_with_status_blocker(self):
+        self.trip1.status = "active"
+        self.trip1.save(update_fields=["status"])
+
+        with self.assertRaisesMessage(ValidationError, "STATUS_NOT_COMPLETED"):
+            InvoiceService.generate_invoice_draft(self.entity, [self.trip1.id])
+
+    def test_same_corporate_bill_to_can_consolidate(self):
+        second = Trip.objects.create(
+            customer=self.customer,
+            booking_type=BookingType.CORPORATE,
+            pickup_city="Mumbai",
+            drop_city="Nashik",
+            pickup_at=datetime.datetime(2026, 7, 27, 10, tzinfo=datetime.timezone.utc),
+            estimated_drop_at=datetime.datetime(2026, 7, 27, 16, tzinfo=datetime.timezone.utc),
+            status="completed",
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("1000.00"),
+            quoted_tax_amount=Decimal("50.00"),
+            quoted_total_amount=Decimal("1050.00"),
+            pricing_snapshot={"itemized_charges": {"cgst_rate": "2.50", "sgst_rate": "2.50"}},
+        )
+        TripCloseout.objects.create(
+            trip=second,
+            start_odometer_km=1100,
+            end_odometer_km=1200,
+            status=CloseoutStatus.APPROVED,
+        )
+
+        invoice = InvoiceService.generate_invoice_draft(
+            self.entity, [self.trip1.id, second.id]
+        )
+        self.assertEqual(invoice.invoice_trips.count(), 2)
+        self.assertEqual(invoice.bill_to_key, f"CORPORATE:{self.customer.id}")
+
+    def test_ota_counterparty_groups_separately_from_direct_customer(self):
+        def ota_trip(source):
+            trip = Trip.objects.create(
+                booking_type=BookingType.OTA,
+                ota_source=source,
+                customer_name="OTA Passenger",
+                pickup_city="Mumbai",
+                drop_city="Airport",
+                pickup_at=datetime.datetime(2026, 7, 28, 10, tzinfo=datetime.timezone.utc),
+                estimated_drop_at=datetime.datetime(2026, 7, 28, 12, tzinfo=datetime.timezone.utc),
+                status="completed",
+                pricing_amount_status=PricingAmountStatus.QUOTED,
+                quoted_taxable_amount=Decimal("800.00"),
+                quoted_tax_amount=Decimal("40.00"),
+                quoted_total_amount=Decimal("840.00"),
+                pricing_snapshot={"itemized_charges": {"cgst_rate": "2.50", "sgst_rate": "2.50"}},
+            )
+            TripCloseout.objects.create(
+                trip=trip,
+                start_odometer_km=500,
+                end_odometer_km=530,
+                status=CloseoutStatus.APPROVED,
+            )
+            return trip
+
+        first = ota_trip("MakeMyTrip")
+        second = ota_trip("MakeMyTrip")
+        invoice = InvoiceService.generate_invoice_draft(
+            self.entity, [first.id, second.id]
+        )
+        self.assertEqual(invoice.bill_to_key, "OTA:MAKEMYTRIP")
+        self.assertEqual(invoice.booking_channel, BookingType.OTA)
 
     def test_payment_receipt_and_allocation(self):
         from billing.services import PaymentService

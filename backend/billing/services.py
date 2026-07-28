@@ -1,4 +1,5 @@
 import datetime
+from dataclasses import dataclass
 from decimal import Decimal
 from django.db import transaction
 from django.core.exceptions import ValidationError
@@ -16,64 +17,168 @@ from .models import (
     CloseoutStatus,
 )
 from .tax_service import TaxService, money
-from fleet.models import PricingAmountStatus, Trip
+from fleet.models import PricingAmountStatus, Trip, TripStatus
+
+
+@dataclass(frozen=True)
+class BillabilityBlocker:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class BillabilityResult:
+    eligible: bool
+    blockers: tuple[BillabilityBlocker, ...]
+    bill_to_key: str
+    estimated_taxable_amount: Decimal
+
+
+class BillabilityService:
+    @staticmethod
+    def evaluate(trip: Trip) -> BillabilityResult:
+        blockers = []
+
+        if trip.status != TripStatus.COMPLETED:
+            blockers.append(BillabilityBlocker(
+                "STATUS_NOT_COMPLETED",
+                "Trip must be completed before invoicing.",
+            ))
+
+        closeout = getattr(trip, "closeout", None)
+        if closeout is None:
+            blockers.append(BillabilityBlocker(
+                "CLOSEOUT_MISSING",
+                "Trip closeout has not been submitted.",
+            ))
+        else:
+            if closeout.status not in (CloseoutStatus.APPROVED, CloseoutStatus.BILLING_READY):
+                blockers.append(BillabilityBlocker(
+                    "CLOSEOUT_NOT_APPROVED",
+                    "Trip closeout must be approved before invoicing.",
+                ))
+            if closeout.end_odometer_km <= closeout.start_odometer_km:
+                blockers.append(BillabilityBlocker(
+                    "EVIDENCE_MISSING",
+                    "Approved closeout requires reconciled start and end odometer evidence.",
+                ))
+
+        if trip.pricing_amount_status not in (
+            PricingAmountStatus.QUOTED,
+            PricingAmountStatus.FINALIZED,
+        ):
+            blockers.append(BillabilityBlocker(
+                "AMOUNT_UNCLASSIFIED",
+                "Trip pricing must be explicitly quoted or finalized.",
+            ))
+            taxable = Decimal("0.00")
+        else:
+            prefix = (
+                "final"
+                if trip.pricing_amount_status == PricingAmountStatus.FINALIZED
+                else "quoted"
+            )
+            taxable = getattr(trip, f"{prefix}_taxable_amount")
+            tax = getattr(trip, f"{prefix}_tax_amount")
+            total = getattr(trip, f"{prefix}_total_amount")
+            if (
+                taxable is None
+                or tax is None
+                or total is None
+                or money(taxable + tax) != money(total)
+            ):
+                blockers.append(BillabilityBlocker(
+                    "AMOUNT_UNRECONCILED",
+                    "Trip taxable, tax, and gross amounts do not reconcile.",
+                ))
+                taxable = Decimal("0.00")
+
+        if InvoiceTrip.objects.filter(trip_id=trip.id).exists():
+            blockers.append(BillabilityBlocker(
+                "ALREADY_INVOICED",
+                "Trip is already reserved by an invoice.",
+            ))
+
+        if not trip.bill_to_key or not trip.bill_to_name_snapshot:
+            blockers.append(BillabilityBlocker(
+                "BILL_TO_MISSING",
+                "A persisted bill-to identity and billing name are required.",
+            ))
+
+        if trip.customer_id and trip.customer.po_required and not trip.po_number:
+            blockers.append(BillabilityBlocker(
+                "PO_REQUIRED",
+                "This customer requires a purchase order number.",
+            ))
+
+        return BillabilityResult(
+            eligible=not blockers,
+            blockers=tuple(blockers),
+            bill_to_key=trip.bill_to_key,
+            estimated_taxable_amount=money(taxable),
+        )
 
 
 class InvoiceService:
     @staticmethod
+    @transaction.atomic
     def generate_invoice_draft(legal_entity: LegalEntity, trip_ids: list, created_by=None) -> Invoice:
         if not trip_ids:
             raise ValidationError("At least one trip must be provided to generate an invoice draft.")
 
         trips = list(
-            Trip.objects.filter(id__in=trip_ids).select_related(
+            Trip.objects.select_for_update().filter(id__in=trip_ids).select_related(
                 "customer", "closeout", "contract"
             )
         )
         if len(trips) != len(trip_ids):
             raise ValidationError("One or more specified trips could not be found.")
 
-        # Ensure all trips belong to the same customer (if corporate)
         customer = trips[0].customer
+        bill_to_key = trips[0].bill_to_key
+        booking_channel = trips[0].booking_type
+        currency = trips[0].contract.currency if trips[0].contract_id else "INR"
+        po_number = trips[0].po_number
+        billing_cycle = (
+            trips[0].pricing_snapshot.get("billing_cycle", "ON_DEMAND")
+            if trips[0].pricing_snapshot
+            else "ON_DEMAND"
+        )
         for t in trips:
-            if t.customer != customer:
-                raise ValidationError("Consolidated invoice trips must belong to the same customer.")
-
-            if InvoiceTrip.objects.filter(trip=t).exists():
-                raise ValidationError(f"Trip #{t.id} has already been invoiced.")
-
-            if t.pricing_amount_status not in (
-                PricingAmountStatus.QUOTED,
-                PricingAmountStatus.FINALIZED,
-            ):
-                raise ValidationError(
-                    f"Trip #{t.id} has legacy or unclassified pricing. Reprice and approve "
-                    "the trip before generating an invoice."
+            result = BillabilityService.evaluate(t)
+            if not result.eligible:
+                details = "; ".join(
+                    f"{blocker.code}: {blocker.message}"
+                    for blocker in result.blockers
                 )
-
-            amount_prefix = (
-                "final"
-                if t.pricing_amount_status == PricingAmountStatus.FINALIZED
-                else "quoted"
+                raise ValidationError(
+                    f"Trip #{t.id} is not billable. {details}"
+                )
+            if result.bill_to_key != bill_to_key:
+                raise ValidationError(
+                    "BILL_TO_MISMATCH: All invoice trips must share the same persisted bill-to identity."
+                )
+            trip_currency = t.contract.currency if t.contract_id else "INR"
+            trip_cycle = (
+                t.pricing_snapshot.get("billing_cycle", "ON_DEMAND")
+                if t.pricing_snapshot
+                else "ON_DEMAND"
             )
-            values = [
-                getattr(t, f"{amount_prefix}_taxable_amount"),
-                getattr(t, f"{amount_prefix}_tax_amount"),
-                getattr(t, f"{amount_prefix}_total_amount"),
-            ]
-            if any(value is None for value in values) or money(values[0] + values[1]) != money(values[2]):
+            if t.booking_type != booking_channel:
                 raise ValidationError(
-                    f"Trip #{t.id} pricing components are incomplete or unreconciled."
+                    "CHANNEL_MISMATCH: Corporate, direct, and OTA trips cannot share one invoice."
                 )
-
-            if (
-                hasattr(t, "closeout")
-                and t.closeout
-                and t.closeout.extra_charges.exists()
-                and t.closeout.status != CloseoutStatus.APPROVED
-            ):
+            if trip_currency != currency:
                 raise ValidationError(
-                    f"Trip #{t.id} has extra charges that must be approved before invoicing."
+                    "CURRENCY_MISMATCH: All invoice trips must use the same currency."
+                )
+            if trip_cycle != billing_cycle:
+                raise ValidationError(
+                    "BILLING_CYCLE_MISMATCH: All invoice trips must use the same billing cycle."
+                )
+            if t.po_number != po_number:
+                raise ValidationError(
+                    "PO_MISMATCH: All invoice trips must use the same purchase order."
                 )
 
         today = datetime.date.today()
@@ -104,20 +209,28 @@ class InvoiceService:
         with transaction.atomic():
             context = TaxService.determine_context(
                 legal_entity=legal_entity,
-                customer_gstin=customer.gstin if customer else "",
+                customer_gstin=trips[0].bill_to_gstin_snapshot,
                 place_of_supply="Maharashtra (27)",
             )
             invoice = Invoice.objects.create(
                 legal_entity=legal_entity,
                 customer=customer,
+                bill_to_type=trips[0].bill_to_type,
+                bill_to_key=trips[0].bill_to_key,
+                booking_channel=trips[0].booking_type,
+                billing_cycle=billing_cycle,
                 status=InvoiceStatus.DRAFT,
+                currency=currency,
                 financial_year=fy,
                 fiscal_period=period,
                 issue_date=today,
-                due_date=today + datetime.timedelta(days=customer.payment_terms_days if customer else 30),
-                billing_name_snapshot=customer.display_name if customer else (trips[0].customer_name or "Retail Cash Customer"),
-                billing_address_snapshot=customer.billing_address if customer else "",
-                gstin_snapshot=customer.gstin if customer else "",
+                due_date=today + datetime.timedelta(days=customer.payment_terms_days if customer else 0),
+                po_number=trips[0].po_number,
+                billing_name_snapshot=trips[0].bill_to_name_snapshot,
+                billing_address_snapshot=trips[0].bill_to_address_snapshot,
+                gstin_snapshot=trips[0].bill_to_gstin_snapshot,
+                billing_email_snapshot=trips[0].bill_to_email_snapshot,
+                billing_phone_snapshot=trips[0].bill_to_phone_snapshot,
                 supplier_state_code_snapshot=context.supplier_state_code,
                 customer_state_code_snapshot=context.customer_state_code,
                 tax_regime=context.regime,

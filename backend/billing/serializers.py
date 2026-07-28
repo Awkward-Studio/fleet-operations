@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote
 from fleet.serializers import TripSerializer
+from .services import BillabilityService
 
 
 class LegalEntitySerializer(serializers.ModelSerializer):
@@ -58,3 +59,22 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "balance_amount",
             "created_by",
         ]
+
+
+class BillableTripSerializer(TripSerializer):
+    billing_eligibility = serializers.SerializerMethodField()
+
+    class Meta(TripSerializer.Meta):
+        fields = TripSerializer.Meta.fields + ["billing_eligibility"]
+
+    def get_billing_eligibility(self, obj):
+        result = BillabilityService.evaluate(obj)
+        return {
+            "eligible": result.eligible,
+            "bill_to_key": result.bill_to_key,
+            "estimated_taxable_amount": str(result.estimated_taxable_amount),
+            "blockers": [
+                {"code": blocker.code, "message": blocker.message}
+                for blocker in result.blockers
+            ],
+        }

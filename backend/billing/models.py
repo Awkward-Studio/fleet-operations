@@ -205,6 +205,10 @@ class TaxRegime(models.TextChoices):
 class Invoice(models.Model):
     legal_entity = models.ForeignKey(LegalEntity, related_name="invoices", on_delete=models.PROTECT)
     customer = models.ForeignKey("fleet.CorporateCustomer", related_name="invoices", null=True, blank=True, on_delete=models.SET_NULL)
+    bill_to_type = models.CharField(max_length=16, blank=True)
+    bill_to_key = models.CharField(max_length=100, blank=True, db_index=True)
+    booking_channel = models.CharField(max_length=24, blank=True)
+    billing_cycle = models.CharField(max_length=24, default="PER_TRIP")
     status = models.CharField(max_length=30, choices=InvoiceStatus.choices, default=InvoiceStatus.DRAFT)
     invoice_number = models.CharField(max_length=50, unique=True, null=True, blank=True)
     financial_year = models.ForeignKey(FinancialYear, related_name="invoices", on_delete=models.PROTECT)
@@ -224,6 +228,8 @@ class Invoice(models.Model):
     billing_name_snapshot = models.CharField(max_length=150, blank=True)
     billing_address_snapshot = models.TextField(blank=True)
     gstin_snapshot = models.CharField(max_length=20, blank=True)
+    billing_email_snapshot = models.EmailField(blank=True)
+    billing_phone_snapshot = models.CharField(max_length=30, blank=True)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -445,6 +451,5 @@ class TripExpense(models.Model):
 
     def __str__(self):
         return f"{self.category}: ₹{self.amount} ({self.status})"
-
 
 

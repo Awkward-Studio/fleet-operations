@@ -10,6 +10,7 @@ from .models import (
     CustomerContact,
     Driver,
     DriverStatus,
+    BillToType,
     PricingAmountStatus,
     Trip,
     TripChecklist,
@@ -442,6 +443,14 @@ class TripSerializer(serializers.ModelSerializer):
             "customer_name",
             "customer_phone",
             "customer_display_name_snapshot",
+            "bill_to_type",
+            "bill_to_key",
+            "bill_to_name_snapshot",
+            "bill_to_address_snapshot",
+            "bill_to_gstin_snapshot",
+            "bill_to_email_snapshot",
+            "bill_to_phone_snapshot",
+            "po_number",
             "pricing_snapshot",
             "pickup_city",
             "drop_city",
@@ -475,6 +484,13 @@ class TripSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "customer_display_name_snapshot",
+            "bill_to_type",
+            "bill_to_key",
+            "bill_to_name_snapshot",
+            "bill_to_address_snapshot",
+            "bill_to_gstin_snapshot",
+            "bill_to_email_snapshot",
+            "bill_to_phone_snapshot",
             "pricing_snapshot",
             "contract",
             "contract_rate",
@@ -538,6 +554,13 @@ class TripSerializer(serializers.ModelSerializer):
                 attrs["quoted_tax_amount"] = Decimal(quote["tax_amount"])
                 attrs["quoted_total_amount"] = Decimal(quote["gross_amount"])
                 attrs["customer_display_name_snapshot"] = customer.display_name
+                attrs["bill_to_type"] = BillToType.CORPORATE
+                attrs["bill_to_key"] = f"CORPORATE:{customer.id}"
+                attrs["bill_to_name_snapshot"] = customer.legal_name or customer.display_name
+                attrs["bill_to_address_snapshot"] = customer.billing_address
+                attrs["bill_to_gstin_snapshot"] = customer.gstin
+                attrs["bill_to_email_snapshot"] = customer.billing_email
+                attrs["bill_to_phone_snapshot"] = customer.billing_phone
                 attrs["pricing_snapshot"] = quote
                 attrs["contract_id"] = quote["contract"]["id"]
                 attrs["contract_rate_id"] = quote["rate"]["id"]
@@ -546,6 +569,20 @@ class TripSerializer(serializers.ModelSerializer):
         else:
             cust_name = attrs.get("customer_name", getattr(self.instance, "customer_name", ""))
             attrs["customer_display_name_snapshot"] = cust_name
+            if booking_type == "OTA":
+                ota_source = attrs.get("ota_source", getattr(self.instance, "ota_source", ""))
+                if not ota_source:
+                    raise serializers.ValidationError({"ota_source": "OTA trips require an OTA counterparty."})
+                attrs["bill_to_type"] = BillToType.OTA
+                attrs["bill_to_key"] = f"OTA:{ota_source.strip().upper()}"
+                attrs["bill_to_name_snapshot"] = ota_source.strip()
+            else:
+                attrs["bill_to_type"] = BillToType.DIRECT
+                attrs["bill_to_name_snapshot"] = cust_name
+                attrs["bill_to_phone_snapshot"] = attrs.get(
+                    "customer_phone",
+                    getattr(self.instance, "customer_phone", ""),
+                )
 
         # Validate driver and vehicle assignments
         driver = attrs.get("driver")

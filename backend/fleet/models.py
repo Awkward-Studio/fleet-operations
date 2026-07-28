@@ -1,4 +1,5 @@
 from decimal import Decimal
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
@@ -389,6 +390,16 @@ class BookingType(models.TextChoices):
     OTA = "OTA", "OTA / Aggregator"
 
 
+class BillToType(models.TextChoices):
+    CORPORATE = "CORPORATE", "Corporate customer"
+    DIRECT = "DIRECT", "Direct customer"
+    OTA = "OTA", "OTA counterparty"
+
+
+def new_direct_bill_to_key():
+    return f"DIRECT:{uuid.uuid4()}"
+
+
 class PricingAmountStatus(models.TextChoices):
     LEGACY_UNCLASSIFIED = "LEGACY_UNCLASSIFIED", "Legacy / tax treatment unknown"
     QUOTED = "QUOTED", "Server-priced quote"
@@ -427,6 +438,22 @@ class Trip(models.Model):
     customer_name = models.CharField(max_length=120, blank=True)
     customer_phone = models.CharField(max_length=24, blank=True)
     customer_display_name_snapshot = models.CharField(max_length=150, blank=True)
+    bill_to_type = models.CharField(
+        max_length=16,
+        choices=BillToType.choices,
+        default=BillToType.DIRECT,
+    )
+    bill_to_key = models.CharField(
+        max_length=100,
+        default=new_direct_bill_to_key,
+        db_index=True,
+    )
+    bill_to_name_snapshot = models.CharField(max_length=150, blank=True)
+    bill_to_address_snapshot = models.TextField(blank=True)
+    bill_to_gstin_snapshot = models.CharField(max_length=20, blank=True)
+    bill_to_email_snapshot = models.EmailField(blank=True)
+    bill_to_phone_snapshot = models.CharField(max_length=30, blank=True)
+    po_number = models.CharField(max_length=80, blank=True)
     pricing_snapshot = models.JSONField(default=dict, blank=True)
 
     pickup_city = models.CharField(max_length=120)
@@ -496,6 +523,29 @@ class Trip(models.Model):
     def __str__(self):
         name = self.customer_display_name_snapshot or self.customer_name or "Trip"
         return f"{name}: {self.pickup_city} to {self.drop_city} at {self.pickup_at:%Y-%m-%d %H:%M}"
+
+    def save(self, *args, **kwargs):
+        if self.customer_id:
+            self.bill_to_type = BillToType.CORPORATE
+            self.bill_to_key = f"CORPORATE:{self.customer_id}"
+            self.bill_to_name_snapshot = self.customer.legal_name or self.customer.display_name
+            self.bill_to_address_snapshot = self.customer.billing_address
+            self.bill_to_gstin_snapshot = self.customer.gstin
+            self.bill_to_email_snapshot = self.customer.billing_email
+            self.bill_to_phone_snapshot = self.customer.billing_phone
+        elif self.booking_type == BookingType.OTA and self.ota_source:
+            self.bill_to_type = BillToType.OTA
+            self.bill_to_key = f"OTA:{self.ota_source.strip().upper()}"
+            self.bill_to_name_snapshot = self.ota_source.strip()
+        else:
+            self.bill_to_type = BillToType.DIRECT
+            self.bill_to_name_snapshot = (
+                self.bill_to_name_snapshot or self.customer_name
+            )
+            self.bill_to_phone_snapshot = (
+                self.bill_to_phone_snapshot or self.customer_phone
+            )
+        super().save(*args, **kwargs)
 
     def clean(self):
         super().clean()

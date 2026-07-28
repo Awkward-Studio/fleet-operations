@@ -16,3 +16,4 @@ jsapi_response.json
 .agents
 get_tasks.py
 page.json
+/backend/media/

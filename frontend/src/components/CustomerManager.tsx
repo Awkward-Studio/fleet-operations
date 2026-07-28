@@ -562,7 +562,6 @@ export default function CustomerManager() {
                         onClick={() => {
                           setEditingContact({
                             name: "",
-                            designation: "",
                             email: "",
                             phone: "",
                             contact_type: "PRIMARY",
@@ -596,7 +595,6 @@ export default function CustomerManager() {
                                 </span>
                               )}
                             </div>
-                            <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 2 }}>{contact.designation || "N/A"}</span>
                             <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 12, color: "#cbd5e1" }}>
                               {contact.email && <span><Mail size={12} style={{ inlineSize: 12, marginRight: 4 }} />{contact.email}</span>}
                               {contact.phone && <span><Phone size={12} style={{ inlineSize: 12, marginRight: 4 }} />{contact.phone}</span>}
@@ -646,7 +644,7 @@ export default function CustomerManager() {
                           <div>
                             <strong style={{ color: "#fff", fontSize: 15 }}>{contract.title}</strong>
                             <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 2 }}>
-                              Version: {contract.version_name} • Code: {contract.contract_code}
+                              Version: {contract.version_name} • ID: CNT-#{contract.id}
                             </span>
                           </div>
                           <span className={`status ${contract.status === "ACTIVE" ? "ok" : "warn"}`}>
@@ -654,8 +652,8 @@ export default function CustomerManager() {
                           </span>
                         </div>
                         <div style={{ marginTop: 12, fontSize: 12, color: "var(--muted)", display: "flex", gap: 16 }}>
-                          <span>Valid: <strong style={{ color: "#fff" }}>{contract.start_date}</strong> to <strong style={{ color: "#fff" }}>{contract.end_date || "Ongoing"}</strong></span>
-                          <span>Rates: <strong style={{ color: "#fff" }}>{contract.rates_count} Packages</strong></span>
+                          <span>Valid: <strong style={{ color: "#fff" }}>{contract.effective_start}</strong> to <strong style={{ color: "#fff" }}>{contract.effective_end || "Ongoing"}</strong></span>
+                          <span>Rates: <strong style={{ color: "#fff" }}>{contract.rates?.length || 0} Packages</strong></span>
                         </div>
                       </div>
                     ))
@@ -831,13 +829,17 @@ export default function CustomerManager() {
               </div>
 
               <div>
-                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Designation</label>
-                <input
-                  type="text"
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Contact Type</label>
+                <select
                   style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                  value={editingContact.designation || ""}
-                  onChange={(e) => setEditingContact({ ...editingContact, designation: e.target.value })}
-                />
+                  value={editingContact.contact_type || "PRIMARY"}
+                  onChange={(e) => setEditingContact({ ...editingContact, contact_type: e.target.value })}
+                >
+                  <option value="PRIMARY">PRIMARY</option>
+                  <option value="BILLING">BILLING</option>
+                  <option value="DISPATCH">DISPATCH</option>
+                  <option value="COMMERCIAL">COMMERCIAL</option>
+                </select>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>

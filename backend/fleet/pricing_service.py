@@ -10,8 +10,10 @@ from .models import (
     ContractAllowance,
     DutyType,
 )
+from .rate_resolver import RateResolutionError, resolve_rate
 
 CALCULATION_VERSION = "contract-quote-v1"
+UNIFIED_CALCULATION_VERSION = "unified-rate-card-v1"
 
 
 class PricingError(Exception):
@@ -24,6 +26,156 @@ def quantize_decimal(value):
     if not isinstance(value, Decimal):
         value = Decimal(str(value))
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def calculate_package_quote(
+    package,
+    *,
+    planned_hours=0,
+    planned_km=0,
+    outstation_days=1,
+    waiting_hours=0,
+    night_charge_count=0,
+    driver_allowance_days=0,
+    resolution=None,
+):
+    """Calculate an immutable-ready quote payload from any canonical package."""
+
+    hours = Decimal(str(planned_hours or 0))
+    kilometres = Decimal(str(planned_km or 0))
+    days = max(Decimal("1"), Decimal(str(outstation_days or 1)))
+    waiting = Decimal(str(waiting_hours or 0))
+    nights = Decimal(str(night_charge_count or 0))
+    allowance_days = Decimal(str(driver_allowance_days or 0))
+    if min(hours, kilometres, waiting, nights, allowance_days) < Decimal("0"):
+        raise PricingError("Quote input quantities cannot be negative.")
+
+    is_outstation = package.duty_type == DutyType.OUTSTATION
+    base_multiplier = days if is_outstation else Decimal("1")
+    included_hours = Decimal(package.included_hours) * base_multiplier
+    included_km = Decimal(package.included_km) * base_multiplier
+    daily_minimum = Decimal(package.daily_minimum_km) * days if is_outstation else Decimal("0")
+    effective_km = max(kilometres, daily_minimum)
+    excess_hours = max(Decimal("0"), hours - included_hours)
+    excess_km = max(Decimal("0"), effective_km - included_km)
+
+    items = {
+        "base_charge": quantize_decimal(package.base_rate * base_multiplier),
+        "excess_hour_charge": quantize_decimal(excess_hours * package.extra_hour_rate),
+        "excess_km_charge": quantize_decimal(excess_km * package.extra_km_rate),
+        "waiting_charge": quantize_decimal(waiting * package.waiting_rate_per_hour),
+        "night_charge": quantize_decimal(nights * package.night_charge),
+        "driver_allowance": quantize_decimal(allowance_days * package.driver_allowance_per_day),
+    }
+    pre_discount = quantize_decimal(sum(items.values(), Decimal("0")))
+    discount_amount = quantize_decimal(pre_discount * package.discount_percent / Decimal("100"))
+    taxable_amount = quantize_decimal(pre_discount - discount_amount)
+    cgst_amount = quantize_decimal(taxable_amount * package.cgst_rate / Decimal("100"))
+    sgst_amount = quantize_decimal(taxable_amount * package.sgst_rate / Decimal("100"))
+    tax_amount = quantize_decimal(cgst_amount + sgst_amount)
+    total_amount = quantize_decimal(taxable_amount + tax_amount)
+    ota_commercial = None
+    if package.rate_book.book_type == "OTA":
+        if not package.ota_terms_configured:
+            raise PricingError(
+                f"OTA settlement terms are missing for package '{package.code}'."
+            )
+        commission = quantize_decimal(total_amount * package.ota_commission_rate / Decimal("100"))
+        withholding = quantize_decimal(total_amount * package.ota_withholding_rate / Decimal("100"))
+        ota_commercial = {
+            "gross_customer_fare": str(total_amount),
+            "commission_rate": str(quantize_decimal(package.ota_commission_rate)),
+            "commission_amount": str(commission),
+            "withholding_rate": str(quantize_decimal(package.ota_withholding_rate)),
+            "withholding_amount": str(withholding),
+            "expected_net_settlement": str(quantize_decimal(total_amount - commission - withholding)),
+            "exception": None,
+        }
+
+    return {
+        "calculation_version": UNIFIED_CALCULATION_VERSION,
+        "rate_book": {
+            "id": package.rate_book_id,
+            "code": package.rate_book.code,
+            "version": package.rate_book.version,
+            "type": package.rate_book.book_type,
+            "currency": package.rate_book.currency,
+        },
+        "package": {
+            "id": package.id,
+            "code": package.code,
+            "name": package.name,
+            "duty_type": package.duty_type,
+            "metering_policy": package.metering_policy,
+        },
+        "resolution": resolution.as_dict() if resolution else {},
+        "inputs": {
+            "planned_hours": str(hours),
+            "planned_km": str(kilometres),
+            "effective_km": str(effective_km),
+            "outstation_days": str(days),
+            "waiting_hours": str(waiting),
+            "night_charge_count": str(nights),
+            "driver_allowance_days": str(allowance_days),
+        },
+        "included": {
+            "hours": str(included_hours),
+            "km": str(included_km),
+            "daily_minimum_km": str(daily_minimum),
+        },
+        "usage": {
+            "excess_hours": str(excess_hours),
+            "excess_km": str(excess_km),
+        },
+        "itemized_charges": {key: str(value) for key, value in items.items()},
+        "pre_discount_amount": str(pre_discount),
+        "discount_percent": str(quantize_decimal(package.discount_percent)),
+        "discount_amount": str(discount_amount),
+        "taxable_amount": str(taxable_amount),
+        "taxes": {
+            "cgst_rate": str(quantize_decimal(package.cgst_rate)),
+            "cgst_amount": str(cgst_amount),
+            "sgst_rate": str(quantize_decimal(package.sgst_rate)),
+            "sgst_amount": str(sgst_amount),
+        },
+        "tax_amount": str(tax_amount),
+        "gross_amount": str(total_amount),
+        "total_amount": str(total_amount),
+        "ota_commercial": ota_commercial,
+    }
+
+
+def calculate_unified_quote(**inputs):
+    calculation_inputs = {
+        key: inputs.get(key, 0)
+        for key in (
+            "planned_hours",
+            "planned_km",
+            "outstation_days",
+            "waiting_hours",
+            "night_charge_count",
+            "driver_allowance_days",
+        )
+    }
+    try:
+        resolution = resolve_rate(
+            booking_type=inputs.get("booking_type"),
+            pickup_datetime=inputs.get("pickup_datetime"),
+            pickup_city=inputs.get("pickup_city"),
+            drop_city=inputs.get("drop_city", ""),
+            vehicle_category=inputs.get("vehicle_category"),
+            duty_type=inputs.get("duty_type"),
+            contract_id=inputs.get("contract_id"),
+            customer_id=inputs.get("customer_id"),
+            ota_source=inputs.get("ota_source", ""),
+        )
+    except RateResolutionError as exc:
+        raise PricingError(str(exc)) from exc
+    return calculate_package_quote(
+        resolution.package,
+        resolution=resolution,
+        **calculation_inputs,
+    )
 
 
 def calculate_quote(

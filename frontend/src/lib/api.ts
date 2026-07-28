@@ -195,58 +195,45 @@ export type CorporateContract = {
 
 export type PricingQuote = {
   calculation_version: string;
-  customer: {
+  rate_book: {
     id: number;
     code: string;
-    display_name: string;
+    version: number;
+    type: "PUBLIC" | "CORPORATE" | "OTA";
+    currency: string;
   };
-  contract: {
+  package: {
     id: number;
-    title: string;
-    version_name: string;
+    code: string;
+    name: string;
+    duty_type: string;
     metering_policy: string;
   };
-  rate: {
-    id: number;
-    city: string;
-    vehicle_category: string;
-    duty_type: string;
-  };
-  inputs: {
-    pickup_datetime: string;
-    pickup_city: string;
-    vehicle_category: string;
-    duty_type: string;
-    planned_hours: number;
-    planned_km: number;
-    effective_km: number;
-    outstation_days: number;
-  };
+  resolution: { trace: Array<{ rate_book_code: string; rate_book_version: number; rate_package_code: string; selected: boolean }> };
   itemized_charges: {
     base_charge: string;
-    included_hours: number;
-    included_km: number;
-    excess_hours: string;
-    extra_hour_rate: string;
     excess_hour_charge: string;
-    excess_km: string;
-    extra_km_rate: string;
     excess_km_charge: string;
-    allowances: any[];
-    allowances_total: string;
-    subtotal: string;
-    cgst_rate: string;
-    cgst_amount: string;
-    sgst_rate: string;
-    sgst_amount: string;
-    total_amount: string;
+    waiting_charge: string;
+    night_charge: string;
+    driver_allowance: string;
   };
+  included: { hours: string; km: string; daily_minimum_km: string };
+  discount_amount: string;
   taxable_amount: string;
+  taxes: { cgst_rate: string; cgst_amount: string; sgst_rate: string; sgst_amount: string };
   tax_amount: string;
   gross_amount: string;
-  /** @deprecated Use gross_amount. */
   total_amount: string;
-  explanation: string;
+  ota_commercial: null | {
+    gross_customer_fare: string;
+    commission_rate: string;
+    commission_amount: string;
+    withholding_rate: string;
+    withholding_amount: string;
+    expected_net_settlement: string;
+    exception: string | null;
+  };
 };
 
 export type UserMembership = {
@@ -802,11 +789,14 @@ export function deleteContract(id: number) {
 
 // Pricing Quote API
 export function getPricingQuote(payload: {
-  customer: number;
+  booking_type: string;
+  customer?: number;
   pickup_datetime: string;
   pickup_city: string;
+  drop_city?: string;
   vehicle_category: string;
   duty_type: string;
+  ota_source?: string;
   planned_hours?: number;
   planned_km?: number;
   outstation_days?: number;

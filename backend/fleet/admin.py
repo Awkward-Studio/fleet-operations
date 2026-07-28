@@ -7,10 +7,13 @@ from .models import (
     CorporateCustomer,
     CustomerContact,
     Driver,
+    RateBook,
+    RatePackage,
     Trip,
     TripChecklist,
     TripLocationLog,
     TripOTP,
+    TripQuoteOverride,
     Vehicle,
 )
 
@@ -88,3 +91,24 @@ class ContractRateAdmin(admin.ModelAdmin):
 class ContractAllowanceAdmin(admin.ModelAdmin):
     list_display = ["contract", "allowance_type", "amount"]
     list_filter = ["allowance_type"]
+
+
+@admin.register(RateBook)
+class RateBookAdmin(admin.ModelAdmin):
+    list_display = ["code", "version", "book_type", "status", "priority", "effective_start", "effective_end"]
+    search_fields = ["code", "name", "ota_source", "contract__title"]
+    list_filter = ["book_type", "status"]
+
+
+@admin.register(RatePackage)
+class RatePackageAdmin(admin.ModelAdmin):
+    list_display = ["code", "name", "rate_book", "city", "vehicle_category", "duty_type", "base_rate"]
+    search_fields = ["code", "name", "city", "vehicle_category"]
+    list_filter = ["duty_type", "metering_policy"]
+
+
+@admin.register(TripQuoteOverride)
+class TripQuoteOverrideAdmin(admin.ModelAdmin):
+    list_display = ["trip", "original_total_amount", "proposed_total_amount", "delta_amount", "status", "requested_by"]
+    list_filter = ["status"]
+    readonly_fields = ["original_snapshot", "original_total_amount", "delta_amount", "requested_by", "requested_at"]

@@ -1,11 +1,25 @@
 from datetime import timedelta
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from fleet.models import Driver, DriverStatus, Trip, TripLocationLog, TripStatus, Vehicle, VehicleStatus
+from fleet.models import (
+    Driver,
+    DriverStatus,
+    DutyType,
+    RateBook,
+    RateBookStatus,
+    RateBookType,
+    RatePackage,
+    Trip,
+    TripLocationLog,
+    TripStatus,
+    Vehicle,
+    VehicleStatus,
+)
 from media_store.models import UploadedAsset
 
 
@@ -57,6 +71,26 @@ class TripOperationsAPITest(APITestCase):
             vehicle=self.vehicle,
             driver=self.driver,
             fare_amount=1500,
+        )
+        book = RateBook.objects.create(
+            code="OPS-PUBLIC",
+            name="Operations public",
+            version=1,
+            book_type=RateBookType.PUBLIC,
+            status=RateBookStatus.ACTIVE,
+            effective_start=timezone.localdate(),
+            approved_at=timezone.now(),
+        )
+        RatePackage.objects.create(
+            rate_book=book,
+            code="OPS-LOCAL",
+            name="Operations local",
+            city="delhi",
+            vehicle_category="sedan",
+            duty_type=DutyType.LOCAL_8HR_80KM,
+            included_hours=8,
+            included_km=80,
+            base_rate=Decimal("1200"),
         )
         self.client.force_authenticate(self.user)
 
@@ -228,6 +262,8 @@ class TripOperationsAPITest(APITestCase):
             "driver_id": available_driver.id,
             "vehicle_id": idle_vehicle.id,
             "fare_amount": "1200.00",
+            "duty_type": DutyType.LOCAL_8HR_80KM,
+            "vehicle_category_requested": "Sedan",
         }
         
         response = self.client.post("/api/fleet/trips/", trip_payload, format="json")
@@ -263,6 +299,8 @@ class TripOperationsAPITest(APITestCase):
             "estimated_drop_at": (timezone.now() + timedelta(hours=7)).isoformat(),
             "driver_id": available_driver.id,
             "fare_amount": "1000.00",
+            "duty_type": DutyType.LOCAL_8HR_80KM,
+            "vehicle_category_requested": "Sedan",
         }
         
         # Create first trip successfully (which marks the driver status as ASSIGNED)
@@ -279,6 +317,8 @@ class TripOperationsAPITest(APITestCase):
             "estimated_drop_at": (timezone.now() + timedelta(hours=8)).isoformat(),
             "driver_id": available_driver.id,
             "fare_amount": "1000.00",
+            "duty_type": DutyType.LOCAL_8HR_80KM,
+            "vehicle_category_requested": "Sedan",
         }
         
         response2 = self.client.post("/api/fleet/trips/", trip_payload2, format="json")

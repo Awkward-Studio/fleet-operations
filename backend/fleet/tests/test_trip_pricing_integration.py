@@ -13,7 +13,12 @@ from fleet.models import (
     Trip,
     BookingType,
     PricingAmountStatus,
+    RateBook,
+    RateBookStatus,
+    RateBookType,
+    RatePackage,
 )
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -52,6 +57,40 @@ class TripPricingIntegrationTests(APITestCase):
             extra_hour_rate=Decimal("200.00"),
             extra_km_rate=Decimal("18.00"),
         )
+        approved_at = timezone.now()
+        corporate_book = RateBook.objects.create(
+            code="DELTA-2026",
+            name="Delta 2026",
+            version=1,
+            book_type=RateBookType.CORPORATE,
+            status=RateBookStatus.ACTIVE,
+            effective_start=datetime.date(2026, 1, 1),
+            contract=self.contract,
+            approved_at=approved_at,
+        )
+        public_book = RateBook.objects.create(
+            code="PUBLIC-2026",
+            name="Public 2026",
+            version=1,
+            book_type=RateBookType.PUBLIC,
+            status=RateBookStatus.ACTIVE,
+            effective_start=datetime.date(2026, 1, 1),
+            approved_at=approved_at,
+        )
+        for book, code in ((corporate_book, "DELTA-LOCAL"), (public_book, "PUBLIC-LOCAL")):
+            RatePackage.objects.create(
+                rate_book=book,
+                code=code,
+                name="Local 8h / 80km",
+                city="mumbai",
+                vehicle_category="sedan",
+                duty_type=DutyType.LOCAL_8HR_80KM,
+                included_hours=8,
+                included_km=80,
+                base_rate=Decimal("2500.00"),
+                extra_hour_rate=Decimal("200.00"),
+                extra_km_rate=Decimal("18.00"),
+            )
 
     def test_create_corporate_trip_recalculates_fare_and_stores_snapshot(self):
         self.client.force_authenticate(user=self.user)
@@ -79,10 +118,11 @@ class TripPricingIntegrationTests(APITestCase):
         self.assertEqual(trip.quoted_total_amount, Decimal("2625.00"))
         self.assertEqual(res.data["quoted_taxable_amount"], "2500.00")
         self.assertEqual(trip.customer_display_name_snapshot, "Delta Corp")
-        self.assertIn("contract", trip.pricing_snapshot)
-        self.assertEqual(trip.contract_id, self.contract.id)
+        self.assertEqual(trip.pricing_snapshot["rate_book"]["type"], "CORPORATE")
+        self.assertIsNotNone(trip.rate_package_id)
+        self.assertEqual(trip.calculation_version, "unified-rate-card-v1")
 
-    def test_legacy_adhoc_trip_creation(self):
+    def test_adhoc_trip_is_server_priced(self):
         self.client.force_authenticate(user=self.user)
         payload = {
             "booking_type": "ADHOC",
@@ -91,14 +131,17 @@ class TripPricingIntegrationTests(APITestCase):
             "drop_city": "Pune",
             "pickup_at": "2026-07-25T10:00:00Z",
             "estimated_drop_at": "2026-07-25T14:00:00Z",
+            "duty_type": DutyType.LOCAL_8HR_80KM,
+            "vehicle_category_requested": "Sedan",
+            "distance_km": 70,
             "fare_amount": "3000.00",
         }
         res = self.client.post("/api/trips/", payload, format="json")
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(res.data["fare_amount"], "3000.00")
+        self.assertEqual(res.data["fare_amount"], "2625.00")
         self.assertEqual(
             res.data["pricing_amount_status"],
-            PricingAmountStatus.LEGACY_UNCLASSIFIED,
+            PricingAmountStatus.QUOTED,
         )
 
     def test_immutability_of_trip_snapshot_on_customer_change(self):

@@ -36,7 +36,7 @@ from .models import (
     FuelUnit,
 )
 from .permissions import IsCommercialAdminOrReadOnly, IsCommercialAdmin
-from .pricing_service import PricingError, calculate_quote
+from .pricing_service import PricingError, calculate_quote, calculate_unified_quote
 from .serializers import (
     AssignTripSerializer,
     AvailabilitySerializer,
@@ -688,23 +688,29 @@ def quote_api(request):
     outstation_days = data.get("outstation_days", 1)
     requested_allowances = data.get("allowances", [])
 
-    if not all([customer_id, pickup_datetime, pickup_city, vehicle_category, duty_type]):
+    booking_type = data.get("booking_type") or ("CORPORATE" if customer_id else "ADHOC")
+    if not all([pickup_datetime, pickup_city, vehicle_category, duty_type]):
         return Response(
-            {"detail": "Missing required fields: customer, pickup_datetime, pickup_city, vehicle_category, duty_type."},
+            {"detail": "Missing required fields: pickup_datetime, pickup_city, vehicle_category, duty_type."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
-        quote = calculate_quote(
+        quote = calculate_unified_quote(
+            booking_type=booking_type,
             customer_id=customer_id,
             pickup_datetime=pickup_datetime,
             pickup_city=pickup_city,
+            drop_city=data.get("drop_city", ""),
             vehicle_category=vehicle_category,
             duty_type=duty_type,
             planned_hours=planned_hours,
             planned_km=planned_km,
             outstation_days=outstation_days,
-            requested_allowances=requested_allowances,
+            waiting_hours=data.get("waiting_hours", 0),
+            night_charge_count=data.get("night_charge_count", 0),
+            driver_allowance_days=data.get("driver_allowance_days", 0),
+            ota_source=data.get("ota_source", ""),
         )
         return Response(quote, status=status.HTTP_200_OK)
     except PricingError as e:
@@ -920,4 +926,3 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
         from .fuel_service import calculate_vehicle_mileage
         metrics = calculate_vehicle_mileage(vehicle)
         return Response(metrics)
-

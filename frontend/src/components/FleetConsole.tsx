@@ -2367,6 +2367,7 @@ function TripForm({
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [dutyType, setDutyType] = useState<string>("LOCAL_8HR_80KM");
   const [vehicleCategory, setVehicleCategory] = useState<string>("sedan");
+  const [otaSource, setOtaSource] = useState<string>("MMT");
   const [quote, setQuote] = useState<PricingQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState<boolean>(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -2378,9 +2379,9 @@ function TripForm({
     }).catch((err) => console.error("Error loading customers for trip form:", err));
   }, []);
 
-  // Fetch quote whenever corporate parameters change
+  // Every booking channel is priced by the same server-side package engine.
   useEffect(() => {
-    if (bookingType !== "CORPORATE" || !selectedCustomerId || !pickupCity || !pickupDate || !pickupTime) {
+    if ((bookingType === "CORPORATE" && !selectedCustomerId) || !pickupCity || !pickupDate || !pickupTime) {
       setQuote(null);
       setQuoteError(null);
       return;
@@ -2392,12 +2393,15 @@ function TripForm({
         setQuoteError(null);
         const pickupDt = `${pickupDate}T${pickupTime}:00Z`;
         const res = await getPricingQuote({
-          customer: selectedCustomerId,
+          booking_type: bookingType,
+          customer: selectedCustomerId || undefined,
           pickup_datetime: pickupDt,
           pickup_city: pickupCity,
+          drop_city: dropCity,
           vehicle_category: vehicleCategory,
           duty_type: dutyType,
           planned_km: distanceKm || 0,
+          ota_source: bookingType === "OTA" ? otaSource : undefined,
         });
         setQuote(res);
       } catch (err: any) {
@@ -2410,7 +2414,7 @@ function TripForm({
 
     const timer = setTimeout(fetchQuote, 400);
     return () => clearTimeout(timer);
-  }, [bookingType, selectedCustomerId, pickupCity, pickupDate, pickupTime, dutyType, vehicleCategory, distanceKm]);
+  }, [bookingType, selectedCustomerId, pickupCity, dropCity, pickupDate, pickupTime, dutyType, vehicleCategory, distanceKm, otaSource]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2437,19 +2441,18 @@ function TripForm({
         alert("Please select a corporate customer.");
         return;
       }
-      if (!quote) {
-        alert("Cannot submit corporate trip without a valid rate quote.");
-        return;
-      }
       payload.customer_id = selectedCustomerId;
-      payload.duty_type = dutyType;
-      payload.vehicle_category_requested = vehicleCategory;
-      payload.fare_amount = quote.gross_amount;
     } else {
       payload.customer_name = String(formData.get("customer_name"));
       payload.ota_source = String(formData.get("ota_source"));
-      payload.fare_amount = String(formData.get("fare_amount"));
+      payload.ota_external_reference = String(formData.get("ota_external_reference"));
     }
+    if (!quote) {
+      alert("Cannot create a trip without a valid server quote.");
+      return;
+    }
+    payload.duty_type = dutyType;
+    payload.vehicle_category_requested = vehicleCategory;
 
     onCreateTrip(payload, () => {
       setPickupCity("");
@@ -2528,13 +2531,36 @@ function TripForm({
           {bookingType === "OTA" && (
             <div className="field">
               <label>OTA SOURCE</label>
-              <select name="ota_source" defaultValue="MMT">
+              <select name="ota_source" value={otaSource} onChange={(e) => setOtaSource(e.target.value)}>
                 <option value="MMT">MMT</option>
                 <option value="Goibibo">Goibibo</option>
                 <option value="ClearTrip">ClearTrip</option>
               </select>
+              <InputField label="OTA EXTERNAL REFERENCE" name="ota_external_reference" placeholder="Booking / voucher reference" required />
             </div>
           )}
+          <div className="form-grid" style={{ gap: 12 }}>
+            <div className="field">
+              <label>PACKAGE TYPE *</label>
+              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)}>
+                <option value="LOCAL_8HR_80KM">LOCAL (8h / 80km)</option>
+                <option value="LOCAL_12HR_120KM">LOCAL (12h / 120km)</option>
+                <option value="OUTSTATION">OUTSTATION</option>
+                <option value="AIRPORT_TRANSFER">AIRPORT TRANSFER</option>
+                <option value="ONE_WAY">ONE WAY</option>
+                <option value="FULL_DAY">FULL DAY</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>REQUESTED CATEGORY *</label>
+              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)}>
+                <option value="sedan">Sedan</option>
+                <option value="suv">SUV</option>
+                <option value="luxury">Luxury</option>
+                <option value="hatchback">Hatchback</option>
+              </select>
+            </div>
+          </div>
         </>
       )}
 
@@ -2583,9 +2609,9 @@ function TripForm({
         <TimePickerField label="DROP TIME" name="drop_time" value={dropTime} onChange={setDropTime} />
       </div>
 
-      {bookingType === "CORPORATE" ? (
+      (
         <div style={{ padding: 16, background: "rgba(15, 23, 42, 0.6)", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13 }}>
-          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8 }}>Live Contract Pricing Breakdown</div>
+          <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8 }}>Authoritative Package Quote</div>
           {quoteLoading ? (
             <div style={{ color: "var(--muted)", fontStyle: "italic" }}>Calculating server quote...</div>
           ) : quoteError ? (
@@ -2593,15 +2619,15 @@ function TripForm({
           ) : quote ? (
             <div style={{ display: "grid", gap: 6 }}>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
-                <span>Contract:</span>
-                <strong style={{ color: "#fff" }}>{quote.contract.title} ({quote.contract.version_name})</strong>
+                <span>Rate source:</span>
+                <strong style={{ color: "#fff" }}>{quote.rate_book.code} v{quote.rate_book.version} · {quote.package.name}</strong>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
-                <span>Base Charge ({quote.itemized_charges.included_hours}h / {quote.itemized_charges.included_km}km):</span>
+                <span>Base Charge ({quote.included.hours}h / {quote.included.km}km):</span>
                 <span style={{ color: "#fff" }}>₹{quote.itemized_charges.base_charge}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
-                <span>Taxes (CGST {quote.itemized_charges.cgst_rate}% + SGST {quote.itemized_charges.sgst_rate}%):</span>
+                <span>Taxes (CGST {quote.taxes.cgst_rate}% + SGST {quote.taxes.sgst_rate}%):</span>
                 <span style={{ color: "#fff" }}>₹{quote.tax_amount}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
@@ -2610,20 +2636,25 @@ function TripForm({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", color: "var(--muted)" }}>
                 <span>Metering Policy:</span>
-                <span style={{ color: "var(--accent)" }}>{quote.contract.metering_policy}</span>
+                <span style={{ color: "var(--accent)" }}>{quote.package.metering_policy}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: "1px solid var(--line)", fontSize: 15 }}>
                 <strong style={{ color: "#fff" }}>Gross quoted fare:</strong>
                 <strong style={{ color: "#10b981" }}>₹{quote.gross_amount}</strong>
               </div>
+              {quote.ota_commercial && (
+                <div style={{ display: "grid", gap: 4, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+                  <div style={{ color: "var(--muted)" }}>OTA commission: ₹{quote.ota_commercial.commission_amount} ({quote.ota_commercial.commission_rate}%)</div>
+                  <div style={{ color: "var(--muted)" }}>Withholding: ₹{quote.ota_commercial.withholding_amount} ({quote.ota_commercial.withholding_rate}%)</div>
+                  <strong style={{ color: "var(--accent)" }}>Expected fleet settlement: ₹{quote.ota_commercial.expected_net_settlement}</strong>
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ color: "var(--muted)" }}>Enter pickup city, date, and time to generate quote.</div>
           )}
         </div>
-      ) : (
-        <InputField label="FARE (₹)" name="fare_amount" type="number" min="0" step="1" defaultValue="0" />
-      )}
+      )
 
       <div className="form-grid" style={{ gap: 12, marginTop: 12 }}>
         <div className="field">
@@ -2667,12 +2698,12 @@ function TripForm({
         <button
           className="button"
           type="submit"
-          disabled={bookingType === "CORPORATE" && (!quote || quoteLoading)}
+          disabled={!quote || quoteLoading}
           style={{
             width: "100%",
             justifyContent: "center",
-            background: bookingType === "CORPORATE" && (!quote || quoteLoading) ? "var(--muted)" : "var(--accent-strong)",
-            cursor: bookingType === "CORPORATE" && (!quote || quoteLoading) ? "not-allowed" : "pointer"
+            background: !quote || quoteLoading ? "var(--muted)" : "var(--accent-strong)",
+            cursor: !quote || quoteLoading ? "not-allowed" : "pointer"
           }}
         >
           <Plus size={16} />

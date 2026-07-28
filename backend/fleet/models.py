@@ -85,6 +85,18 @@ class MeteringPolicy(models.TextChoices):
     AIRPORT_TRANSFER = "AIRPORT_TRANSFER", "Airport Transfer"
 
 
+class RateBookType(models.TextChoices):
+    PUBLIC = "PUBLIC", "Public / ad-hoc"
+    CORPORATE = "CORPORATE", "Corporate"
+    OTA = "OTA", "OTA / aggregator"
+
+
+class RateBookStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    ACTIVE = "ACTIVE", "Active"
+    RETIRED = "RETIRED", "Retired"
+
+
 class Driver(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -384,6 +396,181 @@ class ContractAllowance(models.Model):
             raise ValidationError({"amount": "Allowance amount cannot be negative."})
 
 
+class RateBook(models.Model):
+    """A versioned, channel-specific pricing catalogue."""
+
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=160)
+    version = models.PositiveIntegerField(default=1)
+    book_type = models.CharField(max_length=16, choices=RateBookType.choices)
+    status = models.CharField(max_length=16, choices=RateBookStatus.choices, default=RateBookStatus.DRAFT)
+    priority = models.IntegerField(default=0)
+    effective_start = models.DateField()
+    effective_end = models.DateField(null=True, blank=True)
+    currency = models.CharField(max_length=3, default="INR")
+    contract = models.ForeignKey(
+        CorporateContract,
+        related_name="rate_books",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+    )
+    ota_source = models.CharField(max_length=80, blank=True)
+    source_system = models.CharField(max_length=40, blank=True)
+    source_id = models.CharField(max_length=120, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name="approved_rate_books",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-priority", "-effective_start", "-version"]
+        constraints = [
+            models.UniqueConstraint(fields=["code", "version"], name="unique_rate_book_version"),
+            models.UniqueConstraint(
+                fields=["book_type", "contract", "ota_source"],
+                condition=models.Q(status=RateBookStatus.ACTIVE),
+                name="unique_active_rate_book_scope",
+            ),
+            models.UniqueConstraint(
+                fields=["source_system", "source_id"],
+                condition=~models.Q(source_id=""),
+                name="unique_rate_book_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["book_type", "status", "effective_start", "effective_end"]),
+            models.Index(fields=["contract", "status"]),
+            models.Index(fields=["ota_source", "status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.code} v{self.version} ({self.book_type})"
+
+    def clean(self):
+        super().clean()
+        self.code = self.code.strip().upper()
+        self.ota_source = self.ota_source.strip().upper()
+        if self.effective_end and self.effective_end < self.effective_start:
+            raise ValidationError({"effective_end": "Effective end date cannot precede effective start date."})
+        if self.book_type == RateBookType.CORPORATE and not self.contract_id:
+            raise ValidationError({"contract": "Corporate rate books require a contract."})
+        if self.book_type != RateBookType.CORPORATE and self.contract_id:
+            raise ValidationError({"contract": "Only corporate rate books may reference a contract."})
+        if self.book_type == RateBookType.OTA and not self.ota_source:
+            raise ValidationError({"ota_source": "OTA rate books require an OTA source."})
+        if self.book_type != RateBookType.OTA and self.ota_source:
+            raise ValidationError({"ota_source": "Only OTA rate books may specify an OTA source."})
+        if self.status == RateBookStatus.ACTIVE and not self.approved_at:
+            raise ValidationError({"approved_at": "Active rate books must record approval time."})
+
+
+class RatePackage(models.Model):
+    """One reusable calculation rule within a rate-book version."""
+
+    rate_book = models.ForeignKey(RateBook, related_name="packages", on_delete=models.PROTECT)
+    code = models.CharField(max_length=80)
+    name = models.CharField(max_length=160)
+    city = models.CharField(max_length=120, blank=True)
+    zone = models.CharField(max_length=120, blank=True)
+    route_from = models.CharField(max_length=120, blank=True)
+    route_to = models.CharField(max_length=120, blank=True)
+    vehicle_category = models.CharField(max_length=80, blank=True)
+    duty_type = models.CharField(max_length=40, choices=DutyType.choices)
+    included_hours = models.DecimalField(max_digits=8, decimal_places=2, default=Decimal("0.00"))
+    included_km = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    base_rate = models.DecimalField(max_digits=12, decimal_places=2)
+    extra_hour_rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    extra_km_rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    daily_minimum_km = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    waiting_rate_per_hour = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    night_charge = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    driver_allowance_per_day = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
+    cgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("2.50"))
+    sgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("2.50"))
+    ota_terms_configured = models.BooleanField(default=False)
+    ota_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
+    ota_withholding_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
+    metering_policy = models.CharField(
+        max_length=32,
+        choices=MeteringPolicy.choices,
+        default=MeteringPolicy.PICKUP_TO_DROP,
+    )
+    source_system = models.CharField(max_length=40, blank=True)
+    source_id = models.CharField(max_length=120, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["rate_book", "city", "vehicle_category", "duty_type", "code"]
+        constraints = [
+            models.UniqueConstraint(fields=["rate_book", "code"], name="unique_rate_package_code"),
+            models.UniqueConstraint(
+                fields=[
+                    "rate_book",
+                    "city",
+                    "zone",
+                    "route_from",
+                    "route_to",
+                    "vehicle_category",
+                    "duty_type",
+                ],
+                name="unique_rate_package_scope",
+            ),
+            models.UniqueConstraint(
+                fields=["source_system", "source_id"],
+                condition=~models.Q(source_id=""),
+                name="unique_rate_package_source",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["city", "vehicle_category", "duty_type"]),
+            models.Index(fields=["route_from", "route_to", "duty_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.rate_book.code}: {self.name}"
+
+    def clean(self):
+        super().clean()
+        self.code = self.code.strip().upper()
+        for field_name in ("city", "zone", "route_from", "route_to", "vehicle_category"):
+            value = getattr(self, field_name)
+            setattr(self, field_name, value.strip().lower())
+        money_fields = (
+            "base_rate",
+            "extra_hour_rate",
+            "extra_km_rate",
+            "daily_minimum_km",
+            "waiting_rate_per_hour",
+            "night_charge",
+            "driver_allowance_per_day",
+        )
+        errors = {
+            field_name: "Pricing values cannot be negative."
+            for field_name in money_fields
+            if getattr(self, field_name) < Decimal("0.00")
+        }
+        for field_name in (
+            "discount_percent",
+            "cgst_rate",
+            "sgst_rate",
+            "ota_commission_rate",
+            "ota_withholding_rate",
+        ):
+            if getattr(self, field_name) < Decimal("0.00") or getattr(self, field_name) > Decimal("100.00"):
+                errors[field_name] = "Percentage must be between 0 and 100."
+        if errors:
+            raise ValidationError(errors)
+
+
 class BookingType(models.TextChoices):
     CORPORATE = "CORPORATE", "Corporate"
     ADHOC = "ADHOC", "Ad-hoc / Direct"
@@ -404,6 +591,12 @@ class PricingAmountStatus(models.TextChoices):
     LEGACY_UNCLASSIFIED = "LEGACY_UNCLASSIFIED", "Legacy / tax treatment unknown"
     QUOTED = "QUOTED", "Server-priced quote"
     FINALIZED = "FINALIZED", "Approved final charge"
+
+
+class QuoteOverrideStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending approval"
+    APPROVED = "APPROVED", "Approved"
+    REJECTED = "REJECTED", "Rejected"
 
 
 class Trip(models.Model):
@@ -455,6 +648,14 @@ class Trip(models.Model):
     bill_to_phone_snapshot = models.CharField(max_length=30, blank=True)
     po_number = models.CharField(max_length=80, blank=True)
     pricing_snapshot = models.JSONField(default=dict, blank=True)
+    rate_package = models.ForeignKey(
+        RatePackage,
+        related_name="trips",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+    )
+    calculation_version = models.CharField(max_length=80, blank=True)
 
     pickup_city = models.CharField(max_length=120)
     drop_city = models.CharField(max_length=120)
@@ -466,6 +667,7 @@ class Trip(models.Model):
     vehicle = models.ForeignKey(Vehicle, related_name="trips", null=True, blank=True, on_delete=models.SET_NULL)
     driver = models.ForeignKey(Driver, related_name="trips", null=True, blank=True, on_delete=models.SET_NULL)
     ota_source = models.CharField(max_length=80, blank=True)
+    ota_external_reference = models.CharField(max_length=120, blank=True)
     pricing_amount_status = models.CharField(
         max_length=32,
         choices=PricingAmountStatus.choices,
@@ -604,6 +806,71 @@ class Trip(models.Model):
             )
         if errors:
             raise ValidationError(errors)
+
+
+class TripQuoteOverride(models.Model):
+    trip = models.ForeignKey(Trip, related_name="quote_overrides", on_delete=models.PROTECT)
+    original_snapshot = models.JSONField()
+    original_total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    proposed_total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    delta_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reason = models.TextField()
+    status = models.CharField(
+        max_length=16,
+        choices=QuoteOverrideStatus.choices,
+        default=QuoteOverrideStatus.PENDING,
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name="requested_trip_quote_overrides",
+        on_delete=models.PROTECT,
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name="reviewed_trip_quote_overrides",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-requested_at"]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if not self.reason.strip():
+            errors["reason"] = "An override reason is required."
+        expected_delta = self.proposed_total_amount - self.original_total_amount
+        if self.delta_amount != expected_delta:
+            errors["delta_amount"] = "Delta must equal proposed amount minus original amount."
+        if self.status != QuoteOverrideStatus.PENDING:
+            if not self.reviewed_by_id or not self.reviewed_at:
+                errors["reviewed_by"] = "Reviewed overrides require reviewer and review time."
+            elif self.reviewed_by_id == self.requested_by_id:
+                errors["reviewed_by"] = "The requester cannot approve or reject their own override."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            original = type(self).objects.get(pk=self.pk)
+            immutable = (
+                "trip_id",
+                "original_snapshot",
+                "original_total_amount",
+                "proposed_total_amount",
+                "delta_amount",
+                "reason",
+                "requested_by_id",
+            )
+            if any(getattr(original, field) != getattr(self, field) for field in immutable):
+                raise ValidationError("Override request provenance is immutable after creation.")
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class TripChecklist(models.Model):

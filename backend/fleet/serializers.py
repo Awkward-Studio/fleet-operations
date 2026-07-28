@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 from django.utils import timezone
 from rest_framework import serializers
@@ -452,6 +454,8 @@ class TripSerializer(serializers.ModelSerializer):
             "bill_to_phone_snapshot",
             "po_number",
             "pricing_snapshot",
+            "rate_package",
+            "calculation_version",
             "pickup_city",
             "drop_city",
             "pickup_address",
@@ -464,6 +468,7 @@ class TripSerializer(serializers.ModelSerializer):
             "driver",
             "driver_id",
             "ota_source",
+            "ota_external_reference",
             "fare_amount",
             "pricing_amount_status",
             "quoted_taxable_amount",
@@ -492,6 +497,8 @@ class TripSerializer(serializers.ModelSerializer):
             "bill_to_email_snapshot",
             "bill_to_phone_snapshot",
             "pricing_snapshot",
+            "rate_package",
+            "calculation_version",
             "contract",
             "contract_rate",
             "pricing_amount_status",
@@ -526,46 +533,6 @@ class TripSerializer(serializers.ModelSerializer):
             customer = attrs.get("customer", getattr(self.instance, "customer", None))
             if not customer:
                 raise serializers.ValidationError({"customer": "Corporate trip requires a valid customer."})
-
-            duty_type = attrs.get("duty_type", getattr(self.instance, "duty_type", ""))
-            category = attrs.get("vehicle_category_requested", getattr(self.instance, "vehicle_category_requested", ""))
-            if not duty_type:
-                raise serializers.ValidationError({"duty_type": "Corporate trip requires duty_type."})
-            if not category:
-                raise serializers.ValidationError({"vehicle_category_requested": "Corporate trip requires vehicle_category_requested."})
-
-            pickup_city = attrs.get("pickup_city", getattr(self.instance, "pickup_city", ""))
-            distance_km = attrs.get("distance_km", getattr(self.instance, "distance_km", 0))
-
-            from .pricing_service import calculate_quote, PricingError
-            try:
-                quote = calculate_quote(
-                    customer_id=customer.id,
-                    pickup_datetime=pickup_at,
-                    pickup_city=pickup_city,
-                    vehicle_category=category,
-                    duty_type=duty_type,
-                    planned_km=distance_km or 0,
-                )
-                from decimal import Decimal
-                attrs["fare_amount"] = Decimal(quote["gross_amount"])
-                attrs["pricing_amount_status"] = PricingAmountStatus.QUOTED
-                attrs["quoted_taxable_amount"] = Decimal(quote["taxable_amount"])
-                attrs["quoted_tax_amount"] = Decimal(quote["tax_amount"])
-                attrs["quoted_total_amount"] = Decimal(quote["gross_amount"])
-                attrs["customer_display_name_snapshot"] = customer.display_name
-                attrs["bill_to_type"] = BillToType.CORPORATE
-                attrs["bill_to_key"] = f"CORPORATE:{customer.id}"
-                attrs["bill_to_name_snapshot"] = customer.legal_name or customer.display_name
-                attrs["bill_to_address_snapshot"] = customer.billing_address
-                attrs["bill_to_gstin_snapshot"] = customer.gstin
-                attrs["bill_to_email_snapshot"] = customer.billing_email
-                attrs["bill_to_phone_snapshot"] = customer.billing_phone
-                attrs["pricing_snapshot"] = quote
-                attrs["contract_id"] = quote["contract"]["id"]
-                attrs["contract_rate_id"] = quote["rate"]["id"]
-            except PricingError as e:
-                raise serializers.ValidationError({"pricing": str(e)})
         else:
             cust_name = attrs.get("customer_name", getattr(self.instance, "customer_name", ""))
             attrs["customer_display_name_snapshot"] = cust_name
@@ -583,6 +550,48 @@ class TripSerializer(serializers.ModelSerializer):
                     "customer_phone",
                     getattr(self.instance, "customer_phone", ""),
                 )
+
+        duty_type = attrs.get("duty_type", getattr(self.instance, "duty_type", ""))
+        category = attrs.get(
+            "vehicle_category_requested",
+            getattr(self.instance, "vehicle_category_requested", ""),
+        )
+        if not duty_type:
+            raise serializers.ValidationError({"duty_type": "Every trip requires a pricing package type."})
+        if not category:
+            raise serializers.ValidationError({"vehicle_category_requested": "Every trip requires a vehicle category."})
+        from .pricing_service import PricingError, calculate_unified_quote
+        try:
+            quote = calculate_unified_quote(
+                booking_type=booking_type,
+                customer_id=customer.id if booking_type == "CORPORATE" else None,
+                pickup_datetime=pickup_at,
+                pickup_city=attrs.get("pickup_city", getattr(self.instance, "pickup_city", "")),
+                drop_city=attrs.get("drop_city", getattr(self.instance, "drop_city", "")),
+                vehicle_category=category,
+                duty_type=duty_type,
+                planned_km=attrs.get("distance_km", getattr(self.instance, "distance_km", 0)) or 0,
+                ota_source=attrs.get("ota_source", getattr(self.instance, "ota_source", "")),
+            )
+        except PricingError as exc:
+            raise serializers.ValidationError({"pricing": str(exc)})
+        attrs["fare_amount"] = Decimal(quote["gross_amount"])
+        attrs["pricing_amount_status"] = PricingAmountStatus.QUOTED
+        attrs["quoted_taxable_amount"] = Decimal(quote["taxable_amount"])
+        attrs["quoted_tax_amount"] = Decimal(quote["tax_amount"])
+        attrs["quoted_total_amount"] = Decimal(quote["gross_amount"])
+        attrs["pricing_snapshot"] = quote
+        attrs["rate_package_id"] = quote["package"]["id"]
+        attrs["calculation_version"] = quote["calculation_version"]
+        if booking_type == "CORPORATE":
+            attrs["customer_display_name_snapshot"] = customer.display_name
+            attrs["bill_to_type"] = BillToType.CORPORATE
+            attrs["bill_to_key"] = f"CORPORATE:{customer.id}"
+            attrs["bill_to_name_snapshot"] = customer.legal_name or customer.display_name
+            attrs["bill_to_address_snapshot"] = customer.billing_address
+            attrs["bill_to_gstin_snapshot"] = customer.gstin
+            attrs["bill_to_email_snapshot"] = customer.billing_email
+            attrs["bill_to_phone_snapshot"] = customer.billing_phone
 
         # Validate driver and vehicle assignments
         driver = attrs.get("driver")

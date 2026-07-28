@@ -11,7 +11,12 @@ from fleet.models import (
     CustomerStatus,
     DutyType,
     AllowanceType,
+    RateBook,
+    RateBookStatus,
+    RateBookType,
+    RatePackage,
 )
+from django.utils import timezone
 from fleet.pricing_service import calculate_quote, PricingError
 
 User = get_user_model()
@@ -63,6 +68,32 @@ class PricingEngineTests(APITestCase):
             extra_km_rate=Decimal("14.00"),
             outstation_daily_min_km=250,
         )
+        book = RateBook.objects.create(
+            code="GAMMA-API",
+            name="Gamma API",
+            version=1,
+            book_type=RateBookType.CORPORATE,
+            status=RateBookStatus.ACTIVE,
+            effective_start=datetime.date(2026, 1, 1),
+            effective_end=datetime.date(2026, 12, 31),
+            contract=self.contract,
+            approved_at=timezone.now(),
+        )
+        for rate, code in ((self.rate_local, "LOCAL"), (self.rate_outstation, "OUTSTATION")):
+            RatePackage.objects.create(
+                rate_book=book,
+                code=code,
+                name=code,
+                city=rate.city,
+                vehicle_category=rate.vehicle_category,
+                duty_type=rate.duty_type,
+                included_hours=rate.included_hours,
+                included_km=rate.included_km,
+                base_rate=rate.base_rate,
+                extra_hour_rate=rate.extra_hour_rate,
+                extra_km_rate=rate.extra_km_rate,
+                daily_minimum_km=rate.outstation_daily_min_km or 0,
+            )
         self.allowance_overtime = ContractAllowance.objects.create(
             contract=self.contract,
             allowance_type=AllowanceType.OVERTIME_PER_HOUR,

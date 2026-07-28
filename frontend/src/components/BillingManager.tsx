@@ -23,8 +23,10 @@ import {
   X,
   Clock,
   RefreshCw,
+  ClipboardCheck,
 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
+import CloseoutReviewManager from "./CloseoutReviewManager";
 import {
   BillingInvoice,
   BillingLegalEntity,
@@ -46,7 +48,7 @@ import {
 
 export function BillingManager() {
   const { user, loading: authLoading } = useAuth();
-  const [activeTab, setActiveTab] = useState<"invoices" | "generator">("invoices");
+  const [activeTab, setActiveTab] = useState<"invoices" | "closeouts" | "generator">("invoices");
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [entities, setEntities] = useState<BillingLegalEntity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -274,6 +276,12 @@ export function BillingManager() {
             <Receipt size={16} /> Tax Invoices
           </button>
           <button
+            className={`button ${activeTab === "closeouts" ? "" : "secondary"}`}
+            onClick={() => setActiveTab("closeouts")}
+          >
+            <ClipboardCheck size={16} /> Trip Closeouts
+          </button>
+          <button
             className={`button ${activeTab === "generator" ? "" : "secondary"}`}
             onClick={() => setActiveTab("generator")}
             disabled={authLoading || !canManageBilling}
@@ -311,7 +319,9 @@ export function BillingManager() {
         )}
       </div>
 
-      {activeTab === "invoices" ? (
+      {activeTab === "closeouts" ? (
+        <CloseoutReviewManager />
+      ) : activeTab === "invoices" ? (
         /* Shadcn UI Table for Billing & Invoices */
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
           <Table>

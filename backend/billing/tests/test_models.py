@@ -90,7 +90,7 @@ class BillingModelTests(TestCase):
             status=CloseoutStatus.APPROVED,
         )
         self.assertEqual(closeout.actual_km, 85)
-        self.assertTrue(closeout.billing_ready)
+        self.assertFalse(closeout.billing_ready)
 
         charge = TripCharge.objects.create(
             closeout=closeout,
@@ -127,5 +127,4 @@ class BillingModelTests(TestCase):
             line_total=2520.00,
         )
         self.assertEqual(invoice.lines.count(), 1)
-
 

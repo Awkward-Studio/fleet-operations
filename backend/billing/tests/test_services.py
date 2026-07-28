@@ -89,13 +89,14 @@ class InvoiceServiceTests(TestCase):
             trip=self.trip1,
             start_odometer_km=1000,
             end_odometer_km=1080,
-            status=CloseoutStatus.APPROVED,
+            status=CloseoutStatus.BILLING_READY,
         )
         TripCharge.objects.create(
             closeout=self.closeout1,
             category=ChargeCategory.TOLL,
             amount=Decimal("100.00"),
             description="Toll Fee",
+            is_approved=True,
         )
 
     def test_generate_invoice_draft_and_issue(self):
@@ -204,7 +205,7 @@ class InvoiceServiceTests(TestCase):
             trip=adhoc,
             start_odometer_km=200,
             end_odometer_km=260,
-            status=CloseoutStatus.APPROVED,
+            status=CloseoutStatus.BILLING_READY,
         )
 
         invoice = InvoiceService.generate_invoice_draft(self.entity, [adhoc.id])
@@ -235,7 +236,7 @@ class InvoiceServiceTests(TestCase):
                 trip=trip,
                 start_odometer_km=100,
                 end_odometer_km=150,
-                status=CloseoutStatus.APPROVED,
+                status=CloseoutStatus.BILLING_READY,
             )
             return trip
 
@@ -274,7 +275,7 @@ class InvoiceServiceTests(TestCase):
             trip=second,
             start_odometer_km=1100,
             end_odometer_km=1200,
-            status=CloseoutStatus.APPROVED,
+            status=CloseoutStatus.BILLING_READY,
         )
 
         invoice = InvoiceService.generate_invoice_draft(
@@ -304,7 +305,7 @@ class InvoiceServiceTests(TestCase):
                 trip=trip,
                 start_odometer_km=500,
                 end_odometer_km=530,
-                status=CloseoutStatus.APPROVED,
+                status=CloseoutStatus.BILLING_READY,
             )
             return trip
 

@@ -332,12 +332,31 @@ class TripViewSet(viewsets.ModelViewSet):
         if permission_error:
             return permission_error
 
+        retry_key = (
+            request.data.get("idempotency_key")
+            or request.headers.get("Idempotency-Key")
+            or request.headers.get("X-Idempotency-Key")
+        )
+        if retry_key:
+            existing = TripChecklist.objects.filter(complete_idempotency_key=retry_key).first()
+            if existing:
+                if existing.trip.status == TripStatus.COMPLETED:
+                    from billing.services import CloseoutService
+                    CloseoutService.create_from_trip_completion(existing.trip_id, retry_key)
+                return Response(
+                    TripChecklistSerializer(existing, context={"request": request}).data,
+                    status=status.HTTP_200_OK,
+                )
+
         serializer = TripCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         idempotency_key = _get_idempotency_key(request, serializer)
         if idempotency_key:
             existing = TripChecklist.objects.filter(complete_idempotency_key=idempotency_key).first()
             if existing:
+                if existing.trip.status == TripStatus.COMPLETED:
+                    from billing.services import CloseoutService
+                    CloseoutService.create_from_trip_completion(existing.trip_id, idempotency_key)
                 return Response(TripChecklistSerializer(existing, context={"request": request}).data, status=status.HTTP_200_OK)
 
         try:
@@ -374,6 +393,8 @@ class TripViewSet(viewsets.ModelViewSet):
             if trip.driver_id:
                 trip.driver.status = DriverStatus.AVAILABLE
                 trip.driver.save(update_fields=["status"])
+            from billing.services import CloseoutService
+            CloseoutService.create_from_trip_completion(trip.id, idempotency_key)
 
         return Response(TripChecklistSerializer(checklist, context={"request": request}).data, status=status.HTTP_200_OK)
 

@@ -1,4 +1,5 @@
 import datetime
+from decimal import ROUND_CEILING
 from dataclasses import dataclass
 from decimal import Decimal
 from django.db import transaction
@@ -17,7 +18,7 @@ from .models import (
     CloseoutStatus,
 )
 from .tax_service import TaxService, money
-from fleet.models import PricingAmountStatus, Trip, TripStatus
+from fleet.models import MeteringPolicy, PricingAmountStatus, Trip, TripStatus
 
 
 @dataclass(frozen=True)
@@ -52,10 +53,10 @@ class BillabilityService:
                 "Trip closeout has not been submitted.",
             ))
         else:
-            if closeout.status not in (CloseoutStatus.APPROVED, CloseoutStatus.BILLING_READY):
+            if closeout.status != CloseoutStatus.BILLING_READY or not closeout.billing_ready:
                 blockers.append(BillabilityBlocker(
                     "CLOSEOUT_NOT_APPROVED",
-                    "Trip closeout must be approved before invoicing.",
+                    "Trip closeout must be approved and marked billing-ready before invoicing.",
                 ))
             if closeout.end_odometer_km <= closeout.start_odometer_km:
                 blockers.append(BillabilityBlocker(
@@ -117,6 +118,324 @@ class BillabilityService:
             bill_to_key=trip.bill_to_key,
             estimated_taxable_amount=money(taxable),
         )
+
+
+class CloseoutService:
+    @staticmethod
+    def _pricing_metering_policy(trip: Trip) -> str:
+        snapshot = trip.pricing_snapshot or {}
+        return (
+            snapshot.get("package", {}).get("metering_policy")
+            or snapshot.get("contract", {}).get("metering_policy")
+            or MeteringPolicy.GARAGE_TO_GARAGE
+        )
+
+    @staticmethod
+    def derive_actual_quantities(closeout: TripCloseout) -> TripCloseout:
+        policy = closeout.metering_policy or CloseoutService._pricing_metering_policy(closeout.trip)
+        milestones = closeout.milestone_snapshot or {}
+        blockers = [
+            blocker
+            for blocker in (closeout.blockers or [])
+            if not blocker.get("code", "").startswith("METERING_")
+        ]
+        start_km = closeout.start_odometer_km
+        end_km = closeout.end_odometer_km
+        start_at = closeout.actual_pickup_at
+        end_at = closeout.actual_drop_at
+        odometer_source = "trip_checklist"
+        time_source = "trip_checklist"
+
+        if policy in (MeteringPolicy.PICKUP_TO_DROP, MeteringPolicy.AIRPORT_TRANSFER):
+            pickup = milestones.get("pickup") or {}
+            drop = milestones.get("drop") or {}
+            if pickup.get("odometer_km") is None or drop.get("odometer_km") is None:
+                blockers.append({
+                    "code": "METERING_PICKUP_DROP_ODOMETER_MISSING",
+                    "message": "Pickup and drop odometer milestones are required for this metering policy.",
+                })
+                start_km = end_km = Decimal("0")
+            else:
+                start_km = Decimal(str(pickup["odometer_km"]))
+                end_km = Decimal(str(drop["odometer_km"]))
+                odometer_source = "milestone_snapshot.pickup/drop"
+            if not pickup.get("timestamp") or not drop.get("timestamp"):
+                blockers.append({
+                    "code": "METERING_PICKUP_DROP_TIME_MISSING",
+                    "message": "Pickup and drop timestamps are required for this metering policy.",
+                })
+                start_at = end_at = None
+            else:
+                start_at = datetime.datetime.fromisoformat(pickup["timestamp"])
+                end_at = datetime.datetime.fromisoformat(drop["timestamp"])
+                time_source = "milestone_snapshot.pickup/drop"
+        elif policy == MeteringPolicy.FIXED_PACKAGE:
+            odometer_source = "informational_trip_checklist"
+        elif policy in (
+            MeteringPolicy.GARAGE_TO_GARAGE,
+            MeteringPolicy.OUTSTATION_DAILY_MINIMUM,
+        ):
+            if end_km <= start_km:
+                blockers.append({
+                    "code": "METERING_GARAGE_ODOMETER_INVALID",
+                    "message": "Garage departure and return odometers must be present and increasing.",
+                })
+            if not start_at or not end_at:
+                blockers.append({
+                    "code": "METERING_GARAGE_TIME_MISSING",
+                    "message": "Garage departure and return timestamps are required.",
+                })
+
+        if end_km < start_km:
+            blockers.append({
+                "code": "METERING_ODOMETER_REVERSED",
+                "message": "End odometer cannot precede start odometer.",
+            })
+            actual_km = Decimal("0")
+        else:
+            actual_km = end_km - start_km
+        if start_at and end_at and end_at >= start_at:
+            seconds = Decimal(str((end_at - start_at).total_seconds()))
+            actual_hours = seconds / Decimal("3600")
+        else:
+            actual_hours = Decimal("0")
+
+        closeout.metering_policy = policy
+        closeout.actual_km = money(actual_km)
+        closeout.actual_hours = money(actual_hours)
+        closeout.quantity_provenance = {
+            "metering_policy": policy,
+            "odometer_source": odometer_source,
+            "time_source": time_source,
+            "start_odometer_km": str(start_km),
+            "end_odometer_km": str(end_km),
+            "start_at": start_at.isoformat() if start_at else None,
+            "end_at": end_at.isoformat() if end_at else None,
+        }
+        closeout.blockers = blockers
+        if blockers and closeout.status == CloseoutStatus.SUBMITTED:
+            closeout.status = CloseoutStatus.EXCEPTION_REVIEW
+        closeout.save(update_fields=[
+            "metering_policy",
+            "actual_km",
+            "actual_hours",
+            "quantity_provenance",
+            "blockers",
+            "status",
+            "updated_at",
+        ])
+        return closeout
+
+    @staticmethod
+    @transaction.atomic
+    def rerate_from_original_snapshot(closeout_id: int) -> TripCloseout:
+        closeout = (
+            TripCloseout.objects.select_for_update()
+            .select_related("trip")
+            .prefetch_related("extra_charges")
+            .get(pk=closeout_id)
+        )
+        trip = closeout.trip
+        snapshot = trip.pricing_snapshot or {}
+        terms = snapshot.get("rate_terms")
+        blockers = [
+            blocker
+            for blocker in (closeout.blockers or [])
+            if blocker.get("code") != "ORIGINAL_RATE_TERMS_MISSING"
+        ]
+        if not terms:
+            blockers.append({
+                "code": "ORIGINAL_RATE_TERMS_MISSING",
+                "message": "The original quote did not freeze rate terms; re-rating is not permitted.",
+            })
+            closeout.blockers = blockers
+            closeout.status = CloseoutStatus.EXCEPTION_REVIEW
+            closeout.save(update_fields=["blockers", "status", "updated_at"])
+            return closeout
+
+        d = lambda key: Decimal(str(terms.get(key, "0")))
+        actual_hours = Decimal(closeout.actual_hours)
+        actual_km = Decimal(closeout.actual_km)
+        duty_type = snapshot.get("package", {}).get("duty_type", "")
+        is_outstation = duty_type == "OUTSTATION"
+        days = (
+            max(Decimal("1"), (actual_hours / Decimal("24")).to_integral_value(rounding=ROUND_CEILING))
+            if is_outstation
+            else Decimal("1")
+        )
+        included_hours = d("included_hours") * days
+        included_km = d("included_km") * days
+        effective_km = max(actual_km, d("daily_minimum_km") * days if is_outstation else Decimal("0"))
+        excess_hours = max(Decimal("0"), actual_hours - included_hours)
+        excess_km = max(Decimal("0"), effective_km - included_km)
+        waiting_hours = Decimal(closeout.waiting_minutes) / Decimal("60")
+        night_count = Decimal(str(closeout.source_snapshot.get("night_charge_count", 0)))
+        driver_days = days if is_outstation else Decimal("0")
+        components = {
+            "base": money(d("base_rate") * days),
+            "excess_hours": money(excess_hours * d("extra_hour_rate")),
+            "excess_km": money(excess_km * d("extra_km_rate")),
+            "waiting": money(waiting_hours * d("waiting_rate_per_hour")),
+            "night": money(night_count * d("night_charge")),
+            "driver_allowance": money(driver_days * d("driver_allowance_per_day")),
+        }
+        package_pre_discount = money(sum(components.values(), Decimal("0")))
+        package_discount = money(package_pre_discount * d("discount_percent") / Decimal("100"))
+        manual_components = []
+        manual_total = Decimal("0")
+        for charge in closeout.extra_charges.filter(is_approved=True).order_by("id"):
+            signed_amount = -charge.amount if charge.category == "DISCOUNT" else charge.amount
+            signed_amount = money(signed_amount)
+            manual_total += signed_amount
+            manual_components.append({
+                "id": charge.id,
+                "category": charge.category,
+                "amount": str(signed_amount),
+                "description": charge.description,
+                "receipt_attachment_url": charge.receipt_attachment_url,
+            })
+        taxable = money(package_pre_discount - package_discount + manual_total)
+        if taxable < Decimal("0"):
+            raise ValidationError("Final taxable amount cannot be negative.")
+        cgst = money(taxable * d("cgst_rate") / Decimal("100"))
+        sgst = money(taxable * d("sgst_rate") / Decimal("100"))
+        tax = money(cgst + sgst)
+        total = money(taxable + tax)
+        quoted_total = trip.quoted_total_amount or Decimal(str(snapshot.get("total_amount", "0")))
+        variance = money(total - quoted_total)
+        variance_percent = (
+            money(variance * Decimal("100") / quoted_total)
+            if quoted_total
+            else Decimal("0.00")
+        )
+        closeout.final_calculation_version = "closeout-actual-v1"
+        closeout.final_taxable_amount = taxable
+        closeout.final_tax_amount = tax
+        closeout.final_total_amount = total
+        closeout.quote_variance_amount = variance
+        closeout.quote_variance_percent = variance_percent
+        closeout.final_charge_snapshot = {
+            "calculation_version": closeout.final_calculation_version,
+            "original_quote": {
+                "calculation_version": snapshot.get("calculation_version"),
+                "rate_book": snapshot.get("rate_book"),
+                "package": snapshot.get("package"),
+                "rate_terms": terms,
+                "quoted_total_amount": str(money(quoted_total)),
+            },
+            "actuals": {
+                "hours": str(actual_hours),
+                "km": str(actual_km),
+                "effective_km": str(effective_km),
+                "outstation_days": str(days),
+                "waiting_minutes": closeout.waiting_minutes,
+            },
+            "components": {key: str(value) for key, value in components.items()},
+            "package_discount": str(package_discount),
+            "approved_manual_components": manual_components,
+            "manual_components_total": str(money(manual_total)),
+            "taxable_amount": str(taxable),
+            "cgst_amount": str(cgst),
+            "sgst_amount": str(sgst),
+            "tax_amount": str(tax),
+            "total_amount": str(total),
+            "quote_variance_amount": str(variance),
+            "quote_variance_percent": str(variance_percent),
+        }
+        closeout.blockers = blockers
+        closeout.save(update_fields=[
+            "final_charge_snapshot",
+            "final_calculation_version",
+            "final_taxable_amount",
+            "final_tax_amount",
+            "final_total_amount",
+            "quote_variance_amount",
+            "quote_variance_percent",
+            "blockers",
+            "updated_at",
+        ])
+        return closeout
+
+    @staticmethod
+    @transaction.atomic
+    def create_from_trip_completion(trip_id: int, event_key: str | None = None) -> TripCloseout:
+        trip = (
+            Trip.objects.select_for_update()
+            .select_related("checklist", "driver", "vehicle")
+            .get(pk=trip_id)
+        )
+        if trip.status != TripStatus.COMPLETED:
+            raise ValidationError("Trip must be completed before closeout creation.")
+
+        existing = TripCloseout.objects.select_for_update().filter(trip=trip).first()
+        if existing:
+            return existing
+
+        checklist = getattr(trip, "checklist", None)
+        blockers = []
+        evidence = {}
+        start_odometer = Decimal("0")
+        end_odometer = Decimal("0")
+        actual_pickup_at = None
+        actual_drop_at = None
+        if checklist is None:
+            blockers.append({
+                "code": "CHECKLIST_MISSING",
+                "message": "Start/end checklist evidence is missing.",
+            })
+        else:
+            start_odometer = Decimal(checklist.start_odometer_km)
+            actual_pickup_at = checklist.created_at
+            evidence["start_odometer_asset_id"] = str(checklist.start_odometer_asset_id)
+            evidence["start_checklist_id"] = checklist.id
+            if checklist.end_odometer_km is None:
+                blockers.append({
+                    "code": "END_ODOMETER_MISSING",
+                    "message": "End odometer reading is missing.",
+                })
+            else:
+                end_odometer = Decimal(checklist.end_odometer_km)
+                actual_drop_at = checklist.updated_at
+            if not checklist.end_odometer_asset_id:
+                blockers.append({
+                    "code": "END_ODOMETER_EVIDENCE_MISSING",
+                    "message": "End odometer evidence attachment is missing.",
+                })
+            else:
+                evidence["end_odometer_asset_id"] = str(checklist.end_odometer_asset_id)
+
+        status = CloseoutStatus.EXCEPTION_REVIEW if blockers else CloseoutStatus.SUBMITTED
+        closeout = TripCloseout.objects.create(
+            trip=trip,
+            status=status,
+            actual_pickup_at=actual_pickup_at,
+            actual_drop_at=actual_drop_at,
+            start_odometer_km=start_odometer,
+            end_odometer_km=end_odometer,
+            source_event_key=event_key or None,
+            source_snapshot={
+                "trip_id": trip.id,
+                "trip_status": trip.status,
+                "driver_id": trip.driver_id,
+                "vehicle_id": trip.vehicle_id,
+                "completion_distance_km": str(trip.distance_km or "0.00"),
+                "checklist_id": checklist.id if checklist else None,
+            },
+            evidence_snapshot=evidence,
+            milestone_snapshot={
+                "garage_departure": {
+                    "timestamp": actual_pickup_at.isoformat() if actual_pickup_at else None,
+                    "odometer_km": str(start_odometer),
+                },
+                "drop": {
+                    "timestamp": actual_drop_at.isoformat() if actual_drop_at else None,
+                    "odometer_km": str(end_odometer),
+                },
+            },
+            metering_policy=CloseoutService._pricing_metering_policy(trip),
+            blockers=blockers,
+        )
+        return CloseoutService.derive_actual_quantities(closeout)
 
 
 class InvoiceService:
@@ -295,9 +614,13 @@ class InvoiceService:
                 if (
                     hasattr(t, "closeout")
                     and t.closeout
-                    and t.closeout.status == CloseoutStatus.APPROVED
+                    and t.closeout.status == CloseoutStatus.BILLING_READY
+                    and t.pricing_amount_status != PricingAmountStatus.FINALIZED
                 ):
-                    for charge in t.closeout.extra_charges.all():
+                    # Legacy quoted trips carry extras as separate invoice lines.
+                    # Finalized trips already include approved extras in their
+                    # frozen final-charge snapshot and must not double count them.
+                    for charge in t.closeout.extra_charges.filter(is_approved=True):
                         charge_tax = TaxService.calculate_line(
                             taxable_value=charge.amount,
                             cgst_rate=cgst_rate,

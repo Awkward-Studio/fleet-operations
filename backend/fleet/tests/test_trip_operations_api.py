@@ -205,6 +205,25 @@ class TripOperationsAPITest(APITestCase):
         self.assertEqual(str(self.trip.distance_km), "37.00")
         self.assertEqual(self.vehicle.odometer_km, 1042)
         self.assertEqual(self.driver.status, DriverStatus.AVAILABLE)
+        self.assertEqual(self.trip.closeout.status, "SUBMITTED")
+        self.assertEqual(str(self.trip.closeout.actual_km), "37.00")
+        self.assertEqual(
+            self.trip.closeout.source_event_key,
+            "complete-test-key",
+        )
+        self.assertEqual(self.trip.closeout.blockers, [])
+
+        retry_complete = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/complete/",
+            {
+                "end_odometer_km": 1042,
+                "idempotency_key": "complete-test-key",
+            },
+            format="json",
+        )
+        self.assertEqual(retry_complete.status_code, 200)
+        from billing.models import TripCloseout
+        self.assertEqual(TripCloseout.objects.filter(trip=self.trip).count(), 1)
 
     def test_create_driver_with_email_and_password_creates_user(self):
         payload = {

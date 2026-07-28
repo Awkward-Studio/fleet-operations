@@ -1290,6 +1290,16 @@ function TripsView(props: {
                         <div className="kanban-card-footer">
                           <span className={`kanban-card-badge ${badgeClass}`}>{badgeText}</span>
                           <div className="kanban-card-actions">
+                            {trip.status === "completed" && (
+                              <Link
+                                href={`/billing?trip=${trip.id}`}
+                                className="kanban-card-action-btn"
+                                aria-label={`Review closeout for trip ${trip.id}`}
+                                title="Review billing closeout"
+                              >
+                                <Receipt size={14} />
+                              </Link>
+                            )}
                             <button 
                               className="kanban-card-action-btn"
                               aria-label="Options"

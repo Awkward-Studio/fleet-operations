@@ -146,9 +146,32 @@ class TripCloseout(models.Model):
     start_odometer_km = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     end_odometer_km = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     actual_km = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    actual_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    metering_policy = models.CharField(max_length=32, blank=True)
+    milestone_snapshot = models.JSONField(default=dict, blank=True)
+    quantity_provenance = models.JSONField(default=dict, blank=True)
+    final_charge_snapshot = models.JSONField(default=dict, blank=True)
+    final_calculation_version = models.CharField(max_length=80, blank=True)
+    final_taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    final_tax_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    final_total_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    quote_variance_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    quote_variance_percent = models.DecimalField(max_digits=9, decimal_places=2, null=True, blank=True)
     waiting_minutes = models.PositiveIntegerField(default=0)
     overtime_minutes = models.PositiveIntegerField(default=0)
     completion_notes = models.TextField(blank=True)
+    submitted_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="submitted_trip_closeouts",
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    source_event_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    source_snapshot = models.JSONField(default=dict, blank=True)
+    evidence_snapshot = models.JSONField(default=dict, blank=True)
+    blockers = models.JSONField(default=list, blank=True)
     approved_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL)
     approved_at = models.DateTimeField(null=True, blank=True)
     billing_ready = models.BooleanField(default=False)
@@ -161,11 +184,17 @@ class TripCloseout(models.Model):
             raise ValidationError({"end_odometer_km": "End odometer reading cannot be less than start odometer reading."})
 
     def save(self, *args, **kwargs):
-        if self.end_odometer_km >= self.start_odometer_km:
+        if not self.quantity_provenance and self.end_odometer_km >= self.start_odometer_km:
             self.actual_km = self.end_odometer_km - self.start_odometer_km
-        if self.status in [CloseoutStatus.APPROVED, CloseoutStatus.BILLING_READY]:
+        if self.status == CloseoutStatus.BILLING_READY:
             self.billing_ready = True
+        elif self.status != CloseoutStatus.BILLING_READY:
+            self.billing_ready = False
         super().save(*args, **kwargs)
+
+    @property
+    def has_blockers(self):
+        return bool(self.blockers)
 
     def __str__(self):
         return f"Closeout Trip #{self.trip_id} ({self.status})"
@@ -177,10 +206,46 @@ class TripCharge(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.CharField(max_length=200, blank=True)
     receipt_attachment_url = models.URLField(max_length=500, blank=True)
+    is_approved = models.BooleanField(default=False)
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_trip_charges",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_trip_charges",
+    )
 
     def __str__(self):
         return f"{self.category}: ₹{self.amount} for Closeout #{self.closeout_id}"
+
+
+class CloseoutAuditEvent(models.Model):
+    closeout = models.ForeignKey(TripCloseout, related_name="audit_events", on_delete=models.CASCADE)
+    action = models.CharField(max_length=40)
+    reason = models.TextField(blank=True)
+    actor = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="closeout_audit_events",
+    )
+    from_status = models.CharField(max_length=30, blank=True)
+    to_status = models.CharField(max_length=30, blank=True)
+    snapshot = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
 
 
 class InvoiceStatus(models.TextChoices):
@@ -451,5 +516,3 @@ class TripExpense(models.Model):
 
     def __str__(self):
         return f"{self.category}: ₹{self.amount} ({self.status})"
-
-

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote
+from .models import CloseoutAuditEvent, LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote
 from fleet.serializers import TripSerializer
 from .services import BillabilityService
 
@@ -16,17 +16,41 @@ class TripChargeSerializer(serializers.ModelSerializer):
     class Meta:
         model = TripCharge
         fields = "__all__"
-        read_only_fields = ["closeout"]
+        read_only_fields = ["closeout", "is_approved", "approved_by", "approved_at", "created_by"]
+
+
+class CloseoutAuditEventSerializer(serializers.ModelSerializer):
+    actor_name = serializers.CharField(source="actor.username", read_only=True)
+
+    class Meta:
+        model = CloseoutAuditEvent
+        fields = "__all__"
 
 
 class TripCloseoutSerializer(serializers.ModelSerializer):
     extra_charges = TripChargeSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    trip_details = TripSerializer(source="trip", read_only=True)
+    audit_events = CloseoutAuditEventSerializer(many=True, read_only=True)
 
     class Meta:
         model = TripCloseout
         fields = "__all__"
-        read_only_fields = ["actual_km", "billing_ready", "approved_by", "approved_at"]
+        read_only_fields = [
+            "actual_km",
+            "actual_hours",
+            "billing_ready",
+            "approved_by",
+            "approved_at",
+            "submitted_by",
+            "submitted_at",
+            "final_charge_snapshot",
+            "final_taxable_amount",
+            "final_tax_amount",
+            "final_total_amount",
+            "quote_variance_amount",
+            "quote_variance_percent",
+        ]
 
 
 class InvoiceLineSerializer(serializers.ModelSerializer):

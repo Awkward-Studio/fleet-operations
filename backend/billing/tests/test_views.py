@@ -74,7 +74,7 @@ class BillingAPITests(APITestCase):
             trip=self.trip,
             start_odometer_km=100,
             end_odometer_km=180,
-            status=CloseoutStatus.APPROVED,
+            status=CloseoutStatus.BILLING_READY,
         )
 
     def test_generate_invoice_draft_api(self):

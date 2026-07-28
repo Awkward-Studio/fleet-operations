@@ -423,6 +423,7 @@ class TripSerializer(serializers.ModelSerializer):
     checklist = serializers.SerializerMethodField()
     otp_verified = serializers.SerializerMethodField()
     financial_trace = serializers.SerializerMethodField()
+    otp_mode = serializers.SerializerMethodField()
     customer_id = serializers.PrimaryKeyRelatedField(
         queryset=CorporateCustomer.objects.all(),
         source="customer",
@@ -487,6 +488,7 @@ class TripSerializer(serializers.ModelSerializer):
             "checklist",
             "otp_verified",
             "financial_trace",
+            "otp_mode",
         ]
 
     def get_financial_trace(self, obj):
@@ -753,6 +755,9 @@ class TripSerializer(serializers.ModelSerializer):
         otp_session = getattr(obj, "otp_session", None)
         return bool(otp_session and otp_session.is_verified)
 
+    def get_otp_mode(self, obj):
+        return obj.otp_mode
+
 
 class AssignTripSerializer(serializers.Serializer):
     vehicle_id = serializers.PrimaryKeyRelatedField(queryset=Vehicle.objects.all(), source="vehicle")
@@ -918,8 +923,16 @@ class TripGenerateOTPSerializer(serializers.Serializer):
 
 
 class TripVerifyOTPSerializer(serializers.Serializer):
-    code = serializers.CharField(min_length=4, max_length=6)
+    code = serializers.CharField(min_length=4, max_length=6, required=False)
+    otp_code = serializers.CharField(min_length=4, max_length=6, required=False)
     idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+
+    def validate(self, attrs):
+        code = attrs.get("otp_code") or attrs.get("code")
+        if not code:
+            raise serializers.ValidationError({"otp_code": "OTP code is required."})
+        attrs["code"] = code
+        return attrs
 
 
 class AvailabilitySerializer(serializers.Serializer):

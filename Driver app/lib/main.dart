@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/api_client.dart';
+import 'core/location_tracking_service.dart';
 import 'features/trips/presentation/driver_home_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await LocationTrackingService.initialize();
   runApp(const ProviderScope(child: DriverApp()));
 }
 

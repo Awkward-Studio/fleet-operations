@@ -807,6 +807,20 @@ class Trip(models.Model):
         if errors:
             raise ValidationError(errors)
 
+    @property
+    def is_mmt_booking(self):
+        source = (self.ota_source or "").replace(" ", "").lower()
+        return source in {"makemytrip", "gommt", "mmt"}
+
+    @property
+    def otp_mode(self):
+        return "mmt" if self.is_mmt_booking else "local"
+
+    @property
+    def mmt_verification_code(self):
+        code = (self.pricing_snapshot or {}).get("verification_code")
+        return str(code) if code else ""
+
 
 class TripQuoteOverride(models.Model):
     trip = models.ForeignKey(Trip, related_name="quote_overrides", on_delete=models.PROTECT)

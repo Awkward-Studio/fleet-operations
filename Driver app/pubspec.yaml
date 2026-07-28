@@ -40,6 +40,9 @@ dependencies:
   url_launcher: ^6.3.2
   image_picker: ^1.2.3
   http_parser: ^4.1.2
+  geolocator: ^14.0.3
+  flutter_background_service: ^5.1.0
+  flutter_background_service_android: ^6.3.1
 
 dev_dependencies:
   flutter_test:

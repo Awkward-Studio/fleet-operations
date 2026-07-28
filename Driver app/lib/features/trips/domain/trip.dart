@@ -12,15 +12,20 @@ class Trip {
     required this.pickupAt,
     required this.estimatedDropAt,
     required this.status,
+    required this.otaSource,
+    required this.otpMode,
     required this.driver,
     required this.vehicleLabel,
     required this.vehicleOdometerKm,
+    required this.startOdometerKm,
+    required this.endOdometerKm,
     required this.notes,
   });
 
   factory Trip.fromJson(Map<String, dynamic> json) {
     final vehicle = json['vehicle'] as Map<String, dynamic>?;
     final driverJson = json['driver'] as Map<String, dynamic>?;
+    final checklist = json['checklist'] as Map<String, dynamic>?;
     final vehicleLabel = vehicle == null
         ? null
         : '${vehicle['registration_number']} - ${vehicle['make']} ${vehicle['model']}';
@@ -40,11 +45,15 @@ class Trip {
         json['estimated_drop_at'] as String? ?? '',
       ),
       status: TripStatusX.fromValue(json['status'] as String? ?? 'requested'),
+      otaSource: json['ota_source'] as String? ?? '',
+      otpMode: TripOtpModeX.fromValue(json['otp_mode'] as String? ?? 'local'),
       driver: driverJson == null ? null : Driver.fromJson(driverJson),
       vehicleLabel: vehicleLabel,
       vehicleOdometerKm: vehicle == null
           ? 0
           : int.tryParse('${vehicle['odometer_km'] ?? 0}') ?? 0,
+      startOdometerKm: _parseInt(checklist?['start_odometer_km']),
+      endOdometerKm: _parseInt(checklist?['end_odometer_km']),
       notes: json['notes'] as String?,
     );
   }
@@ -61,9 +70,13 @@ class Trip {
   final DateTime? pickupAt;
   final DateTime? estimatedDropAt;
   final TripStatus status;
+  final String otaSource;
+  final TripOtpMode otpMode;
   final Driver? driver;
   final String? vehicleLabel;
   final int vehicleOdometerKm;
+  final int? startOdometerKm;
+  final int? endOdometerKm;
   final String? notes;
 
   String get pickupAddressLabel =>
@@ -86,6 +99,32 @@ class Trip {
     if (value == null || value == '') return null;
     if (value is num) return value.toDouble();
     return double.tryParse(value.toString());
+  }
+
+  static int? _parseInt(dynamic value) {
+    if (value == null || value == '') return null;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+}
+
+enum TripOtpMode { local, mmt }
+
+extension TripOtpModeX on TripOtpMode {
+  static TripOtpMode fromValue(String value) {
+    return switch (value.toLowerCase()) {
+      'mmt' => TripOtpMode.mmt,
+      _ => TripOtpMode.local,
+    };
+  }
+
+  bool get isLocal => this == TripOtpMode.local;
+
+  String get label {
+    return switch (this) {
+      TripOtpMode.local => 'Local Fleet OTP',
+      TripOtpMode.mmt => 'MMT OTP',
+    };
   }
 }
 
@@ -164,7 +203,7 @@ extension TripStatusX on TripStatus {
       TripStatus.assigned => 'Start Pre-Ride Inspection',
       TripStatus.enRoutePickup => 'Navigate / Arrived at Pickup',
       TripStatus.arrivedAtPickup => 'Verify Guest OTP',
-      TripStatus.active => 'View Active Trip & Telemetry',
+      TripStatus.active => 'End Ride & Final Odometer',
       _ => null,
     };
   }

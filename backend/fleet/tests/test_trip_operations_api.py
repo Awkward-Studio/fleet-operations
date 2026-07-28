@@ -120,11 +120,45 @@ class TripOperationsAPITest(APITestCase):
 
         valid = self.client.post(
             f"/api/fleet/trips/{self.trip.id}/verify-otp/",
-            {"code": code},
+            {"otp_code": code},
             format="json",
         )
         self.assertEqual(valid.status_code, 200)
-        self.assertTrue(valid.data["is_verified"])
+        self.assertTrue(valid.data["otp"]["is_verified"])
+        self.trip.refresh_from_db()
+        self.vehicle.refresh_from_db()
+        self.driver.refresh_from_db()
+        self.assertEqual(self.trip.status, TripStatus.ACTIVE)
+        self.assertEqual(self.vehicle.status, VehicleStatus.ACTIVE_TRIP)
+        self.assertEqual(self.driver.status, DriverStatus.ON_TRIP)
+
+    def test_mmt_otp_verifies_against_pricing_snapshot_and_blocks_local_generation(self):
+        self.trip.ota_source = "GOMMT"
+        self.trip.pricing_snapshot = {"verification_code": "2748"}
+        self.trip.save(update_fields=["ota_source", "pricing_snapshot"])
+
+        generated = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/generate-otp/",
+            {"digits": 4},
+            format="json",
+        )
+        self.assertEqual(generated.status_code, 400)
+
+        invalid = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/verify-otp/",
+            {"otp_code": "0000"},
+            format="json",
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        valid = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/verify-otp/",
+            {"otp_code": "2748"},
+            format="json",
+        )
+        self.assertEqual(valid.status_code, 200)
+        self.assertEqual(valid.data["trip"]["status"], TripStatus.ACTIVE)
+        self.assertEqual(valid.data["trip"]["otp_mode"], "mmt")
 
     def test_current_driver_trip_endpoint_returns_active_assignment(self):
         response = self.client.get("/api/fleet/driver/my-trips/current/")
@@ -224,6 +258,37 @@ class TripOperationsAPITest(APITestCase):
         self.assertEqual(retry_complete.status_code, 200)
         from billing.models import TripCloseout
         self.assertEqual(TripCloseout.objects.filter(trip=self.trip).count(), 1)
+
+    def test_completion_rejects_equal_end_odometer(self):
+        checklist = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/checklist/",
+            {
+                "start_odometer_km": 1005,
+                "start_odometer_photo": SimpleUploadedFile(
+                    "start.jpg",
+                    b"start-photo",
+                    content_type="image/jpeg",
+                ),
+                "idempotency_key": "equal-odo-checklist-key",
+            },
+            format="multipart",
+        )
+        self.assertEqual(checklist.status_code, 201)
+
+        complete = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/complete/",
+            {
+                "end_odometer_km": 1005,
+                "end_odometer_photo": SimpleUploadedFile(
+                    "end.jpg",
+                    b"end-photo",
+                    content_type="image/jpeg",
+                ),
+                "idempotency_key": "equal-odo-complete-key",
+            },
+            format="multipart",
+        )
+        self.assertEqual(complete.status_code, 400)
 
     def test_create_driver_with_email_and_password_creates_user(self):
         payload = {

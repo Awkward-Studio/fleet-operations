@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/location_tracking_service.dart';
 import '../../../core/providers.dart';
 import '../data/trip_providers.dart';
 import '../domain/trip.dart';
@@ -41,6 +43,16 @@ class _PickupNavigationScreenState
       await api.post('/fleet/trips/${widget.trip.id}/transition/', {
         'status': TripStatus.arrivedAtPickup.value,
       });
+      String? localOtpCode;
+      if (widget.trip.otpMode.isLocal) {
+        final generated = await api.post(
+          '/fleet/trips/${widget.trip.id}/generate-otp/',
+          {'digits': 4},
+        );
+        if (generated is Map<String, dynamic>) {
+          localOtpCode = generated['code'] as String?;
+        }
+      }
       ref.invalidate(currentDriverTripProvider);
       if (!mounted) return;
 
@@ -48,7 +60,10 @@ class _PickupNavigationScreenState
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
-        builder: (_) => GuestOtpVerificationModal(trip: widget.trip),
+        builder: (_) => GuestOtpVerificationModal(
+          trip: widget.trip,
+          initialLocalOtpCode: localOtpCode,
+        ),
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -293,9 +308,14 @@ class _CustomerContactCard extends StatelessWidget {
 }
 
 class GuestOtpVerificationModal extends ConsumerStatefulWidget {
-  const GuestOtpVerificationModal({super.key, required this.trip});
+  const GuestOtpVerificationModal({
+    super.key,
+    required this.trip,
+    this.initialLocalOtpCode,
+  });
 
   final Trip trip;
+  final String? initialLocalOtpCode;
 
   @override
   ConsumerState<GuestOtpVerificationModal> createState() =>
@@ -304,18 +324,43 @@ class GuestOtpVerificationModal extends ConsumerStatefulWidget {
 
 class _GuestOtpVerificationModalState
     extends ConsumerState<GuestOtpVerificationModal> {
-  final _otpController = TextEditingController();
+  late final List<TextEditingController> _digitControllers;
+  late final List<FocusNode> _digitFocusNodes;
   bool _verifying = false;
+  bool _resending = false;
   String? _error;
+  String? _localOtpCode;
+  String? _notice;
+
+  bool get _isLocalOtp => widget.trip.otpMode.isLocal;
+  int get _visibleDigits => _isLocalOtp ? 4 : 6;
+
+  @override
+  void initState() {
+    super.initState();
+    _localOtpCode = widget.initialLocalOtpCode;
+    _digitControllers = List.generate(6, (_) => TextEditingController());
+    _digitFocusNodes = List.generate(6, (_) => FocusNode());
+  }
 
   @override
   void dispose() {
-    _otpController.dispose();
+    for (final controller in _digitControllers) {
+      controller.dispose();
+    }
+    for (final node in _digitFocusNodes) {
+      node.dispose();
+    }
     super.dispose();
   }
 
+  String get _code => _digitControllers
+      .take(_visibleDigits)
+      .map((controller) => controller.text.trim())
+      .join();
+
   Future<void> _verify() async {
-    final code = _otpController.text.trim();
+    final code = _code;
     if (code.length < 4) {
       setState(() => _error = 'Enter the guest pickup OTP.');
       return;
@@ -329,11 +374,10 @@ class _GuestOtpVerificationModalState
     try {
       final api = ref.read(apiClientProvider);
       await api.post('/fleet/trips/${widget.trip.id}/verify-otp/', {
-        'code': code,
+        'otp_code': code,
       });
-      await api.post('/fleet/trips/${widget.trip.id}/transition/', {
-        'status': TripStatus.active.value,
-      });
+      await _postCurrentLocation(api);
+      await LocationTrackingService.startAfterOtpSuccess(widget.trip);
       ref.invalidate(currentDriverTripProvider);
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -341,6 +385,62 @@ class _GuestOtpVerificationModalState
       setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) setState(() => _verifying = false);
+    }
+  }
+
+  Future<void> _resendLocalOtp() async {
+    if (!_isLocalOtp) return;
+
+    setState(() {
+      _resending = true;
+      _error = null;
+      _notice = null;
+    });
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final generated = await api.post(
+        '/fleet/trips/${widget.trip.id}/generate-otp/',
+        {'digits': 4},
+      );
+      setState(() {
+        _localOtpCode = generated is Map<String, dynamic>
+            ? generated['code'] as String?
+            : null;
+        _notice = 'Local OTP ready for testing.';
+      });
+    } catch (error) {
+      setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _resending = false);
+    }
+  }
+
+  Future<void> _postCurrentLocation(dynamic api) async {
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      await api.post('/fleet/trips/${widget.trip.id}/location/', {
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'speed_kmh': position.speed * 3.6,
+        'heading': position.heading,
+      });
+    } catch (_) {
+      // OTP success should not be blocked by location permission or GPS failure.
     }
   }
 
@@ -363,24 +463,59 @@ class _GuestOtpVerificationModalState
           ),
           const SizedBox(height: 6),
           Text(
-            'Ask ${widget.trip.customerName} for the pickup OTP before starting the active ride.',
+            _isLocalOtp
+                ? 'Use the local fleet OTP for ${widget.trip.customerName}.'
+                : 'Ask ${widget.trip.customerName} for the MMT pickup OTP.',
             style: const TextStyle(color: Color(0xff64736f), height: 1.35),
           ),
+          const SizedBox(height: 10),
+          _OtpModePill(label: widget.trip.otpMode.label),
+          if (_isLocalOtp && _localOtpCode != null) ...[
+            const SizedBox(height: 12),
+            _LocalOtpPreview(code: _localOtpCode!),
+          ],
           const SizedBox(height: 16),
-          TextField(
-            controller: _otpController,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            maxLength: 6,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _verify(),
-            decoration: InputDecoration(
-              labelText: 'Pickup OTP',
-              counterText: '',
-              prefixIcon: const Icon(Icons.password),
-              errorText: _error,
-            ),
+          _OtpDigitInput(
+            controllers: _digitControllers,
+            focusNodes: _digitFocusNodes,
+            visibleDigits: _visibleDigits,
+            hasError: _error != null,
+            onCompleted: _verify,
           ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: const TextStyle(
+                color: Color(0xff9f1d14),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          if (_notice != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _notice!,
+              style: const TextStyle(
+                color: Color(0xff0f766e),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          if (_isLocalOtp) ...[
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _resending ? null : _resendLocalOtp,
+              icon: _resending
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              label: const Text('Resend OTP'),
+            ),
+          ],
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: _verifying ? null : _verify,
@@ -401,6 +536,132 @@ class _GuestOtpVerificationModalState
           ),
         ],
       ),
+    );
+  }
+}
+
+class _OtpModePill extends StatelessWidget {
+  const _OtpModePill({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xffe8f3ef),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xff0f766e),
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LocalOtpPreview extends StatelessWidget {
+  const _LocalOtpPreview({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xfffff7ed),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xffffedd5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.sms_outlined, color: Color(0xffb45309)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Testing OTP: $code',
+              style: const TextStyle(
+                color: Color(0xff7c2d12),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OtpDigitInput extends StatelessWidget {
+  const _OtpDigitInput({
+    required this.controllers,
+    required this.focusNodes,
+    required this.visibleDigits,
+    required this.hasError,
+    required this.onCompleted,
+  });
+
+  final List<TextEditingController> controllers;
+  final List<FocusNode> focusNodes;
+  final int visibleDigits;
+  final bool hasError;
+  final VoidCallback onCompleted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: List.generate(visibleDigits, (index) {
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(right: index == visibleDigits - 1 ? 0 : 8),
+            child: TextField(
+              controller: controllers[index],
+              focusNode: focusNodes[index],
+              autofocus: index == 0,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              maxLength: 1,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              decoration: InputDecoration(
+                counterText: '',
+                filled: true,
+                fillColor: hasError
+                    ? const Color(0xfffff1f0)
+                    : const Color(0xfff6f8f7),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                    color: hasError
+                        ? const Color(0xffe11d48)
+                        : const Color(0xffdde6e2),
+                  ),
+                ),
+              ),
+              onChanged: (value) {
+                if (value.isNotEmpty && index < visibleDigits - 1) {
+                  focusNodes[index + 1].requestFocus();
+                }
+                if (value.isNotEmpty && index == visibleDigits - 1) {
+                  FocusScope.of(context).unfocus();
+                  onCompleted();
+                }
+                if (value.isEmpty && index > 0) {
+                  focusNodes[index - 1].requestFocus();
+                }
+              },
+            ),
+          ),
+        );
+      }),
     );
   }
 }

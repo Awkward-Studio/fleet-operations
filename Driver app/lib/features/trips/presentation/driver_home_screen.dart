@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/api_client.dart';
+import '../../../core/location_tracking_service.dart';
 import '../data/trip_providers.dart';
 import '../domain/trip.dart';
+import 'end_ride_screen.dart';
 import 'pre_ride_inspection_screen.dart';
 import 'pickup_navigation_screen.dart';
 
@@ -21,6 +23,19 @@ class DriverHomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tripState = ref.watch(currentDriverTripProvider);
+    ref.listen(currentDriverTripProvider, (_, next) {
+      next.when(
+        data: (trip) {
+          if (trip?.status == TripStatus.active) {
+            LocationTrackingService.ensureTrackingForActiveTrip(context, trip);
+          } else {
+            LocationTrackingService.stop();
+          }
+        },
+        error: (_, _) => LocationTrackingService.stop(),
+        loading: () {},
+      );
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -52,6 +67,10 @@ class DriverHomeScreen extends ConsumerWidget {
             children: [
               _Header(trip: trip),
               const SizedBox(height: 18),
+              if (trip?.status == TripStatus.active) ...[
+                const _LiveTrackingBanner(),
+                const SizedBox(height: 14),
+              ],
               if (trip == null)
                 const _EmptyTripState()
               else
@@ -248,6 +267,18 @@ class ActiveTripCard extends ConsumerWidget {
                                   GuestOtpVerificationModal(trip: trip),
                             );
                             if (changed == true) {
+                              ref.invalidate(currentDriverTripProvider);
+                            }
+                            return;
+                          }
+                          if (trip.status == TripStatus.active) {
+                            final completed = await Navigator.of(context)
+                                .push<bool>(
+                                  MaterialPageRoute(
+                                    builder: (_) => EndRideScreen(trip: trip),
+                                  ),
+                                );
+                            if (completed == true) {
                               ref.invalidate(currentDriverTripProvider);
                             }
                             return;
@@ -575,6 +606,37 @@ class _EmptyTripState extends StatelessWidget {
             'New assignments will appear here as soon as dispatch assigns one to your profile.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Color(0xff64736f), height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveTrackingBanner extends StatelessWidget {
+  const _LiveTrackingBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xffe8f3ef),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xffb7d8cb)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.gps_fixed, color: Color(0xff0f766e), size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Live GPS Tracking Active',
+              style: TextStyle(
+                color: Color(0xff24524c),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
           ),
         ],
       ),

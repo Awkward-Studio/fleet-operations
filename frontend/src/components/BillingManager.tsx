@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from "react";
 import {
   Receipt,
-  FileText,
   Plus,
   Search,
   CheckCircle2,
@@ -27,15 +26,19 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import CloseoutReviewManager from "./CloseoutReviewManager";
+import InvoiceTripSelector from "./InvoiceTripSelector";
 import {
   BillingInvoice,
   BillingLegalEntity,
   exportBillingInvoiceTallyXml,
-  generateInvoiceDraft,
   issueBillingInvoice,
   listBillingEntities,
   listBillingInvoices,
   previewBillingInvoice,
+  submitBillingInvoiceReview,
+  approveBillingInvoice,
+  voidBillingInvoice,
+  downloadBillingInvoiceDocument,
 } from "@/lib/billingApi";
 import {
   Table,
@@ -58,17 +61,13 @@ export function BillingManager() {
   const [success, setSuccess] = useState<string | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewTitle, setPreviewTitle] = useState<string>("");
+  const [selectedInvoice, setSelectedInvoice] = useState<BillingInvoice | null>(null);
+  const [correctionReason, setCorrectionReason] = useState("");
 
   // Filters
   const [search, setSearch] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
 
-  // Generator form state
-  const [selectedEntityId, setSelectedEntityId] = useState<string>("");
-  const [tripIdsInput, setTripIdsInput] = useState<string>("");
-  const [genError, setGenError] = useState<string | null>(null);
-  const [genSuccess, setGenSuccess] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
   const canManageBilling =
     !!user &&
     (user.role === "admin" ||
@@ -127,6 +126,20 @@ export function BillingManager() {
     }
   };
 
+  const handleDownloadDocument = async (invoiceId: number, invNum: string) => {
+    try {
+      const blob = await downloadBillingInvoiceDocument(invoiceId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${invNum || `invoice-${invoiceId}`}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to download invoice PDF.");
+    }
+  };
+
   const handleIssueInvoice = async (invoiceId: number) => {
     setActiveMutationId(invoiceId);
     setError(null);
@@ -141,43 +154,23 @@ export function BillingManager() {
     }
   };
 
-  const handleGenerateInvoice = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setGenError(null);
-    setGenSuccess(null);
-    if (!selectedEntityId) {
-      setGenError("Please select a Legal Entity.");
-      return;
-    }
-    if (!canManageBilling) {
-      setGenError("Your account does not have permission to create invoices.");
-      return;
-    }
-    const rawIds = tripIdsInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)
-      .map((s) => parseInt(s, 10))
-      .filter((n) => !isNaN(n));
-
-    if (rawIds.length === 0) {
-      setGenError("Please enter at least one valid numeric Trip ID.");
-      return;
-    }
-
-    setGenerating(true);
+  const handleLifecycle = async (
+    invoiceId: number,
+    label: string,
+    action: () => Promise<BillingInvoice>,
+  ) => {
+    setActiveMutationId(invoiceId);
+    setError(null);
     try {
-      const data = await generateInvoiceDraft({
-        legal_entity_id: parseInt(selectedEntityId, 10),
-        trip_ids: rawIds,
-      });
-      setGenSuccess(`Invoice draft ${data.invoice_number || "#" + data.id} created with ${data.lines?.length || 0} line items.`);
-      setTripIdsInput("");
+      const updated = await action();
+      setSuccess(label);
+      setSelectedInvoice(updated);
+      setCorrectionReason("");
       await fetchInvoices();
-    } catch (err) {
-      setGenError(err instanceof Error ? err.message : "Network error generating invoice.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invoice lifecycle action failed.");
     } finally {
-      setGenerating(false);
+      setActiveMutationId(null);
     }
   };
 
@@ -412,6 +405,20 @@ export function BillingManager() {
                           >
                             <Eye size={13} /> {inv.status === "DRAFT" ? "Draft Preview" : "Invoice"}
                           </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            onClick={() => handleDownloadDocument(inv.id, inv.invoice_number || "")}
+                          >
+                            <Download size={13} /> PDF
+                          </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            onClick={() => setSelectedInvoice(inv)}
+                          >
+                            <FileCheck size={13} /> Review
+                          </button>
 
                           {inv.status !== "DRAFT" && (
                             <button
@@ -424,7 +431,7 @@ export function BillingManager() {
                             </button>
                           )}
 
-                          {inv.status === "DRAFT" && (
+                          {inv.status === "APPROVED" && (
                             <button
                               className="button"
                               style={{ padding: "6px 10px", fontSize: 12, background: "var(--ok)", color: "#000" }}
@@ -445,83 +452,61 @@ export function BillingManager() {
           </Table>
         </div>
       ) : (
-        /* Invoice Generator Form Panel */
-        <div className="panel" style={{ padding: 24, maxWidth: 640 }}>
-          <h3 style={{ margin: "0 0 16px", color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
-            <FileText size={20} style={{ color: "var(--accent)" }} />
-            Generate Corporate Tax Invoice
-          </h3>
-          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 20 }}>
-            Select your legal entity and input completed trip IDs to compile automated GST tax invoices based on corporate contract pricing packages.
-          </p>
+        <InvoiceTripSelector
+          entities={entities}
+          entitiesLoading={entitiesLoading}
+          onCreated={async (invoice) => {
+            setSuccess(`Invoice draft #${invoice.id} created successfully.`);
+            setActiveTab("invoices");
+            await fetchInvoices();
+          }}
+        />
+      )}
 
-          {genError && (
-            <div style={{ padding: 12, background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 6, color: "var(--danger)", fontSize: 13, marginBottom: 16 }}>
-              {genError}
-            </div>
-          )}
-          {genSuccess && (
-            <div style={{ padding: 12, background: "rgba(34, 197, 94, 0.1)", border: "1px solid rgba(34, 197, 94, 0.25)", borderRadius: 6, color: "var(--ok)", fontSize: 13, marginBottom: 16 }}>
-              {genSuccess}
-            </div>
-          )}
-
-          <form onSubmit={handleGenerateInvoice} className="stack" style={{ gap: 16 }}>
-            <div>
-              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
-                Legal Entity (Billing Provider) *
-              </label>
-              <select
-                required
-                style={{ width: "100%", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
-                value={selectedEntityId}
-                onChange={(e) => setSelectedEntityId(e.target.value)}
-                disabled={entitiesLoading || !canManageBilling}
-              >
-                <option value="">
-                  {entitiesLoading ? "Loading legal entities..." : entities.length === 0 ? "No active legal entity configured" : "Select Legal Entity..."}
-                </option>
-                {entities.map((ent) => (
-                  <option key={ent.id} value={ent.id}>
-                    {ent.legal_name} (GSTIN: {ent.gstin})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
-                Trip IDs (Comma-separated) *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. 101, 102, 105"
-                style={{ width: "100%", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff", fontFamily: "monospace" }}
-                value={tripIdsInput}
-                onChange={(e) => setTripIdsInput(e.target.value)}
-              />
-            </div>
-
-            {!authLoading && !canManageBilling && (
-              <div style={{ color: "var(--danger)", fontSize: 13 }}>
-                Admin or accountant access is required for financial mutations.
+      {selectedInvoice && (
+        <div className="invoice-detail-overlay">
+          <section className="panel invoice-detail-panel">
+            <div className="invoice-detail-header">
+              <div>
+                <span className="eyebrow">{selectedInvoice.status}</span>
+                <h2>{selectedInvoice.invoice_number || `Draft #${selectedInvoice.id}`}</h2>
+                <p>{selectedInvoice.customer_name} · Due {selectedInvoice.due_date || "not set"}</p>
               </div>
-            )}
-            {!entitiesLoading && entities.length === 0 && (
-              <div style={{ color: "var(--danger)", fontSize: 13 }}>
-                Configure an active legal entity before generating invoices.
-              </div>
-            )}
-            <button
-              type="submit"
-              className="button"
-              disabled={generating || entitiesLoading || entities.length === 0 || !canManageBilling}
-              style={{ marginTop: 8 }}
-            >
-              {generating ? "Generating Invoice..." : "Compile & Issue Invoice Draft"}
-            </button>
-          </form>
+              <button className="button secondary" onClick={() => setSelectedInvoice(null)}><X size={15} /> Close</button>
+            </div>
+            <div className="invoice-preview-grid">
+              <div><span>Taxable</span><strong>₹{selectedInvoice.taxable_amount}</strong></div>
+              <div><span>CGST / SGST / IGST</span><strong>₹{selectedInvoice.cgst_amount} / ₹{selectedInvoice.sgst_amount} / ₹{selectedInvoice.igst_amount}</strong></div>
+              <div><span>Total</span><strong>₹{selectedInvoice.total_amount}</strong></div>
+              <div><span>Balance</span><strong>₹{selectedInvoice.balance_amount}</strong></div>
+            </div>
+            <div className="invoice-detail-lines">
+              <h3>Source lines</h3>
+              {selectedInvoice.lines.map((line) => (
+                <div key={line.id}>
+                  <span><strong>{line.description}</strong><small>{line.source_type} #{line.source_id} · {line.calculation_version}</small></span>
+                  <strong>₹{line.line_total}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="invoice-detail-lines">
+              <h3>Approval history</h3>
+              {(selectedInvoice.audit_events || []).map((event) => (
+                <div key={event.id}>
+                  <span><strong>{event.action}</strong><small>{event.actor_name} · {event.from_status} → {event.to_status}</small></span>
+                  <small>{event.reason}</small>
+                </div>
+              ))}
+              {!selectedInvoice.audit_events?.length && <p>No lifecycle actions recorded.</p>}
+            </div>
+            <div className="invoice-detail-actions">
+              <input value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} placeholder="Correction reason required to void" />
+              {selectedInvoice.status === "DRAFT" && <button className="button" disabled={activeMutationId === selectedInvoice.id} onClick={() => handleLifecycle(selectedInvoice.id, "Invoice submitted for review.", () => submitBillingInvoiceReview(selectedInvoice.id))}>Submit review</button>}
+              {selectedInvoice.status === "REVIEW" && <button className="button" disabled={activeMutationId === selectedInvoice.id} onClick={() => handleLifecycle(selectedInvoice.id, "Invoice approved.", () => approveBillingInvoice(selectedInvoice.id))}>Approve</button>}
+              {selectedInvoice.status === "APPROVED" && <button className="button" disabled={activeMutationId === selectedInvoice.id} onClick={() => handleLifecycle(selectedInvoice.id, "Invoice issued.", () => issueBillingInvoice(selectedInvoice.id))}>Issue</button>}
+              {["DRAFT", "REVIEW", "APPROVED", "ISSUED", "SENT"].includes(selectedInvoice.status) && <button className="button secondary" disabled={!correctionReason.trim() || activeMutationId === selectedInvoice.id} onClick={() => handleLifecycle(selectedInvoice.id, "Invoice voided for correction.", () => voidBillingInvoice(selectedInvoice.id, correctionReason))}>Void / correct</button>}
+            </div>
+          </section>
         </div>
       )}
 

@@ -1070,7 +1070,12 @@ class PortalInvoiceViewSet(viewsets.ViewSet):
         if not memberships.exists() and not request.user.is_superuser:
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
             
-        company_ids = list(memberships.values_list("company_id", flat=True)) if not request.user.is_superuser else None
+        authorized = memberships.filter(
+            role__in=[CorporateRole.ADMIN, CorporateRole.FINANCE]
+        )
+        if not request.user.is_superuser and not authorized.exists():
+            return Response({"detail": "Invoice permission required."}, status=status.HTTP_403_FORBIDDEN)
+        company_ids = list(authorized.values_list("company_id", flat=True)) if not request.user.is_superuser else None
         
         search = request.query_params.get("search")
         po_reference = request.query_params.get("po_reference")
@@ -1082,7 +1087,9 @@ class PortalInvoiceViewSet(viewsets.ViewSet):
         if company_ids:
             rent_companies = CorporateCustomer.objects.filter(id__in=company_ids)
             for rc in rent_companies:
-                fc = FleetCorporateCustomer.objects.filter(legal_name__iexact=rc.name).first()
+                fc = rc.fleet_customer or FleetCorporateCustomer.objects.filter(
+                    legal_name__iexact=rc.name
+                ).first()
                 if fc:
                     fleet_company_ids.append(fc.id)
 
@@ -1143,7 +1150,12 @@ class PortalInvoiceViewSet(viewsets.ViewSet):
         from django.http import HttpResponse
         
         memberships = request.user.active_memberships
-        company_ids = list(memberships.values_list("company_id", flat=True)) if not request.user.is_superuser else None
+        authorized = memberships.filter(
+            role__in=[CorporateRole.ADMIN, CorporateRole.FINANCE]
+        )
+        if not request.user.is_superuser and not authorized.exists():
+            return Response({"detail": "Invoice permission required."}, status=status.HTTP_403_FORBIDDEN)
+        company_ids = list(authorized.values_list("company_id", flat=True)) if not request.user.is_superuser else None
 
         if inv_type == "trip":
             try:
@@ -1151,13 +1163,28 @@ class PortalInvoiceViewSet(viewsets.ViewSet):
                 if company_ids:
                     from fleet.models import CorporateCustomer as FleetCorporateCustomer
                     rent_companies = CorporateCustomer.objects.filter(id__in=company_ids)
+                    fleet_ids = {
+                        rc.fleet_customer_id
+                        for rc in rent_companies
+                        if rc.fleet_customer_id
+                    }
                     rent_names = [rc.name.lower() for rc in rent_companies]
-                    if not inv.customer or inv.customer.legal_name.lower() not in rent_names:
+                    if not inv.customer or (
+                        inv.customer_id not in fleet_ids
+                        and inv.customer.legal_name.lower() not in rent_names
+                    ):
                         return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
                 
                 from billing.pdf_service import PDFService
-                html = PDFService.render_invoice_html(inv)
-                return HttpResponse(html, content_type="text/html")
+                from django.core.files.storage import default_storage
+                from django.http import FileResponse
+                document = PDFService.get_or_create_document(inv, request=request)
+                return FileResponse(
+                    default_storage.open(document.attachment.storage_key, "rb"),
+                    content_type="application/pdf",
+                    as_attachment=True,
+                    filename=document.attachment.original_name,
+                )
             except BillingInvoice.DoesNotExist:
                 return Response({"detail": "Invoice not found."}, status=status.HTTP_404_NOT_FOUND)
         else:
@@ -1245,14 +1272,19 @@ class PortalStatementsViewSet(viewsets.ViewSet):
         if not memberships.exists() and not request.user.is_superuser:
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
             
+        authorized = memberships.filter(
+            role__in=[CorporateRole.ADMIN, CorporateRole.FINANCE]
+        )
+        if not request.user.is_superuser and not authorized.exists():
+            return Response({"detail": "Statement permission required."}, status=status.HTTP_403_FORBIDDEN)
         company_id = request.query_params.get("company_id")
         if not company_id:
-            company_id = memberships.first().company_id if not request.user.is_superuser else None
+            company_id = authorized.first().company_id if not request.user.is_superuser else None
             
         if not company_id:
             return Response({"detail": "company_id is required."}, status=status.HTTP_400_BAD_REQUEST)
             
-        if not request.user.is_superuser and not memberships.filter(company_id=company_id).exists():
+        if not request.user.is_superuser and not authorized.filter(company_id=company_id).exists():
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
             
         start_date_str = request.query_params.get("start_date")
@@ -1267,7 +1299,9 @@ class PortalStatementsViewSet(viewsets.ViewSet):
         rent_comp = CorporateCustomer.objects.filter(id=company_id).first()
         fleet_company_id = None
         if rent_comp:
-            fc = FleetCorporateCustomer.objects.filter(legal_name__iexact=rent_comp.name).first()
+            fc = rent_comp.fleet_customer or FleetCorporateCustomer.objects.filter(
+                legal_name__iexact=rent_comp.name
+            ).first()
             if fc:
                 fleet_company_id = fc.id
                 
@@ -1459,5 +1493,4 @@ def portal_health_metrics(request):
         "failed_notifications": failed_notifications,
         "total_bookings": total_bookings
     })
-
 

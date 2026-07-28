@@ -1,7 +1,110 @@
-from .models import Invoice, InvoiceStatus
+import hashlib
+
+from django.core.files.base import ContentFile
+
+from media_store.models import UploadedAsset
+from media_store.storage import upload_asset
+
+from .models import Invoice, InvoiceDocument, InvoiceStatus
 
 
 class PDFService:
+    GENERATION_VERSION = "invoice-pdf-v1"
+
+    @staticmethod
+    def render_invoice_pdf(invoice: Invoice) -> bytes:
+        """Create a deterministic, dependency-free PDF for durable storage."""
+        heading = (
+            "DRAFT PREVIEW - NOT AN INVOICE"
+            if invoice.status in {InvoiceStatus.DRAFT, InvoiceStatus.REVIEW}
+            else "TAX INVOICE"
+        )
+        rows = [
+            heading,
+            f"Invoice: {invoice.invoice_number or f'DRAFT-{invoice.id}'}",
+            f"Supplier: {invoice.legal_entity.legal_name}",
+            f"Bill to: {invoice.billing_name_snapshot}",
+            f"Issue date: {invoice.issue_date}  Due date: {invoice.due_date}",
+            f"Taxable: INR {invoice.taxable_amount:.2f}",
+            f"CGST: INR {invoice.cgst_amount:.2f}  SGST: INR {invoice.sgst_amount:.2f}  IGST: INR {invoice.igst_amount:.2f}",
+            f"Total: INR {invoice.total_amount:.2f}",
+        ]
+        rows.extend(
+            f"{line.description}: INR {line.line_total:.2f}"
+            for line in invoice.lines.all()
+        )
+        escaped = [
+            row.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            for row in rows
+        ]
+        commands = ["BT", "/F1 11 Tf", "50 790 Td", "14 TL"]
+        for index, row in enumerate(escaped):
+            commands.append(f"({row}) Tj")
+            if index != len(escaped) - 1:
+                commands.append("T*")
+        commands.append("ET")
+        stream = "\n".join(commands).encode("latin-1", errors="replace")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        output = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for index, obj in enumerate(objects, 1):
+            offsets.append(len(output))
+            output.extend(f"{index} 0 obj\n".encode())
+            output.extend(obj)
+            output.extend(b"\nendobj\n")
+        xref = len(output)
+        output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+        output.extend(b"0000000000 65535 f \n")
+        for offset in offsets[1:]:
+            output.extend(f"{offset:010d} 00000 n \n".encode())
+        output.extend(
+            f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode()
+        )
+        return bytes(output)
+
+    @staticmethod
+    def get_or_create_document(invoice: Invoice, request=None) -> InvoiceDocument:
+        if invoice.status in {
+            InvoiceStatus.ISSUED,
+            InvoiceStatus.SENT,
+            InvoiceStatus.PARTIALLY_PAID,
+            InvoiceStatus.PAID,
+        }:
+            frozen = invoice.documents.filter(is_frozen=True).first()
+            if frozen:
+                return frozen
+        pdf_bytes = PDFService.render_invoice_pdf(invoice)
+        checksum = hashlib.sha256(pdf_bytes).hexdigest()
+        version = (invoice.documents.first().version + 1) if invoice.documents.exists() else 1
+        upload = ContentFile(pdf_bytes, name=f"invoice-{invoice.id}-v{version}.pdf")
+        upload.content_type = "application/pdf"
+        asset = upload_asset(
+            upload,
+            kind=UploadedAsset.KIND_INVOICE,
+            folder="invoices",
+            request=request,
+            metadata={
+                "invoice_id": invoice.id,
+                "version": version,
+                "generation_version": PDFService.GENERATION_VERSION,
+            },
+        )
+        return InvoiceDocument.objects.create(
+            invoice=invoice,
+            version=version,
+            generation_version=PDFService.GENERATION_VERSION,
+            status_snapshot=invoice.status,
+            checksum_sha256=checksum,
+            attachment=asset,
+            is_frozen=invoice.status not in {InvoiceStatus.DRAFT, InvoiceStatus.REVIEW},
+            generated_by=request.user if request and request.user.is_authenticated else None,
+        )
     @staticmethod
     def render_invoice_html(invoice: Invoice) -> str:
         is_draft = invoice.status == InvoiceStatus.DRAFT

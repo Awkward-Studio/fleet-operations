@@ -1,4 +1,4 @@
-import { request, requestText } from "./api";
+import { request, requestBlob, requestText } from "./api";
 
 export type BillingLegalEntity = {
   id: number;
@@ -17,6 +17,90 @@ export type BillingTripSource = {
   drop_city: string;
   status: string;
   pricing_amount_status: string;
+};
+
+export type BillableTrip = BillingTripSource & {
+  customer_name: string;
+  pickup_at: string;
+  quoted_total_amount?: string;
+  po_number?: string;
+  duty_type?: string;
+  pricing_snapshot?: {
+    package?: { name?: string; code?: string };
+    [key: string]: unknown;
+  };
+  billing_eligibility: {
+    eligible: boolean;
+    bill_to_key: string;
+    estimated_taxable_amount: string;
+    blockers: Array<{ code: string; message: string }>;
+  };
+  grouping_key: {
+    bill_to_key: string;
+    booking_channel: string;
+    currency: string;
+    po_number: string;
+    billing_cycle: string;
+  };
+  amount_summary: {
+    source: string;
+    taxable_amount: string;
+    tax_amount: string;
+    total_amount: string;
+  };
+  closeout_summary: {
+    id: number;
+    status: string;
+    actual_km: string;
+    actual_hours: string;
+    final_total_amount: string | null;
+    variance_amount: string | null;
+    variance_percent: string | null;
+    approved_extra_count: number;
+  } | null;
+  bill_to_snapshot: {
+    type: string;
+    key: string;
+    name: string;
+    address: string;
+    gstin: string;
+    email: string;
+    phone: string;
+  };
+};
+
+export type BillableTripPage = {
+  count: number;
+  page: number;
+  page_size: number;
+  next_page: number | null;
+  previous_page: number | null;
+  summary: {
+    eligible_trip_count: number;
+    estimated_taxable_amount: string;
+    estimated_tax_amount: string;
+    estimated_total_amount: string;
+  };
+  results: BillableTrip[];
+};
+
+export type InvoiceGroupingPreview = {
+  groups: Array<{
+    grouping_key: BillableTrip["grouping_key"];
+    bill_to_key: string;
+    bill_to_name: string;
+    bill_to_snapshot: Omit<BillableTrip["bill_to_snapshot"], "key">;
+    booking_channel: string;
+    currency: string;
+    po_number: string;
+    billing_cycle: string;
+    trip_ids: number[];
+    eligible: boolean;
+    blockers: Array<{ trip_id: number; code: string; message: string }>;
+    estimated_taxable_amount: string;
+    estimated_tax_amount: string;
+    estimated_total_amount: string;
+  }>;
 };
 
 export type BillingCloseout = {
@@ -130,6 +214,8 @@ export type BillingInvoice = {
   customer_name: string | null;
   status:
     | "DRAFT"
+    | "REVIEW"
+    | "APPROVED"
     | "ISSUED"
     | "SENT"
     | "PARTIALLY_PAID"
@@ -148,6 +234,19 @@ export type BillingInvoice = {
   due_date: string | null;
   lines: BillingInvoiceLine[];
   source_trips?: BillingTripSource[];
+  submitted_by?: number | null;
+  submitted_at?: string | null;
+  approved_by?: number | null;
+  approved_at?: string | null;
+  audit_events: Array<{
+    id: number;
+    action: string;
+    actor_name: string;
+    from_status: string;
+    to_status: string;
+    reason: string;
+    created_at: string;
+  }>;
 };
 
 type ApiList<T> = T[] | { results: T[] };
@@ -162,6 +261,26 @@ export async function listBillingInvoices(): Promise<BillingInvoice[]> {
 
 export async function listBillingEntities(): Promise<BillingLegalEntity[]> {
   return unwrapList(await request<ApiList<BillingLegalEntity>>("/billing/entities/"));
+}
+
+export function listBillableTrips(params: {
+  search?: string;
+  booking_type?: string;
+  page?: number;
+  page_size?: number;
+} = {}): Promise<BillableTripPage> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  });
+  return request<BillableTripPage>(`/billing/invoices/eligible_trips/?${query}`);
+}
+
+export function previewInvoiceGrouping(tripIds: number[]): Promise<InvoiceGroupingPreview> {
+  return request<InvoiceGroupingPreview>("/billing/invoices/grouping_preview/", {
+    method: "POST",
+    body: JSON.stringify({ trip_ids: tripIds }),
+  });
 }
 
 export async function listBillingCloseouts(status?: string): Promise<BillingCloseout[]> {
@@ -214,10 +333,30 @@ export function issueBillingInvoice(invoiceId: number): Promise<BillingInvoice> 
   });
 }
 
+function invoiceAction(
+  invoiceId: number,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<BillingInvoice> {
+  return request<BillingInvoice>(`/billing/invoices/${invoiceId}/${action}/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export const submitBillingInvoiceReview = (id: number) => invoiceAction(id, "submit_review");
+export const approveBillingInvoice = (id: number) => invoiceAction(id, "approve");
+export const voidBillingInvoice = (id: number, reason: string) =>
+  invoiceAction(id, "void", { reason });
+
 export function previewBillingInvoice(invoiceId: number): Promise<string> {
   return requestText(`/billing/invoices/${invoiceId}/html_preview/`);
 }
 
 export function exportBillingInvoiceTallyXml(invoiceId: number): Promise<string> {
   return requestText(`/billing/invoices/${invoiceId}/tally_xml/`);
+}
+
+export function downloadBillingInvoiceDocument(invoiceId: number): Promise<Blob> {
+  return requestBlob(`/billing/invoices/${invoiceId}/document/`);
 }

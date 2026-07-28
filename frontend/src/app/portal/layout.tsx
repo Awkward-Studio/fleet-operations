@@ -13,6 +13,7 @@ import {
   Loader2, 
   ChevronDown, 
   ArrowLeftRight 
+  , Receipt, FileSpreadsheet
 } from "lucide-react";
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
@@ -72,6 +73,8 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
     { href: "/portal", label: "Dashboard", icon: LayoutDashboard },
     { href: "/portal/booking-requests/new", label: "Bookings", icon: CalendarClock },
     { href: "/portal/guests", label: "Guests", icon: Users },
+    { href: "/portal/invoices", label: "Invoices", icon: Receipt },
+    { href: "/portal/statements", label: "Statements", icon: FileSpreadsheet },
   ];
 
   return (

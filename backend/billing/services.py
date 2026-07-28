@@ -119,6 +119,35 @@ class BillabilityService:
             estimated_taxable_amount=money(taxable),
         )
 
+    @staticmethod
+    def grouping_key(trip: Trip) -> dict:
+        return {
+            "bill_to_key": trip.bill_to_key,
+            "booking_channel": trip.booking_type,
+            "currency": trip.contract.currency if trip.contract_id else "INR",
+            "po_number": trip.po_number,
+            "billing_cycle": (trip.pricing_snapshot or {}).get(
+                "billing_cycle", "ON_DEMAND"
+            ),
+        }
+
+    @staticmethod
+    def amount_summary(trip: Trip) -> dict:
+        prefix = (
+            "final"
+            if trip.pricing_amount_status == PricingAmountStatus.FINALIZED
+            else "quoted"
+        )
+        taxable = getattr(trip, f"{prefix}_taxable_amount") or Decimal("0.00")
+        tax = getattr(trip, f"{prefix}_tax_amount") or Decimal("0.00")
+        total = getattr(trip, f"{prefix}_total_amount") or Decimal("0.00")
+        return {
+            "source": prefix.upper(),
+            "taxable_amount": money(taxable),
+            "tax_amount": money(tax),
+            "total_amount": money(total),
+        }
+
 
 class CloseoutService:
     @staticmethod

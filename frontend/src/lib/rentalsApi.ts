@@ -492,6 +492,44 @@ export function getBookingRequests() {
   return request<BookingRequest[]>("/portal/booking-requests/");
 }
 
+export type PortalInvoice = {
+  id: number;
+  invoice_number: string;
+  type: "trip" | "chauffeur";
+  type_display: string;
+  issue_date: string;
+  due_date: string;
+  po_number: string;
+  total_amount: number;
+  balance_amount: number;
+  status: string;
+};
+
+export type PortalStatement = {
+  company_id: number;
+  start_date: string;
+  end_date: string;
+  opening_balance: number;
+  closing_balance: number;
+  entries: Array<{
+    date: string;
+    type: string;
+    reference: string;
+    description: string;
+    debit: number;
+    credit: number;
+    balance: number;
+  }>;
+};
+
+export function getPortalInvoices() {
+  return request<PortalInvoice[]>("/portal/invoices/");
+}
+
+export function getPortalStatement(companyId: number) {
+  return request<PortalStatement>(`/portal/statements/?company_id=${companyId}`);
+}
+
 export function createBookingRequest(payload: Partial<BookingRequest> & { quote_signature?: string }) {
   return request<BookingRequest>("/portal/booking-requests/", {
     method: "POST",
@@ -523,4 +561,3 @@ export function amendBookingRequest(id: number, payload: Partial<BookingRequest>
     body: JSON.stringify(payload),
   });
 }
-

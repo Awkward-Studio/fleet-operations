@@ -4,9 +4,10 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from .models import CloseoutAuditEvent, LegalEntity, TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus
+from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDeliveryAttempt, LegalEntity, TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus
 from .serializers import BillableTripSerializer, LegalEntitySerializer, TripCloseoutSerializer, TripChargeSerializer, InvoiceSerializer
 from .services import BillabilityService, CloseoutService, InvoiceService
 from .reports import CloseoutReconciliationReport
@@ -198,9 +199,106 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
-    queryset = Invoice.objects.select_related("legal_entity", "customer").prefetch_related("lines").all()
+    queryset = Invoice.objects.select_related("legal_entity", "customer").prefetch_related("lines", "audit_events", "documents__delivery_attempts").all()
     serializer_class = InvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def _commercial_or_403(self, request):
+        permission = IsCommercialAdmin()
+        if not permission.has_permission(request, self):
+            self.permission_denied(
+                request, message="Commercial or accounting permission is required."
+            )
+
+    @staticmethod
+    def _audit(invoice, action, actor, previous, reason=""):
+        InvoiceAuditEvent.objects.create(
+            invoice=invoice,
+            action=action,
+            actor=actor,
+            from_status=previous,
+            to_status=invoice.status,
+            reason=reason,
+            snapshot={
+                "invoice_number": invoice.invoice_number,
+                "total_amount": str(invoice.total_amount),
+                "balance_amount": str(invoice.balance_amount),
+            },
+        )
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def submit_review(self, request, pk=None):
+        self._commercial_or_403(request)
+        invoice = self.get_object()
+        if invoice.status != InvoiceStatus.DRAFT:
+            return Response(
+                {"detail": "Only draft invoices can be submitted for review."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        previous = invoice.status
+        invoice.status = InvoiceStatus.REVIEW
+        invoice.submitted_by = request.user
+        invoice.submitted_at = timezone.now()
+        invoice.save(update_fields=["status", "submitted_by", "submitted_at", "updated_at"])
+        self._audit(invoice, "SUBMIT_REVIEW", request.user, previous)
+        return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def approve(self, request, pk=None):
+        self._commercial_or_403(request)
+        invoice = self.get_object()
+        if invoice.status != InvoiceStatus.REVIEW:
+            return Response(
+                {"detail": "Only invoices in review can be approved."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if invoice.submitted_by_id == request.user.id:
+            return Response(
+                {"detail": "The submitter cannot approve their own invoice."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        previous = invoice.status
+        invoice.status = InvoiceStatus.APPROVED
+        invoice.approved_by = request.user
+        invoice.approved_at = timezone.now()
+        invoice.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+        self._audit(invoice, "APPROVE", request.user, previous)
+        return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def void(self, request, pk=None):
+        self._commercial_or_403(request)
+        invoice = self.get_object()
+        reason = str(request.data.get("reason", "")).strip()
+        if not reason:
+            return Response(
+                {"reason": "A correction reason is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if invoice.status not in {
+            InvoiceStatus.DRAFT,
+            InvoiceStatus.REVIEW,
+            InvoiceStatus.APPROVED,
+            InvoiceStatus.ISSUED,
+            InvoiceStatus.SENT,
+        }:
+            return Response(
+                {"detail": "This invoice cannot be voided in its current state."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if invoice.paid_amount:
+            return Response(
+                {"detail": "Paid invoices require a credit-note correction."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        previous = invoice.status
+        invoice.status = InvoiceStatus.VOID
+        invoice.save(update_fields=["status", "updated_at"])
+        self._audit(invoice, "VOID", request.user, previous, reason)
+        return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
 
     @action(detail=False, methods=["get"])
     def eligible_trips(self, request):
@@ -218,6 +316,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(pickup_at__date__lte=request.query_params["date_to"])
         if request.query_params.get("po_number") is not None:
             queryset = queryset.filter(po_number=request.query_params["po_number"])
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(customer_name__icontains=search)
+                | Q(customer__display_name__icontains=search)
+                | Q(pickup_city__icontains=search)
+                | Q(drop_city__icontains=search)
+                | Q(po_number__icontains=search)
+                | Q(bill_to_name_snapshot__icontains=search)
+            )
 
         blocker_code = request.query_params.get("blocker")
         trips = list(queryset.order_by("-pickup_at"))
@@ -235,7 +343,58 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 trip for trip in trips
                 if BillabilityService.evaluate(trip).eligible
             ]
-        return Response(BillableTripSerializer(trips, many=True).data)
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+            page_size = min(
+                100, max(1, int(request.query_params.get("page_size", 25)))
+            )
+        except ValueError:
+            return Response(
+                {"detail": "page and page_size must be positive integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        count = len(trips)
+        start = (page - 1) * page_size
+        selected = trips[start : start + page_size]
+        summary = {
+            "eligible_trip_count": count,
+            "estimated_taxable_amount": str(
+                sum(
+                    (
+                        BillabilityService.evaluate(trip).estimated_taxable_amount
+                        for trip in trips
+                    ),
+                    Decimal("0.00"),
+                )
+            ),
+            "estimated_tax_amount": str(
+                sum(
+                    (
+                        BillabilityService.amount_summary(trip)["tax_amount"]
+                        for trip in trips
+                    ),
+                    Decimal("0.00"),
+                )
+            ),
+            "estimated_total_amount": str(
+                sum(
+                    (
+                        BillabilityService.amount_summary(trip)["total_amount"]
+                        for trip in trips
+                    ),
+                    Decimal("0.00"),
+                )
+            ),
+        }
+        return Response({
+            "count": count,
+            "page": page,
+            "page_size": page_size,
+            "next_page": page + 1 if start + page_size < count else None,
+            "previous_page": page - 1 if page > 1 else None,
+            "summary": summary,
+            "results": BillableTripSerializer(selected, many=True).data,
+        })
 
     @action(detail=False, methods=["post"])
     def grouping_preview(self, request):
@@ -254,27 +413,36 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         groups = {}
         for trip in trips:
             result = BillabilityService.evaluate(trip)
-            key = (
-                trip.bill_to_key,
-                trip.booking_type,
-                trip.contract.currency if trip.contract_id else "INR",
-                trip.po_number,
-                (trip.pricing_snapshot or {}).get("billing_cycle", "ON_DEMAND"),
-            )
+            grouping_key = BillabilityService.grouping_key(trip)
+            key = tuple(grouping_key.values())
             group = groups.setdefault(key, {
-                "bill_to_key": trip.bill_to_key,
+                "grouping_key": grouping_key,
+                "bill_to_key": grouping_key["bill_to_key"],
                 "bill_to_name": trip.bill_to_name_snapshot,
-                "booking_channel": trip.booking_type,
-                "currency": key[2],
-                "po_number": trip.po_number,
-                "billing_cycle": key[4],
+                "bill_to_snapshot": {
+                    "type": trip.bill_to_type,
+                    "name": trip.bill_to_name_snapshot,
+                    "address": trip.bill_to_address_snapshot,
+                    "gstin": trip.bill_to_gstin_snapshot,
+                    "email": trip.bill_to_email_snapshot,
+                    "phone": trip.bill_to_phone_snapshot,
+                },
+                "booking_channel": grouping_key["booking_channel"],
+                "currency": grouping_key["currency"],
+                "po_number": grouping_key["po_number"],
+                "billing_cycle": grouping_key["billing_cycle"],
                 "trip_ids": [],
                 "eligible": True,
                 "blockers": [],
                 "estimated_taxable_amount": Decimal("0.00"),
+                "estimated_tax_amount": Decimal("0.00"),
+                "estimated_total_amount": Decimal("0.00"),
             })
             group["trip_ids"].append(trip.id)
-            group["estimated_taxable_amount"] += result.estimated_taxable_amount
+            amounts = BillabilityService.amount_summary(trip)
+            group["estimated_taxable_amount"] += amounts["taxable_amount"]
+            group["estimated_tax_amount"] += amounts["tax_amount"]
+            group["estimated_total_amount"] += amounts["total_amount"]
             if not result.eligible:
                 group["eligible"] = False
                 group["blockers"].extend(
@@ -284,7 +452,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         payload = []
         for group in groups.values():
-            group["estimated_taxable_amount"] = str(group["estimated_taxable_amount"])
+            for field in (
+                "estimated_taxable_amount",
+                "estimated_tax_amount",
+                "estimated_total_amount",
+            ):
+                group[field] = str(group[field])
             payload.append(group)
         return Response({"groups": payload})
 
@@ -307,10 +480,20 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def issue(self, request, pk=None):
+        self._commercial_or_403(request)
         invoice = self.get_object()
+        if invoice.status != InvoiceStatus.APPROVED:
+            return Response(
+                {"detail": "Invoice must be independently approved before issue."},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
+            previous = invoice.status
             issued = InvoiceService.issue_invoice(invoice, created_by=request.user)
-            return Response(InvoiceSerializer(issued).data)
+            self._audit(issued, "ISSUE", request.user, previous)
+            return Response(
+                InvoiceSerializer(self.get_queryset().get(pk=issued.pk)).data
+            )
         except ValidationError as ve:
             return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -321,6 +504,76 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice = self.get_object()
         html = PDFService.render_invoice_html(invoice)
         return HttpResponse(html, content_type="text/html")
+
+    @action(detail=True, methods=["get"])
+    def document(self, request, pk=None):
+        from django.core.files.storage import default_storage
+        from django.http import FileResponse
+        from .pdf_service import PDFService
+
+        invoice = self.get_object()
+        document = PDFService.get_or_create_document(invoice, request=request)
+        response = FileResponse(
+            default_storage.open(document.attachment.storage_key, "rb"),
+            content_type="application/pdf",
+            as_attachment=True,
+            filename=document.attachment.original_name,
+        )
+        response["ETag"] = document.checksum_sha256
+        response["X-Invoice-Document-Version"] = str(document.version)
+        return response
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def record_delivery(self, request, pk=None):
+        self._commercial_or_403(request)
+        from .pdf_service import PDFService
+
+        invoice = self.get_object()
+        if invoice.status not in {
+            InvoiceStatus.ISSUED,
+            InvoiceStatus.SENT,
+            InvoiceStatus.PARTIALLY_PAID,
+            InvoiceStatus.PAID,
+        }:
+            return Response(
+                {"detail": "Only issued invoices can be delivered."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        recipients = request.data.get("recipients") or []
+        if not isinstance(recipients, list) or not recipients:
+            return Response(
+                {"recipients": "At least one recipient is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        outcome = str(request.data.get("status", "SENT")).upper()
+        if outcome not in {"SENT", "FAILED"}:
+            return Response(
+                {"status": "Delivery status must be SENT or FAILED."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        document = PDFService.get_or_create_document(invoice, request=request)
+        attempt = InvoiceDeliveryAttempt.objects.create(
+            document=document,
+            recipients=recipients,
+            status=outcome,
+            failure_message=str(request.data.get("failure_message", "")),
+            attempted_by=request.user,
+        )
+        previous = invoice.status
+        if outcome == "SENT" and invoice.status == InvoiceStatus.ISSUED:
+            invoice.status = InvoiceStatus.SENT
+            invoice.save(update_fields=["status", "updated_at"])
+        self._audit(
+            invoice,
+            "DELIVERY_SENT" if outcome == "SENT" else "DELIVERY_FAILED",
+            request.user,
+            previous,
+            attempt.failure_message,
+        )
+        return Response(
+            InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data
+        )
 
     @action(detail=True, methods=["get"])
     def tally_xml(self, request, pk=None):

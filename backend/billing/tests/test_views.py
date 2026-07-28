@@ -16,6 +16,12 @@ class BillingAPITests(APITestCase):
             role="accountant",
         )
         self.client.force_authenticate(user=self.user)
+        self.reviewer = User.objects.create_user(
+            username="billing_reviewer",
+            email="billing-reviewer@indexfleet.com",
+            password="password123",
+            role="accountant",
+        )
 
         self.entity = LegalEntity.objects.create(
             legal_name="Awkward Fleet Operations Pvt Ltd",
@@ -100,7 +106,9 @@ class BillingAPITests(APITestCase):
             format="json",
         )
         inv_id = draft_res.data["id"]
-
+        self.client.post(f"/api/billing/invoices/{inv_id}/submit_review/")
+        self.client.force_authenticate(user=self.reviewer)
+        self.client.post(f"/api/billing/invoices/{inv_id}/approve/")
         issue_res = self.client.post(f"/api/billing/invoices/{inv_id}/issue/")
         self.assertEqual(issue_res.status_code, status.HTTP_200_OK)
         self.assertEqual(issue_res.data["status"], "ISSUED")
@@ -129,6 +137,11 @@ class BillingAPITests(APITestCase):
         self.assertEqual(draft_preview.status_code, status.HTTP_200_OK)
         self.assertContains(draft_preview, "DRAFT")
 
+        self.client.post(
+            f"/api/billing/invoices/{invoice_id}/submit_review/"
+        )
+        self.client.force_authenticate(user=self.reviewer)
+        self.client.post(f"/api/billing/invoices/{invoice_id}/approve/")
         issue_res = self.client.post(
             f"/api/billing/invoices/{invoice_id}/issue/"
         )
@@ -172,8 +185,19 @@ class BillingAPITests(APITestCase):
             "/api/billing/invoices/eligible_trips/?booking_type=CORPORATE"
         )
         self.assertEqual(eligible_res.status_code, status.HTTP_200_OK)
-        self.assertEqual([item["id"] for item in eligible_res.data], [self.trip.id])
-        self.assertTrue(eligible_res.data[0]["billing_eligibility"]["eligible"])
+        self.assertEqual(
+            [item["id"] for item in eligible_res.data["results"]],
+            [self.trip.id],
+        )
+        queued = eligible_res.data["results"][0]
+        self.assertTrue(queued["billing_eligibility"]["eligible"])
+        self.assertEqual(
+            queued["grouping_key"]["bill_to_key"],
+            f"CORPORATE:{self.customer.id}",
+        )
+        self.assertEqual(queued["amount_summary"]["total_amount"], "2520.00")
+        self.assertEqual(queued["closeout_summary"]["id"], self.closeout.id)
+        self.assertEqual(eligible_res.data["summary"]["estimated_total_amount"], "2520.00")
 
         preview_res = self.client.post(
             "/api/billing/invoices/grouping_preview/",
@@ -199,14 +223,109 @@ class BillingAPITests(APITestCase):
         self.trip.save(update_fields=["status"])
 
         default_res = self.client.get("/api/billing/invoices/eligible_trips/")
-        self.assertNotIn(self.trip.id, [item["id"] for item in default_res.data])
+        self.assertNotIn(
+            self.trip.id,
+            [item["id"] for item in default_res.data["results"]],
+        )
 
         blocked_res = self.client.get(
             "/api/billing/invoices/eligible_trips/?blocker=STATUS_NOT_COMPLETED"
         )
-        self.assertEqual([item["id"] for item in blocked_res.data], [self.trip.id])
+        self.assertEqual(
+            [item["id"] for item in blocked_res.data["results"]],
+            [self.trip.id],
+        )
         blocker_codes = {
             item["code"]
-            for item in blocked_res.data[0]["billing_eligibility"]["blockers"]
+            for item in blocked_res.data["results"][0]["billing_eligibility"]["blockers"]
         }
         self.assertIn("STATUS_NOT_COMPLETED", blocker_codes)
+
+    def test_invoice_review_requires_independent_approval_and_audits_issue(self):
+        draft = self.client.post(
+            "/api/billing/invoices/generate_draft/",
+            {"legal_entity_id": self.entity.id, "trip_ids": [self.trip.id]},
+            format="json",
+        )
+        invoice_id = draft.data["id"]
+        submitted = self.client.post(
+            f"/api/billing/invoices/{invoice_id}/submit_review/"
+        )
+        self.assertEqual(submitted.data["status"], InvoiceStatus.REVIEW)
+        self.assertEqual(
+            self.client.post(
+                f"/api/billing/invoices/{invoice_id}/approve/"
+            ).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.client.force_authenticate(user=self.reviewer)
+        approved = self.client.post(
+            f"/api/billing/invoices/{invoice_id}/approve/"
+        )
+        self.assertEqual(approved.data["status"], InvoiceStatus.APPROVED)
+        issued = self.client.post(f"/api/billing/invoices/{invoice_id}/issue/")
+        self.assertEqual(issued.data["status"], InvoiceStatus.ISSUED)
+        self.assertEqual(
+            [event["action"] for event in issued.data["audit_events"]],
+            ["SUBMIT_REVIEW", "APPROVE", "ISSUE"],
+        )
+        self.assertEqual(issued.data["source_trips"][0]["trip_id"], self.trip.id)
+        self.assertEqual(
+            issued.data["journal_summary"]["debit_total"],
+            issued.data["journal_summary"]["credit_total"],
+        )
+        trip_trace = self.client.get(f"/api/trips/{self.trip.id}/").data[
+            "financial_trace"
+        ]
+        self.assertEqual(trip_trace["invoice"]["id"], invoice_id)
+        self.assertIsNotNone(trip_trace["journal"])
+        first_document = self.client.get(
+            f"/api/billing/invoices/{invoice_id}/document/"
+        )
+        second_document = self.client.get(
+            f"/api/billing/invoices/{invoice_id}/document/"
+        )
+        self.assertEqual(first_document.status_code, status.HTTP_200_OK)
+        self.assertEqual(first_document["Content-Type"], "application/pdf")
+        self.assertEqual(first_document["ETag"], second_document["ETag"])
+        self.assertTrue(b"".join(first_document.streaming_content).startswith(b"%PDF-1.4"))
+
+        delivery = self.client.post(
+            f"/api/billing/invoices/{invoice_id}/record_delivery/",
+            {"recipients": ["finance@acme.example"], "status": "SENT"},
+            format="json",
+        )
+        self.assertEqual(delivery.data["status"], InvoiceStatus.SENT)
+        self.assertEqual(
+            delivery.data["documents"][0]["delivery_attempts"][0]["recipients"],
+            ["finance@acme.example"],
+        )
+
+    def test_void_requires_reason_and_paid_invoice_routes_to_credit(self):
+        draft = self.client.post(
+            "/api/billing/invoices/generate_draft/",
+            {"legal_entity_id": self.entity.id, "trip_ids": [self.trip.id]},
+            format="json",
+        )
+        invoice_id = draft.data["id"]
+        self.assertEqual(
+            self.client.post(f"/api/billing/invoices/{invoice_id}/void/").status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        voided = self.client.post(
+            f"/api/billing/invoices/{invoice_id}/void/",
+            {"reason": "Wrong purchase order"},
+            format="json",
+        )
+        self.assertEqual(voided.data["status"], InvoiceStatus.VOID)
+
+    def test_eligible_queue_supports_server_search_and_pagination(self):
+        response = self.client.get(
+            "/api/billing/invoices/eligible_trips/",
+            {"search": "ACME", "page": 1, "page_size": 1},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["page_size"], 1)
+        self.assertIsNone(response.data["next_page"])
+        self.assertEqual(response.data["results"][0]["id"], self.trip.id)

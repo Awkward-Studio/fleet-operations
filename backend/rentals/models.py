@@ -24,6 +24,13 @@ class PackageType(models.TextChoices):
 
 
 class CorporateCustomer(models.Model):
+    fleet_customer = models.OneToOneField(
+        "fleet.CorporateCustomer",
+        related_name="rental_portal_customer",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
     name = models.CharField(max_length=120)
     gst_number = models.CharField(max_length=30, blank=True)
     pan_number = models.CharField(max_length=30, blank=True)
@@ -387,4 +394,3 @@ class PortalHandoffQueue(models.Model):
 
     def __str__(self):
         return f"Handoff failure for {self.booking_request.booking_number} ({self.status})"
-

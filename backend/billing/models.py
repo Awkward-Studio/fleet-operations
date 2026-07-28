@@ -307,6 +307,22 @@ class Invoice(models.Model):
     balance_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL)
+    submitted_by = models.ForeignKey(
+        "accounts.User",
+        related_name="submitted_invoices",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        related_name="approved_invoices",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -329,6 +345,69 @@ class Invoice(models.Model):
     def __str__(self):
         number = self.invoice_number or f"DRAFT-{self.id}"
         return f"Invoice {number} - ₹{self.total_amount} ({self.status})"
+
+
+class InvoiceAuditEvent(models.Model):
+    invoice = models.ForeignKey(
+        Invoice, related_name="audit_events", on_delete=models.CASCADE
+    )
+    action = models.CharField(max_length=40)
+    actor = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    from_status = models.CharField(max_length=30, blank=True)
+    to_status = models.CharField(max_length=30, blank=True)
+    reason = models.TextField(blank=True)
+    snapshot = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
+class InvoiceDocument(models.Model):
+    invoice = models.ForeignKey(
+        Invoice, related_name="documents", on_delete=models.CASCADE
+    )
+    version = models.PositiveIntegerField()
+    generation_version = models.CharField(max_length=40, default="invoice-pdf-v1")
+    status_snapshot = models.CharField(max_length=30)
+    checksum_sha256 = models.CharField(max_length=64)
+    attachment = models.OneToOneField(
+        "media_store.UploadedAsset",
+        related_name="invoice_document",
+        on_delete=models.PROTECT,
+    )
+    is_frozen = models.BooleanField(default=False)
+    generated_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    generated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["invoice", "version"], name="unique_invoice_document_version"
+            )
+        ]
+        ordering = ["-version"]
+
+
+class InvoiceDeliveryAttempt(models.Model):
+    document = models.ForeignKey(
+        InvoiceDocument, related_name="delivery_attempts", on_delete=models.CASCADE
+    )
+    recipients = models.JSONField(default=list)
+    channel = models.CharField(max_length=20, default="EMAIL")
+    status = models.CharField(max_length=20)
+    failure_message = models.TextField(blank=True)
+    attempted_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    attempted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-attempted_at"]
 
 
 class InvoiceLine(models.Model):

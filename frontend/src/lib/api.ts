@@ -424,6 +424,16 @@ export async function requestText(path: string, init?: RequestInit): Promise<str
   return body;
 }
 
+export async function requestBlob(path: string): Promise<Blob> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+  const response = await fetch(`${getApiBase()}/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.blob();
+}
+
 export function getSummary() {
   return request<Summary>("/dashboard/summary/");
 }

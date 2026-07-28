@@ -422,6 +422,7 @@ class TripSerializer(serializers.ModelSerializer):
     customer_details = CorporateCustomerSerializer(source="customer", read_only=True)
     checklist = serializers.SerializerMethodField()
     otp_verified = serializers.SerializerMethodField()
+    financial_trace = serializers.SerializerMethodField()
     customer_id = serializers.PrimaryKeyRelatedField(
         queryset=CorporateCustomer.objects.all(),
         source="customer",
@@ -485,7 +486,63 @@ class TripSerializer(serializers.ModelSerializer):
             "distance_km",
             "checklist",
             "otp_verified",
+            "financial_trace",
         ]
+
+    def get_financial_trace(self, obj):
+        from billing.models import JournalEntry
+
+        closeout = getattr(obj, "closeout", None)
+        invoice_link = getattr(obj, "invoice_link", None)
+        invoice = invoice_link.invoice if invoice_link else None
+        journal = (
+            JournalEntry.objects.filter(
+                source_type="INVOICE", source_id=str(invoice.id)
+            ).first()
+            if invoice
+            else None
+        )
+        return {
+            "trip_id": obj.id,
+            "quote": {
+                "calculation_version": obj.calculation_version,
+                "pricing_amount_status": obj.pricing_amount_status,
+                "quoted_total_amount": (
+                    str(obj.quoted_total_amount)
+                    if obj.quoted_total_amount is not None
+                    else None
+                ),
+            },
+            "closeout": (
+                {
+                    "id": closeout.id,
+                    "status": closeout.status,
+                    "final_total_amount": (
+                        str(closeout.final_total_amount)
+                        if closeout.final_total_amount is not None
+                        else None
+                    ),
+                }
+                if closeout
+                else None
+            ),
+            "invoice": (
+                {
+                    "id": invoice.id,
+                    "number": invoice.invoice_number,
+                    "status": invoice.status,
+                    "total_amount": str(invoice.total_amount),
+                    "balance_amount": str(invoice.balance_amount),
+                }
+                if invoice
+                else None
+            ),
+            "journal": (
+                {"id": journal.id, "entry_number": journal.entry_number}
+                if journal
+                else None
+            ),
+        }
         read_only_fields = [
             "id",
             "customer_display_name_snapshot",

@@ -400,6 +400,8 @@ class BookingWorkflowTests(APITestCase):
             billing_email="acme@example.com",
             billing_phone="88888888"
         )
+        self.company.fleet_customer = company
+        self.company.save(update_fields=["fleet_customer"])
         
         entity = LegalEntity.objects.create(
             legal_name="Fleet Operations Ltd",
@@ -451,7 +453,17 @@ class BookingWorkflowTests(APITestCase):
             po_number="PO-999"
         )
         
-        self.client.force_authenticate(user=self.requester_user)
+        finance_user = User.objects.create_user(
+            username="finance",
+            email="finance@acme.com",
+            password="password123",
+        )
+        CorporateMembership.objects.create(
+            user=finance_user,
+            company=self.company,
+            role=CorporateRole.FINANCE,
+        )
+        self.client.force_authenticate(user=finance_user)
         
         url = "/api/rentals/portal/invoices/"
         response = self.client.get(url, format="json")
@@ -463,13 +475,16 @@ class BookingWorkflowTests(APITestCase):
         download_url = f"/api/rentals/portal/invoices/{inv1.id}/download/"
         response = self.client.get(download_url)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("text/html", response["Content-Type"])
-        self.assertIn("INV-2026-001", response.content.decode("utf-8"))
+        self.assertIn("application/pdf", response["Content-Type"])
+        self.assertTrue(b"".join(response.streaming_content).startswith(b"%PDF-1.4"))
         
         statements_url = "/api/rentals/portal/statements/"
         response = self.client.get(statements_url, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["closing_balance"], 5000.00)
+
+        self.client.force_authenticate(user=self.requester_user)
+        self.assertEqual(self.client.get(url).status_code, 403)
 
     def test_portal_audit_support_and_impersonate(self):
         from accounts.models import UserRole
@@ -579,5 +594,4 @@ class BookingWorkflowTests(APITestCase):
         amend_url = f"{self.booking_requests_url}{req1.id}/amend/"
         response = self.client.post(amend_url, {"passenger_name": "Hack"}, format="json")
         self.assertEqual(response.status_code, 404)
-
 

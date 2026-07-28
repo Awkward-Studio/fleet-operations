@@ -336,7 +336,7 @@ async function attemptTokenRefresh(): Promise<boolean> {
   return result;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -392,6 +392,49 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+  let response = await fetch(`${getApiBase()}/api${path}`, {
+    ...init,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
+    cache: "no-store",
+  });
+
+  if (response.status === 401) {
+    const refreshed = await attemptTokenRefresh();
+    if (refreshed && typeof window !== "undefined") {
+      response = await fetch(`${getApiBase()}/api${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+          ...init?.headers,
+        },
+        cache: "no-store",
+      });
+    }
+  }
+
+  const body = await response.text();
+  if (!response.ok) {
+    let message = body;
+    try {
+      const parsed = JSON.parse(body);
+      message =
+        parsed.detail ||
+        parsed.message ||
+        Object.values(parsed).flat().join(" ") ||
+        body;
+    } catch {
+      // Preserve non-JSON server error text.
+    }
+    throw new Error(message || `Request failed with status ${response.status}`);
+  }
+  return body;
 }
 
 export function getSummary() {

@@ -13,7 +13,7 @@ class BillingAPITests(APITestCase):
             username="billing_admin",
             email="billing@indexfleet.com",
             password="password123",
-            role="admin",
+            role="accountant",
         )
         self.client.force_authenticate(user=self.user)
 
@@ -98,3 +98,64 @@ class BillingAPITests(APITestCase):
         self.assertEqual(issue_res.status_code, status.HTTP_200_OK)
         self.assertEqual(issue_res.data["status"], "ISSUED")
         self.assertTrue(issue_res.data["invoice_number"].startswith("INV/"))
+
+    def test_authenticated_browser_billing_flow_uses_canonical_routes(self):
+        entities_res = self.client.get("/api/billing/entities/")
+        self.assertEqual(entities_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(entities_res.data[0]["id"], self.entity.id)
+
+        draft_res = self.client.post(
+            "/api/billing/invoices/generate_draft/",
+            {
+                "legal_entity_id": self.entity.id,
+                "trip_ids": [self.trip.id],
+            },
+            format="json",
+        )
+        self.assertEqual(draft_res.status_code, status.HTTP_201_CREATED)
+        invoice_id = draft_res.data["id"]
+        self.assertGreater(len(draft_res.data["lines"]), 0)
+
+        draft_preview = self.client.get(
+            f"/api/billing/invoices/{invoice_id}/html_preview/"
+        )
+        self.assertEqual(draft_preview.status_code, status.HTTP_200_OK)
+        self.assertContains(draft_preview, "DRAFT")
+
+        issue_res = self.client.post(
+            f"/api/billing/invoices/{invoice_id}/issue/"
+        )
+        self.assertEqual(issue_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(issue_res.data["status"], InvoiceStatus.ISSUED)
+
+        issued_preview = self.client.get(
+            f"/api/billing/invoices/{invoice_id}/html_preview/"
+        )
+        self.assertContains(issued_preview, issue_res.data["invoice_number"])
+
+        export_res = self.client.get(
+            f"/api/billing/invoices/{invoice_id}/tally_xml/"
+        )
+        self.assertEqual(export_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(export_res["Content-Type"], "application/xml")
+        self.assertContains(export_res, issue_res.data["invoice_number"])
+
+        self.assertEqual(
+            self.client.post(
+                "/api/billing/invoices/generate_from_trips/",
+                {"legal_entity_id": self.entity.id, "trip_ids": [self.trip.id]},
+                format="json",
+            ).status_code,
+            status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    def test_billing_routes_require_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        for path in (
+            "/api/billing/entities/",
+            "/api/billing/invoices/",
+            "/api/billing/closeouts/",
+        ):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

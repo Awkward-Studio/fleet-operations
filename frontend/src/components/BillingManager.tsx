@@ -26,6 +26,16 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import {
+  BillingInvoice,
+  BillingLegalEntity,
+  exportBillingInvoiceTallyXml,
+  generateInvoiceDraft,
+  issueBillingInvoice,
+  listBillingEntities,
+  listBillingInvoices,
+  previewBillingInvoice,
+} from "@/lib/billingApi";
+import {
   Table,
   TableHeader,
   TableBody,
@@ -34,48 +44,14 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-interface LegalEntity {
-  id: number;
-  legal_name: string;
-  gstin: string;
-}
-
-interface InvoiceLine {
-  id: number;
-  description: string;
-  sac_hsn_code: string;
-  quantity: number;
-  unit_rate: string;
-  taxable_value: string;
-  cgst_amount: string;
-  sgst_amount: string;
-  line_total: string;
-}
-
-interface Invoice {
-  id: number;
-  invoice_number: string | null;
-  legal_entity_name: string;
-  customer_name: string;
-  status: "DRAFT" | "ISSUED" | "SENT" | "PARTIALLY_PAID" | "PAID" | "VOID";
-  subtotal: string;
-  taxable_amount: string;
-  cgst_amount: string;
-  sgst_amount: string;
-  total_amount: string;
-  paid_amount: string;
-  balance_amount: string;
-  issue_date: string | null;
-  due_date: string | null;
-  lines: InvoiceLine[];
-}
-
 export function BillingManager() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<"invoices" | "generator">("invoices");
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [entities, setEntities] = useState<LegalEntity[]>([]);
+  const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
+  const [entities, setEntities] = useState<BillingLegalEntity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [entitiesLoading, setEntitiesLoading] = useState(true);
+  const [activeMutationId, setActiveMutationId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
@@ -91,6 +67,11 @@ export function BillingManager() {
   const [genError, setGenError] = useState<string | null>(null);
   const [genSuccess, setGenSuccess] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const canManageBilling =
+    !!user &&
+    (user.role === "admin" ||
+      user.role === "accountant" ||
+      user.permissions?.includes("superuser"));
 
   useEffect(() => {
     fetchInvoices();
@@ -99,65 +80,62 @@ export function BillingManager() {
 
   const fetchInvoices = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const res = await fetch("/api/billing/invoices/");
-      if (res.ok) {
-        const data = await res.json();
-        setInvoices(data.results || data);
-      }
+      setInvoices(await listBillingInvoices());
     } catch (e) {
-      setError("Failed to load billing invoices.");
+      setError(e instanceof Error ? e.message : "Failed to load billing invoices.");
     } finally {
       setLoading(false);
     }
   };
 
   const fetchEntities = async () => {
+    setEntitiesLoading(true);
     try {
-      const res = await fetch("/api/billing/legal-entities/");
-      if (res.ok) {
-        const data = await res.json();
-        setEntities(data.results || data);
-      }
+      setEntities(await listBillingEntities());
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to load legal entities.");
+    } finally {
+      setEntitiesLoading(false);
     }
   };
 
   const handlePreviewPdf = async (invoiceId: number, invNum: string) => {
     try {
-      const res = await fetch(`/api/billing/invoices/${invoiceId}/pdf/`);
-      if (res.ok) {
-        const html = await res.text();
-        setPreviewHtml(html);
-        setPreviewTitle(`Tax Invoice #${invNum || invoiceId}`);
-      } else {
-        alert("Failed to render PDF HTML");
-      }
+      const html = await previewBillingInvoice(invoiceId);
+      setPreviewHtml(html);
+      setPreviewTitle(`Tax Invoice #${invNum || invoiceId}`);
     } catch (e) {
-      console.error(e);
+      setError(e instanceof Error ? e.message : "Failed to render invoice preview.");
     }
   };
 
-  const handleExportTally = (invoiceId: number, invNum: string) => {
-    window.open(`/api/billing/invoices/${invoiceId}/export_tally_xml/`, "_blank");
+  const handleExportTally = async (invoiceId: number, invNum: string) => {
+    try {
+      const xml = await exportBillingInvoiceTallyXml(invoiceId);
+      const url = URL.createObjectURL(new Blob([xml], { type: "application/xml" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${invNum || `invoice-${invoiceId}`}.xml`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to export Tally XML.");
+    }
   };
 
   const handleIssueInvoice = async (invoiceId: number) => {
+    setActiveMutationId(invoiceId);
+    setError(null);
     try {
-      const res = await fetch(`/api/billing/invoices/${invoiceId}/issue/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (res.ok) {
-        setSuccess("Invoice issued successfully!");
-        fetchInvoices();
-      } else {
-        const errData = await res.json();
-        setError(errData.detail || "Failed to issue invoice");
-      }
-    } catch (e: any) {
-      setError(e.message || "Failed to issue invoice");
+      await issueBillingInvoice(invoiceId);
+      setSuccess("Invoice issued successfully!");
+      await fetchInvoices();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to issue invoice");
+    } finally {
+      setActiveMutationId(null);
     }
   };
 
@@ -167,6 +145,10 @@ export function BillingManager() {
     setGenSuccess(null);
     if (!selectedEntityId) {
       setGenError("Please select a Legal Entity.");
+      return;
+    }
+    if (!canManageBilling) {
+      setGenError("Your account does not have permission to create invoices.");
       return;
     }
     const rawIds = tripIdsInput
@@ -183,26 +165,15 @@ export function BillingManager() {
 
     setGenerating(true);
     try {
-      const res = await fetch("/api/billing/invoices/generate_from_trips/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          legal_entity_id: parseInt(selectedEntityId, 10),
-          trip_ids: rawIds,
-        }),
+      const data = await generateInvoiceDraft({
+        legal_entity_id: parseInt(selectedEntityId, 10),
+        trip_ids: rawIds,
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        setGenSuccess(`Invoice draft ${data.invoice_number || "#" + data.id} created with ${data.lines?.length || 0} line items.`);
-        setTripIdsInput("");
-        fetchInvoices();
-      } else {
-        const data = await res.json();
-        setGenError(data.detail || data.error || "Invoice generation failed.");
-      }
-    } catch (err: any) {
-      setGenError(err.message || "Network error generating invoice.");
+      setGenSuccess(`Invoice draft ${data.invoice_number || "#" + data.id} created with ${data.lines?.length || 0} line items.`);
+      setTripIdsInput("");
+      await fetchInvoices();
+    } catch (err) {
+      setGenError(err instanceof Error ? err.message : "Network error generating invoice.");
     } finally {
       setGenerating(false);
     }
@@ -213,7 +184,7 @@ export function BillingManager() {
     const matchesSearch =
       !search.trim() ||
       (inv.invoice_number && inv.invoice_number.toLowerCase().includes(search.toLowerCase())) ||
-      inv.customer_name.toLowerCase().includes(search.toLowerCase());
+      (inv.customer_name || "").toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === "ALL" || inv.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -280,7 +251,10 @@ export function BillingManager() {
       {error && (
         <div style={{ padding: "12px 16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: 8, color: "var(--danger)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>{error}</span>
-          <button onClick={() => setError(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="button secondary" onClick={() => { fetchInvoices(); fetchEntities(); }} style={{ padding: "4px 8px" }}>Retry</button>
+            <button onClick={() => setError(null)} style={{ background: "none", border: 0, color: "inherit", cursor: "pointer" }}>✕</button>
+          </div>
         </div>
       )}
       {success && (
@@ -302,6 +276,8 @@ export function BillingManager() {
           <button
             className={`button ${activeTab === "generator" ? "" : "secondary"}`}
             onClick={() => setActiveTab("generator")}
+            disabled={authLoading || !canManageBilling}
+            title={!canManageBilling ? "Admin or accountant access is required" : undefined}
           >
             <Plus size={16} /> Generate Invoice
           </button>
@@ -363,12 +339,17 @@ export function BillingManager() {
               ) : filteredInvoices.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
-                    No tax invoices found.
+                    {invoices.length === 0
+                      ? "No invoices have been created yet."
+                      : "No invoices match the current search and status filters."}
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredInvoices.map((inv) => {
-                  const gstSum = (parseFloat(inv.cgst_amount) || 0) + (parseFloat(inv.sgst_amount) || 0);
+                  const gstSum =
+                    (parseFloat(inv.cgst_amount) || 0) +
+                    (parseFloat(inv.sgst_amount) || 0) +
+                    (parseFloat(inv.igst_amount) || 0);
                   return (
                     <TableRow key={inv.id}>
                       <TableCell>
@@ -416,28 +397,32 @@ export function BillingManager() {
                           <button
                             className="button secondary"
                             style={{ padding: "6px 10px", fontSize: 12 }}
-                            title="Preview PDF Tax Invoice"
+                            title={inv.status === "DRAFT" ? "Preview draft invoice" : "Preview issued tax invoice"}
                             onClick={() => handlePreviewPdf(inv.id, inv.invoice_number || "")}
                           >
-                            <Eye size={13} /> PDF
+                            <Eye size={13} /> {inv.status === "DRAFT" ? "Draft Preview" : "Invoice"}
                           </button>
 
-                          <button
-                            className="button secondary"
-                            style={{ padding: "6px 10px", fontSize: 12 }}
-                            title="Export Tally Prime XML"
-                            onClick={() => handleExportTally(inv.id, inv.invoice_number || "")}
-                          >
-                            <Download size={13} /> Tally
-                          </button>
+                          {inv.status !== "DRAFT" && (
+                            <button
+                              className="button secondary"
+                              style={{ padding: "6px 10px", fontSize: 12 }}
+                              title="Download issued invoice as Tally Prime XML"
+                              onClick={() => handleExportTally(inv.id, inv.invoice_number || "")}
+                            >
+                              <Download size={13} /> Tally
+                            </button>
+                          )}
 
                           {inv.status === "DRAFT" && (
                             <button
                               className="button"
                               style={{ padding: "6px 10px", fontSize: 12, background: "var(--ok)", color: "#000" }}
                               onClick={() => handleIssueInvoice(inv.id)}
+                              disabled={!canManageBilling || activeMutationId === inv.id}
+                              title={!canManageBilling ? "Admin or accountant access is required" : undefined}
                             >
-                              Issue
+                              {activeMutationId === inv.id ? "Issuing..." : "Issue"}
                             </button>
                           )}
                         </div>
@@ -481,8 +466,11 @@ export function BillingManager() {
                 style={{ width: "100%", padding: 12, borderRadius: 8, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
                 value={selectedEntityId}
                 onChange={(e) => setSelectedEntityId(e.target.value)}
+                disabled={entitiesLoading || !canManageBilling}
               >
-                <option value="">Select Legal Entity...</option>
+                <option value="">
+                  {entitiesLoading ? "Loading legal entities..." : entities.length === 0 ? "No active legal entity configured" : "Select Legal Entity..."}
+                </option>
                 {entities.map((ent) => (
                   <option key={ent.id} value={ent.id}>
                     {ent.legal_name} (GSTIN: {ent.gstin})
@@ -505,7 +493,22 @@ export function BillingManager() {
               />
             </div>
 
-            <button type="submit" className="button" disabled={generating} style={{ marginTop: 8 }}>
+            {!authLoading && !canManageBilling && (
+              <div style={{ color: "var(--danger)", fontSize: 13 }}>
+                Admin or accountant access is required for financial mutations.
+              </div>
+            )}
+            {!entitiesLoading && entities.length === 0 && (
+              <div style={{ color: "var(--danger)", fontSize: 13 }}>
+                Configure an active legal entity before generating invoices.
+              </div>
+            )}
+            <button
+              type="submit"
+              className="button"
+              disabled={generating || entitiesLoading || entities.length === 0 || !canManageBilling}
+              style={{ marginTop: 8 }}
+            >
               {generating ? "Generating Invoice..." : "Compile & Issue Invoice Draft"}
             </button>
           </form>

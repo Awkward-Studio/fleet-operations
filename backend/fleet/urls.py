@@ -11,6 +11,8 @@ from .views import (
     TripViewSet,
     VehicleViewSet,
     FuelTransactionViewSet,
+    RateBookViewSet,
+    RatePackageViewSet,
     availability,
     current_driver_trip,
     dashboard_summary,
@@ -27,6 +29,8 @@ router.register("contacts", CustomerContactViewSet, basename="contact")
 router.register("contracts", CorporateContractViewSet, basename="contract")
 router.register("rates", ContractRateViewSet, basename="rate")
 router.register("allowances", ContractAllowanceViewSet, basename="allowance")
+router.register("rate-books", RateBookViewSet, basename="rate-book")
+router.register("rate-packages", RatePackageViewSet, basename="rate-package")
 
 urlpatterns = [
     path("", include(router.urls)),

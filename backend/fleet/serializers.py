@@ -14,6 +14,8 @@ from .models import (
     DriverStatus,
     BillToType,
     PricingAmountStatus,
+    RateBook,
+    RatePackage,
     Trip,
     TripChecklist,
     TripLocationLog,
@@ -1096,3 +1098,17 @@ class FuelTransactionDetailSerializer(FuelTransactionSerializer):
             "receipt_asset_details",
             "odometer_asset_details",
         ]
+
+
+class RatePackageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RatePackage
+        fields = "__all__"
+
+
+class RateBookSerializer(serializers.ModelSerializer):
+    packages = RatePackageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = RateBook
+        fields = "__all__"

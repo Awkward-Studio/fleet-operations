@@ -23,6 +23,8 @@ from .models import (
     CustomerStatus,
     Driver,
     DriverStatus,
+    RateBook,
+    RatePackage,
     Trip,
     TripChecklist,
     TripLocationLog,
@@ -46,6 +48,8 @@ from .serializers import (
     CorporateCustomerSerializer,
     CustomerContactSerializer,
     DriverSerializer,
+    RateBookSerializer,
+    RatePackageSerializer,
     TripChecklistSerializer,
     TripChecklistSubmitSerializer,
     TripCompleteSerializer,
@@ -1074,3 +1078,25 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
         from .fuel_service import calculate_vehicle_mileage
         metrics = calculate_vehicle_mileage(vehicle)
         return Response(metrics)
+
+
+class RateBookViewSet(viewsets.ModelViewSet):
+    queryset = RateBook.objects.prefetch_related("packages").all()
+    serializer_class = RateBookSerializer
+    permission_classes = [IsCommercialAdminOrReadOnly]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        book_type = self.request.query_params.get("book_type")
+        status_param = self.request.query_params.get("status")
+        if book_type:
+            qs = qs.filter(book_type=book_type)
+        if status_param:
+            qs = qs.filter(status=status_param)
+        return qs
+
+
+class RatePackageViewSet(viewsets.ModelViewSet):
+    queryset = RatePackage.objects.all()
+    serializer_class = RatePackageSerializer
+    permission_classes = [IsCommercialAdminOrReadOnly]

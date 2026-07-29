@@ -20,14 +20,24 @@ import {
   FileCheck,
   Eye,
   X,
+  Grid,
+  Layers,
+  Settings2,
+  BookOpen,
+  Filter,
+  Tag,
 } from "lucide-react";
 import {
   CorporateContract,
   ContractRate,
   ContractAllowance,
   CorporateCustomer,
+  RateBook,
+  RatePackage,
   getContracts,
   getCustomers,
+  getRateBooks,
+  updateRatePackage,
   createContract,
   updateContract,
   activateContract,
@@ -58,6 +68,21 @@ export default function ContractManager() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Navigation Tab State
+  const [activeTab, setActiveTab] = useState<"contracts" | "matrix" | "default_books">("matrix");
+
+  // Rate Books State
+  const [rateBooks, setRateBooks] = useState<RateBook[]>([]);
+
+  // Master Rate Matrix Filters
+  const [matrixScopeFilter, setMatrixScopeFilter] = useState<string>("ALL");
+  const [matrixCategoryFilter, setMatrixCategoryFilter] = useState<string>("ALL");
+  const [matrixDutyFilter, setMatrixDutyFilter] = useState<string>("ALL");
+
+  // Rate Package Quick Edit State
+  const [editingRatePkg, setEditingRatePkg] = useState<RatePackage | null>(null);
+  const [savingRatePkg, setSavingRatePkg] = useState<boolean>(false);
 
   // Filters
   const [search, setSearch] = useState<string>("");
@@ -95,14 +120,16 @@ export default function ContractManager() {
       if (selectedCustomerFilter !== "ALL") params.customer = parseInt(selectedCustomerFilter);
       if (statusFilter !== "ALL") params.status = statusFilter;
 
-      const [contractList, customerList] = await Promise.all([
+      const [contractList, customerList, rateBookList] = await Promise.all([
         getContracts(params),
         getCustomers(),
+        getRateBooks(),
       ]);
       setContracts(contractList);
       setCustomers(customerList);
+      setRateBooks(rateBookList);
     } catch (err: any) {
-      setError(err.message || "Failed to load contracts.");
+      setError(err.message || "Failed to load contracts & rate matrix.");
     } finally {
       setLoading(false);
     }
@@ -254,6 +281,128 @@ export default function ContractManager() {
     }
   };
 
+  const handleSaveRatePkg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRatePkg || !editingRatePkg.id) return;
+    try {
+      setSavingRatePkg(true);
+      setError(null);
+      await updateRatePackage(editingRatePkg.id, {
+        base_rate: editingRatePkg.base_rate,
+        extra_km_rate: editingRatePkg.extra_km_rate,
+        extra_hour_rate: editingRatePkg.extra_hour_rate,
+        night_charge: editingRatePkg.night_charge,
+        waiting_rate_per_hour: editingRatePkg.waiting_rate_per_hour,
+        driver_allowance_per_day: editingRatePkg.driver_allowance_per_day,
+        cgst_rate: editingRatePkg.cgst_rate,
+        sgst_rate: editingRatePkg.sgst_rate,
+      });
+      setSuccess(`Updated rate package '${editingRatePkg.code}' successfully.`);
+      setEditingRatePkg(null);
+      fetchInitialData();
+    } catch (err: any) {
+      setError(err.message || "Failed to update rate package.");
+    } finally {
+      setSavingRatePkg(false);
+    }
+  };
+
+  const masterMatrixItems = React.useMemo(() => {
+    const list: Array<{
+      id: string;
+      code: string;
+      scope: string;
+      scopeType: "PUBLIC" | "CORPORATE" | "OTA";
+      name: string;
+      vehicleCategory: string;
+      dutyType: string;
+      baseRate: string | number;
+      includedHours: number;
+      includedKm: number;
+      extraKmRate: string | number;
+      extraHourRate: string | number;
+      nightAllowance: string | number;
+      waitingRate: string | number;
+      driverAllowance: string | number;
+      taxes: string;
+      status: string;
+      city: string;
+      rawPkg?: RatePackage;
+      contractId?: number;
+    }> = [];
+
+    // Rate Books (PUBLIC, OTA, etc.)
+    rateBooks.forEach((book) => {
+      book.packages?.forEach((pkg) => {
+        list.push({
+          id: `book-${book.id}-pkg-${pkg.id}`,
+          code: pkg.code,
+          scope: book.code,
+          scopeType: book.book_type === "OTA" ? "OTA" : "PUBLIC",
+          name: pkg.name || book.name,
+          vehicleCategory: pkg.vehicle_category,
+          dutyType: pkg.duty_type,
+          baseRate: pkg.base_rate,
+          includedHours: pkg.included_hours,
+          includedKm: pkg.included_km,
+          extraKmRate: pkg.extra_km_rate,
+          extraHourRate: pkg.extra_hour_rate,
+          nightAllowance: pkg.night_charge || "0.00",
+          waitingRate: pkg.waiting_rate_per_hour || "0.00",
+          driverAllowance: pkg.driver_allowance_per_day || "0.00",
+          taxes: `CGST ${pkg.cgst_rate || "2.5"}% + SGST ${pkg.sgst_rate || "2.5"}%`,
+          status: book.status,
+          city: pkg.city || "All Cities",
+          rawPkg: pkg,
+        });
+      });
+    });
+
+    // Corporate Contracts
+    contracts.forEach((contract) => {
+      contract.rates?.forEach((rate) => {
+        list.push({
+          id: `contract-${contract.id}-rate-${rate.id}`,
+          code: `CNT-#${contract.id}`,
+          scope: contract.customer_display_name || contract.title,
+          scopeType: "CORPORATE",
+          name: `${contract.title} (${contract.version_name})`,
+          vehicleCategory: rate.vehicle_category,
+          dutyType: rate.duty_type,
+          baseRate: rate.base_rate,
+          includedHours: rate.included_hours,
+          includedKm: rate.included_km,
+          extraKmRate: rate.extra_km_rate,
+          extraHourRate: rate.extra_hour_rate,
+          nightAllowance: "0.00",
+          waitingRate: "0.00",
+          driverAllowance: "0.00",
+          taxes: `CGST ${contract.cgst_rate || "2.5"}% + SGST ${contract.sgst_rate || "2.5"}%`,
+          status: contract.status,
+          city: rate.city || "All Cities",
+          contractId: contract.id,
+        });
+      });
+    });
+
+    return list.filter((item) => {
+      if (matrixScopeFilter !== "ALL" && item.scopeType !== matrixScopeFilter) return false;
+      if (matrixCategoryFilter !== "ALL" && item.vehicleCategory.toUpperCase() !== matrixCategoryFilter.toUpperCase()) return false;
+      if (matrixDutyFilter !== "ALL" && item.dutyType.toUpperCase() !== matrixDutyFilter.toUpperCase()) return false;
+      if (search.trim()) {
+        const query = search.toLowerCase();
+        return (
+          item.code.toLowerCase().includes(query) ||
+          item.scope.toLowerCase().includes(query) ||
+          item.name.toLowerCase().includes(query) ||
+          item.vehicleCategory.toLowerCase().includes(query) ||
+          item.dutyType.toLowerCase().includes(query)
+        );
+      }
+      return true;
+    });
+  }, [rateBooks, contracts, matrixScopeFilter, matrixCategoryFilter, matrixDutyFilter, search]);
+
   // Metrics
   const totalContracts = contracts.length;
   const activeContracts = contracts.filter((c) => c.status === "ACTIVE").length;
@@ -326,42 +475,235 @@ export default function ContractManager() {
         </div>
       )}
 
-      {/* Search & Filter Bar */}
-      <div className="search-filter-bar">
-        <div className="search-input-wrapper">
-          <Search size={16} className="search-icon" />
-          <input
-            type="text"
-            placeholder="Search by contract code, title, version..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <div className="filter-select-wrapper">
-          <select value={selectedCustomerFilter} onChange={(e) => setSelectedCustomerFilter(e.target.value)}>
-            <option value="ALL">All Customers</option>
-            {customers.map((cust) => (
-              <option key={cust.id} value={cust.id}>
-                {cust.display_name} ({cust.code})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="filter-select-wrapper">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="ALL">All Statuses</option>
-            <option value="ACTIVE">ACTIVE</option>
-            <option value="DRAFT">DRAFT</option>
-            <option value="EXPIRED">EXPIRED</option>
-            <option value="TERMINATED">TERMINATED</option>
-          </select>
-        </div>
-        {isCommercialAdmin && (
-          <button className="button" style={{ whiteSpace: "nowrap" }} onClick={openNewContractModal}>
-            <Plus size={16} /> Create Contract
-          </button>
-        )}
+      {/* Navigation Tabs */}
+      <div style={{ display: "flex", gap: 12, borderBottom: "1px solid var(--line)", paddingBottom: 12 }}>
+        <button
+          className={`button ${activeTab === "matrix" ? "primary" : "secondary"}`}
+          onClick={() => setActiveTab("matrix")}
+          style={{ gap: 8 }}
+        >
+          <Grid size={18} />
+          <span>Master Rate Matrix ({masterMatrixItems.length})</span>
+        </button>
+
+        <button
+          className={`button ${activeTab === "contracts" ? "primary" : "secondary"}`}
+          onClick={() => setActiveTab("contracts")}
+          style={{ gap: 8 }}
+        >
+          <FileText size={18} />
+          <span>Corporate Contracts ({contracts.length})</span>
+        </button>
+
+        <button
+          className={`button ${activeTab === "default_books" ? "primary" : "secondary"}`}
+          onClick={() => setActiveTab("default_books")}
+          style={{ gap: 8 }}
+        >
+          <BookOpen size={18} />
+          <span>Default Public & OTA Rate Books ({rateBooks.length})</span>
+        </button>
       </div>
+
+      {activeTab === "matrix" && (
+        <>
+          {/* Search & Filter Bar for Rate Matrix */}
+          <div className="search-filter-bar">
+            <div className="search-input-wrapper">
+              <Search size={16} className="search-icon" />
+              <input
+                type="text"
+                placeholder="Search rate matrix by category, duty, scope..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+
+            <div className="filter-select-wrapper">
+              <select value={matrixScopeFilter} onChange={(e) => setMatrixScopeFilter(e.target.value)}>
+                <option value="ALL">All Rate Scopes</option>
+                <option value="PUBLIC">Default Public Rates</option>
+                <option value="CORPORATE">Corporate Contracts</option>
+                <option value="OTA">OTA Channels</option>
+              </select>
+            </div>
+
+            <div className="filter-select-wrapper">
+              <select value={matrixCategoryFilter} onChange={(e) => setMatrixCategoryFilter(e.target.value)}>
+                <option value="ALL">All Categories</option>
+                <option value="SEDAN">Sedan</option>
+                <option value="SUV">SUV</option>
+                <option value="LUXURY">Luxury</option>
+                <option value="EXECUTIVE">Executive</option>
+                <option value="TRAVELLER">Tempo Traveller</option>
+              </select>
+            </div>
+
+            <div className="filter-select-wrapper">
+              <select value={matrixDutyFilter} onChange={(e) => setMatrixDutyFilter(e.target.value)}>
+                <option value="ALL">All Duty Types</option>
+                <option value="LOCAL_8H80K">Local 8H / 80K</option>
+                <option value="LOCAL_12H120K">Local 12H / 120K</option>
+                <option value="OUTSTATION">Outstation</option>
+                <option value="AIRPORT_TRANSFER">Airport Transfer</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Master Rate Matrix Table */}
+          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Pricing Scope / Catalogue</TableHead>
+                  <TableHead>Vehicle Category</TableHead>
+                  <TableHead>Duty Package</TableHead>
+                  <TableHead>Base Fare</TableHead>
+                  <TableHead>Included Limits</TableHead>
+                  <TableHead>Extra KM Rate</TableHead>
+                  <TableHead>Extra Hr Rate</TableHead>
+                  <TableHead>Allowances</TableHead>
+                  <TableHead>Taxes</TableHead>
+                  <TableHead style={{ textAlign: "right" }}>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                      Loading master rate matrix...
+                    </TableCell>
+                  </TableRow>
+                ) : masterMatrixItems.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--muted)" }}>
+                      No rate cards or contract packages match your filter criteria.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  masterMatrixItems.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        <div>
+                          <span
+                            className={`status ${
+                              item.scopeType === "PUBLIC" ? "ok" : item.scopeType === "CORPORATE" ? "info" : "warn"
+                            }`}
+                            style={{ fontSize: 11, padding: "2px 6px", marginRight: 6 }}
+                          >
+                            {item.scopeType}
+                          </span>
+                          <strong style={{ color: "#fff", fontSize: 13 }}>{item.scope}</strong>
+                          <div style={{ fontSize: 11, color: "var(--muted)" }}>{item.name}</div>
+                        </div>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontWeight: 700, color: "var(--accent)" }}>{item.vehicleCategory}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span className="status info" style={{ fontSize: 11 }}>{item.dutyType}</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <strong style={{ color: "#22c55e", fontSize: 14 }}>₹{item.baseRate}</strong>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 12, color: "#cbd5e1" }}>
+                          {item.includedHours}h / {item.includedKm}km
+                        </span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 13, color: "#e2e8f0" }}>₹{item.extraKmRate}/km</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 13, color: "#e2e8f0" }}>₹{item.extraHourRate}/hr</span>
+                      </TableCell>
+
+                      <TableCell>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                          Night: ₹{item.nightAllowance} | Wait: ₹{item.waitingRate}
+                        </div>
+                      </TableCell>
+
+                      <TableCell>
+                        <span style={{ fontSize: 11, color: "var(--muted)" }}>{item.taxes}</span>
+                      </TableCell>
+
+                      <TableCell style={{ textAlign: "right" }}>
+                        {item.rawPkg && isCommercialAdmin ? (
+                          <button
+                            className="button secondary sm"
+                            onClick={() => setEditingRatePkg(item.rawPkg!)}
+                          >
+                            <Pencil size={14} /> Edit Rate
+                          </button>
+                        ) : item.contractId ? (
+                          <button
+                            className="button secondary sm"
+                            onClick={() => {
+                              const c = contracts.find((c) => c.id === item.contractId);
+                              if (c) {
+                                setSelectedContract(c);
+                                setShowDetailDrawer(true);
+                              }
+                            }}
+                          >
+                            <Eye size={14} /> View Contract
+                          </button>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
+
+      {activeTab === "contracts" && (
+        <>
+          {/* Search & Filter Bar */}
+          <div className="search-filter-bar">
+            <div className="search-input-wrapper">
+              <Search size={16} className="search-icon" />
+              <input
+                type="text"
+                placeholder="Search by contract code, title, version..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="filter-select-wrapper">
+              <select value={selectedCustomerFilter} onChange={(e) => setSelectedCustomerFilter(e.target.value)}>
+                <option value="ALL">All Customers</option>
+                {customers.map((cust) => (
+                  <option key={cust.id} value={cust.id}>
+                    {cust.display_name} ({cust.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="filter-select-wrapper">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="ALL">All Statuses</option>
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="DRAFT">DRAFT</option>
+                <option value="EXPIRED">EXPIRED</option>
+                <option value="TERMINATED">TERMINATED</option>
+              </select>
+            </div>
+            {isCommercialAdmin && (
+              <button className="button" style={{ whiteSpace: "nowrap" }} onClick={openNewContractModal}>
+                <Plus size={16} /> Create Contract
+              </button>
+            )}
+          </div>
 
       {/* Shadcn UI Table for Corporate Contracts */}
       <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
@@ -508,6 +850,83 @@ export default function ContractManager() {
           </TableBody>
         </Table>
       </div>
+    </>
+  )}
+
+  {activeTab === "default_books" && (
+    <div className="stack" style={{ gap: 20 }}>
+      {rateBooks.length === 0 ? (
+        <div className="panel" style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>
+          No public or OTA rate books configured.
+        </div>
+      ) : (
+        rateBooks.map((book) => (
+          <div key={book.id} className="panel" style={{ padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <h3 style={{ margin: 0, color: "#fff", fontSize: 16 }}>{book.name} ({book.code})</h3>
+                  <span className={`status ${book.book_type === "PUBLIC" ? "ok" : "warn"}`} style={{ fontSize: 11 }}>
+                    {book.book_type}
+                  </span>
+                  <span className={`status ${book.status === "ACTIVE" ? "ok" : "danger"}`} style={{ fontSize: 11 }}>
+                    {book.status}
+                  </span>
+                </div>
+                <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 4 }}>
+                  Priority: {book.priority} • Effective: {book.effective_start} → {book.effective_end || "Ongoing"} • Currency: {book.currency}
+                </span>
+              </div>
+            </div>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Package Code</th>
+                    <th>Package Name</th>
+                    <th>Vehicle Category</th>
+                    <th>Duty Package</th>
+                    <th>Base Fare</th>
+                    <th>Included Limits</th>
+                    <th>Extra KM Rate</th>
+                    <th>Extra Hr Rate</th>
+                    <th>Allowances</th>
+                    <th style={{ textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {book.packages?.map((pkg) => (
+                    <tr key={pkg.id || pkg.code}>
+                      <td style={{ fontFamily: "monospace", fontWeight: 600, color: "var(--accent)" }}>{pkg.code}</td>
+                      <td style={{ color: "#fff", fontWeight: 600 }}>{pkg.name}</td>
+                      <td><strong style={{ color: "var(--accent)" }}>{pkg.vehicle_category}</strong></td>
+                      <td><span className="status info" style={{ fontSize: 11 }}>{pkg.duty_type}</span></td>
+                      <td><strong style={{ color: "#22c55e" }}>₹{pkg.base_rate}</strong></td>
+                      <td>{pkg.included_hours}h / {pkg.included_km}km</td>
+                      <td>₹{pkg.extra_km_rate}/km</td>
+                      <td>₹{pkg.extra_hour_rate}/hr</td>
+                      <td>Night: ₹{pkg.night_charge || 0} | Wait: ₹{pkg.waiting_rate_per_hour || 0}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {isCommercialAdmin && (
+                          <button
+                            className="button secondary sm"
+                            onClick={() => setEditingRatePkg(pkg)}
+                          >
+                            <Pencil size={13} /> Edit
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )}
 
       {/* Contract Detail Drawer */}
       {showDetailDrawer && selectedContract && (
@@ -788,6 +1207,124 @@ export default function ContractManager() {
                 </button>
                 <button type="submit" className="button">
                   Save Contract
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Edit Rate Package Modal */}
+      {editingRatePkg && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }}>
+          <div className="panel" style={{ width: 540, maxWidth: "95vw", padding: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div>
+                <h3 style={{ margin: 0, color: "#fff", fontSize: 18 }}>Edit Rate Package</h3>
+                <span style={{ fontSize: 12, color: "var(--accent)", fontFamily: "monospace" }}>{editingRatePkg.code} — {editingRatePkg.name}</span>
+              </div>
+              <button onClick={() => setEditingRatePkg(null)} style={{ background: "none", border: 0, color: "var(--muted)", cursor: "pointer" }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveRatePkg} className="stack" style={{ gap: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Vehicle Category</label>
+                  <input
+                    type="text"
+                    disabled
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "var(--muted)" }}
+                    value={editingRatePkg.vehicle_category}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Duty Type</label>
+                  <input
+                    type="text"
+                    disabled
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid var(--line)", color: "var(--muted)" }}
+                    value={editingRatePkg.duty_type}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Base Rate (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.base_rate}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, base_rate: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Extra KM Rate (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.extra_km_rate}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, extra_km_rate: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Extra Hour Rate (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.extra_hour_rate}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, extra_hour_rate: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Night Charge (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.night_charge || 0}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, night_charge: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Waiting Rate / Hr (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.waiting_rate_per_hour || 0}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, waiting_rate_per_hour: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>Driver Allowance / Day (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    style={{ width: "100%", padding: 10, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--line)", color: "#fff" }}
+                    value={editingRatePkg.driver_allowance_per_day || 0}
+                    onChange={(e) => setEditingRatePkg({ ...editingRatePkg, driver_allowance_per_day: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 12 }}>
+                <button type="button" className="button secondary" onClick={() => setEditingRatePkg(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="button" disabled={savingRatePkg}>
+                  {savingRatePkg ? "Saving..." : "Save Rate Changes"}
                 </button>
               </div>
             </form>

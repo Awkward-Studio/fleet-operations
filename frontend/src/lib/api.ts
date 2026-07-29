@@ -923,3 +923,64 @@ export function resolveAnomaly(id: number, payload: { anomaly_review_notes: stri
 export function getVehicleMileage(vehicleId: number) {
   return request<FuelMetrics>(`/fuel-transactions/vehicle_mileage/?vehicle=${vehicleId}`);
 }
+
+export type RatePackage = {
+  id?: number;
+  rate_book?: number;
+  code: string;
+  name: string;
+  city?: string;
+  zone?: string;
+  route_from?: string;
+  route_to?: string;
+  vehicle_category: string;
+  duty_type: string;
+  included_hours: number;
+  included_km: number;
+  base_rate: string | number;
+  extra_hour_rate: string | number;
+  extra_km_rate: string | number;
+  daily_minimum_km?: string | number;
+  waiting_rate_per_hour?: string | number;
+  night_charge?: string | number;
+  driver_allowance_per_day?: string | number;
+  cgst_rate?: string | number;
+  sgst_rate?: string | number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type RateBook = {
+  id: number;
+  code: string;
+  name: string;
+  version: number;
+  book_type: "PUBLIC" | "OTA" | "CORPORATE" | "CUSTOM";
+  status: "DRAFT" | "ACTIVE" | "SUPERSEDED" | "ARCHIVED";
+  priority: number;
+  effective_start: string;
+  effective_end?: string | null;
+  currency: string;
+  contract?: number | null;
+  ota_source?: string;
+  packages: RatePackage[];
+};
+
+export function getRateBooks(params?: { book_type?: string; status?: string }) {
+  const query = new URLSearchParams(params as any).toString();
+  return request<RateBook[]>(`/rate-books/${query ? `?${query}` : ""}`);
+}
+
+export function updateRatePackage(id: number, payload: Partial<RatePackage>) {
+  return request<RatePackage>(`/rate-packages/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createRatePackage(payload: Partial<RatePackage>) {
+  return request<RatePackage>("/rate-packages/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}

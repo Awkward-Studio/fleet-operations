@@ -172,7 +172,7 @@ class TripDetailsModal extends ConsumerWidget {
                       'ROUTE DETAILS',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.extrabold,
+                        fontWeight: FontWeight.w800,
                         letterSpacing: 1.1,
                         color: Color(0xff6b7280),
                       ),
@@ -246,7 +246,7 @@ class TripDetailsModal extends ConsumerWidget {
                       'TRIP & VEHICLE INFO',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.extrabold,
+                        fontWeight: FontWeight.w800,
                         letterSpacing: 1.1,
                         color: Color(0xff6b7280),
                       ),

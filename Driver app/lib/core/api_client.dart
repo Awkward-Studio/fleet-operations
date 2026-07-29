@@ -101,7 +101,8 @@ class ApiClient {
     String contentType = 'image/jpeg',
   }) async {
     final token = await TokenStore.accessToken;
-    final request = http.MultipartRequest('POST', _uri(path))
+    final uri = await _uri(path);
+    final request = http.MultipartRequest('POST', uri)
       ..fields.addAll(fields);
 
     for (final file in files) {
@@ -123,7 +124,8 @@ class ApiClient {
 
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
-      final retry = http.MultipartRequest('POST', _uri(path))
+      final retryUri = await _uri(path);
+      final retry = http.MultipartRequest('POST', retryUri)
         ..fields.addAll(fields);
 
       for (final file in files) {

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Tax Invoice - {{ invoice.invoice_number|default:"DRAFT" }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 15mm 12mm 15mm 12mm;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 9pt;
+            color: #1a1a1a;
+            background: #fff;
+        }
+        .outer-border {
+            border: 2px solid #000;
+            padding: 0;
+        }
+        /* ─── Header ─────────────────────────── */
+        .header {
+            border-bottom: 2px solid #000;
+            padding: 8px 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .company-name {
+            font-size: 14pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .company-details {
+            font-size: 8pt;
+            line-height: 1.5;
+            color: #333;
+            margin-top: 2px;
+        }
+        .invoice-title {
+            text-align: center;
+            padding: 5px 10px;
+        }
+        .invoice-title h2 {
+            font-size: 13pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1px solid #000;
+            padding-bottom: 3px;
+            margin-bottom: 4px;
+        }
+        .invoice-title .draft-watermark {
+            color: #cc0000;
+            font-size: 10pt;
+            font-weight: bold;
+        }
+        /* ─── Info Grid ───────────────────────── */
+        .info-grid {
+            display: flex;
+            border-bottom: 1px solid #000;
+        }
+        .info-col {
+            flex: 1;
+            padding: 6px 10px;
+            border-right: 1px solid #000;
+            font-size: 8.5pt;
+            line-height: 1.6;
+        }
+        .info-col:last-child { border-right: none; }
+        .info-col .label { font-weight: bold; }
+        .info-col .value { color: #111; }
+        /* ─── Bill Sections ───────────────────── */
+        .bill-sections {
+            display: flex;
+            border-bottom: 1px solid #000;
+        }
+        .bill-box {
+            flex: 1;
+            padding: 6px 10px;
+            border-right: 1px solid #000;
+            font-size: 8.5pt;
+            line-height: 1.7;
+        }
+        .bill-box:last-child { border-right: none; }
+        .bill-box .section-title {
+            font-size: 8pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #555;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 2px;
+            margin-bottom: 4px;
+        }
+        .bill-box .name {
+            font-size: 10pt;
+            font-weight: bold;
+        }
+        /* ─── Line Items Table ────────────────── */
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8.5pt;
+        }
+        .items-table th {
+            background: #f0f0f0;
+            border: 1px solid #aaa;
+            padding: 5px 6px;
+            text-align: center;
+            font-size: 8pt;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .items-table td {
+            border: 1px solid #aaa;
+            padding: 5px 6px;
+            vertical-align: top;
+        }
+        .items-table .num { text-align: center; }
+        .items-table .right { text-align: right; }
+        .items-table .trip-row td { background: #f9f9ff; }
+        .items-table .charge-row td { font-size: 8pt; color: #444; }
+        .items-table .subtotal-row td {
+            font-weight: bold;
+            background: #f5f5f5;
+        }
+        /* ─── Tax Summary ─────────────────────── */
+        .summary-row {
+            display: flex;
+            border-top: 1px solid #000;
+        }
+        .amount-words {
+            flex: 2;
+            padding: 8px 10px;
+            border-right: 1px solid #000;
+            font-size: 8.5pt;
+            line-height: 1.6;
+        }
+        .amount-words .label { font-weight: bold; }
+        .tax-summary {
+            flex: 1;
+            font-size: 8.5pt;
+        }
+        .tax-summary table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .tax-summary td {
+            padding: 3px 8px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .tax-summary .grand td {
+            font-weight: bold;
+            font-size: 10pt;
+            border-top: 2px solid #000;
+            border-bottom: none;
+            padding: 5px 8px;
+        }
+        /* ─── Footer ──────────────────────────── */
+        .footer {
+            border-top: 1px solid #000;
+            display: flex;
+        }
+        .footer-notes {
+            flex: 2;
+            padding: 8px 10px;
+            font-size: 8pt;
+            border-right: 1px solid #000;
+            line-height: 1.6;
+        }
+        .footer-sign {
+            flex: 1;
+            padding: 8px 10px;
+            font-size: 8pt;
+            text-align: center;
+        }
+        .sign-box {
+            height: 50px;
+            border: 1px dashed #aaa;
+            margin: 4px 0;
+        }
+        .draft-overlay {
+            position: fixed;
+            top: 40%;
+            left: 10%;
+            font-size: 72pt;
+            color: rgba(200, 0, 0, 0.08);
+            transform: rotate(-30deg);
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 0;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+{% if is_draft %}<div class="draft-overlay">DRAFT</div>{% endif %}
+<div class="outer-border">
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <div class="company-name">{{ legal_entity.legal_name }}</div>
+            {% if legal_entity.trade_name %}
+            <div class="company-details">{{ legal_entity.trade_name }}</div>
+            {% endif %}
+            <div class="company-details">
+                {% if legal_entity.registered_address %}{{ legal_entity.registered_address }}{% endif %}
+            </div>
+            <div class="company-details">
+                {% if legal_entity.gstin %}<span><b>GSTIN:</b> {{ legal_entity.gstin }}</span>{% endif %}
+                {% if legal_entity.pan %} &nbsp;|&nbsp; <span><b>PAN:</b> {{ legal_entity.pan }}</span>{% endif %}
+            </div>
+            {% if legal_entity.billing_phone %}
+            <div class="company-details"><b>Tel:</b> {{ legal_entity.billing_phone }}</div>
+            {% endif %}
+        </div>
+        <div class="invoice-title">
+            {% if is_draft %}
+            <div class="draft-watermark">⚠ DRAFT PROFORMA — NOT A TAX INVOICE</div>
+            {% endif %}
+            <h2>Tax Invoice</h2>
+            <div><b>Invoice No.:</b> {{ invoice.invoice_number|default:"DRAFT" }}</div>
+            <div><b>Date:</b> {{ invoice.issue_date|date:"d-M-Y" }}</div>
+            {% if invoice.due_date %}<div><b>Due:</b> {{ invoice.due_date|date:"d-M-Y" }}</div>{% endif %}
+        </div>
+    </div>
+
+    <!-- Info Grid: Supplier / Customer / Invoice Meta -->
+    <div class="info-grid">
+        <div class="info-col">
+            <div class="label">Supplier State:</div>
+            <div class="value">{{ invoice.supplier_state_code_snapshot|default:"MH - Maharashtra (27)" }}</div>
+            <div class="label" style="margin-top:4px;">Tax Regime:</div>
+            <div class="value">{{ invoice.tax_regime }}</div>
+        </div>
+        <div class="info-col">
+            <div class="label">Place of Supply:</div>
+            <div class="value">{{ invoice.place_of_supply|default:"Maharashtra (27)" }}</div>
+            <div class="label" style="margin-top:4px;">PO Number:</div>
+            <div class="value">{{ invoice.po_number|default:"—" }}</div>
+        </div>
+        <div class="info-col">
+            <div class="label">Financial Year:</div>
+            <div class="value">{{ invoice.financial_year.name }}</div>
+            <div class="label" style="margin-top:4px;">Currency:</div>
+            <div class="value">{{ invoice.currency }}</div>
+        </div>
+    </div>
+
+    <!-- Bill To / Bank Details -->
+    <div class="bill-sections">
+        <div class="bill-box">
+            <div class="section-title">Billed To</div>
+            <div class="name">{{ invoice.billing_name_snapshot }}</div>
+            {% if invoice.billing_address_snapshot %}
+            <div>{{ invoice.billing_address_snapshot }}</div>
+            {% endif %}
+            {% if invoice.gstin_snapshot %}
+            <div><b>GSTIN:</b> {{ invoice.gstin_snapshot }}</div>
+            {% endif %}
+            {% if invoice.billing_email_snapshot %}
+            <div><b>Email:</b> {{ invoice.billing_email_snapshot }}</div>
+            {% endif %}
+            {% if invoice.billing_phone_snapshot %}
+            <div><b>Phone:</b> {{ invoice.billing_phone_snapshot }}</div>
+            {% endif %}
+        </div>
+        <div class="bill-box">
+            <div class="section-title">Bank &amp; Remittance Details</div>
+            <div><b>Bank:</b> {{ legal_entity.bank_name|default:"—" }}</div>
+            <div><b>Account No.:</b> {{ legal_entity.bank_account_number|default:"—" }}</div>
+            <div><b>IFSC:</b> {{ legal_entity.ifsc_code|default:"—" }}</div>
+            {% if legal_entity.bank_branch %}<div><b>Branch:</b> {{ legal_entity.bank_branch }}</div>{% endif %}
+            {% if legal_entity.billing_email %}<div><b>Contact:</b> {{ legal_entity.billing_email }}</div>{% endif %}
+        </div>
+    </div>
+
+    <!-- Line Items Table -->
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width:4%">#</th>
+                <th style="width:36%">Description</th>
+                <th style="width:8%">SAC</th>
+                <th style="width:10%">Qty</th>
+                <th style="width:12%">Unit Rate (₹)</th>
+                <th style="width:10%">CGST</th>
+                <th style="width:10%">SGST/IGST</th>
+                <th style="width:10%">Amount (₹)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in lines %}
+            <tr class="trip-row">
+                <td class="num">{{ forloop.counter }}</td>
+                <td>{{ line.description }}</td>
+                <td class="num">{{ line.sac_hsn_code|default:"996411" }}</td>
+                <td class="num">{{ line.quantity|floatformat:2 }}</td>
+                <td class="right">{{ line.unit_rate|floatformat:2 }}</td>
+                <td class="right">{% if line.cgst_rate > 0 %}{{ line.cgst_rate }}% (₹{{ line.cgst_amount|floatformat:2 }}){% else %}—{% endif %}</td>
+                <td class="right">
+                    {% if line.sgst_rate > 0 %}{{ line.sgst_rate }}% (₹{{ line.sgst_amount|floatformat:2 }}){% elif line.igst_rate > 0 %}IGST {{ line.igst_rate }}% (₹{{ line.igst_amount|floatformat:2 }}){% else %}—{% endif %}
+                </td>
+                <td class="right"><b>{{ line.line_total|floatformat:2 }}</b></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr class="subtotal-row">
+                <td colspan="4"></td>
+                <td class="right"><b>Taxable Sub-Total</b></td>
+                <td class="right">₹{{ invoice.cgst_amount|floatformat:2 }}</td>
+                <td class="right">₹{% if invoice.sgst_amount > 0 %}{{ invoice.sgst_amount|floatformat:2 }}{% else %}{{ invoice.igst_amount|floatformat:2 }}{% endif %}</td>
+                <td class="right">₹{{ invoice.taxable_amount|floatformat:2 }}</td>
+            </tr>
+        </tfoot>
+    </table>
+
+    <!-- Amount in Words + Tax Summary -->
+    <div class="summary-row">
+        <div class="amount-words">
+            <div class="label">Amount in Words:</div>
+            <div><em>{{ amount_in_words }}</em></div>
+            {% if legal_entity.invoice_notes %}
+            <div style="margin-top:8px; color:#555; font-size:8pt;"><b>Notes:</b> {{ legal_entity.invoice_notes }}</div>
+            {% endif %}
+        </div>
+        <div class="tax-summary">
+            <table>
+                <tr><td>Taxable Amount</td><td style="text-align:right">₹{{ invoice.taxable_amount|floatformat:2 }}</td></tr>
+                {% if invoice.cgst_amount > 0 %}
+                <tr><td>CGST ({{ cgst_rate }}%)</td><td style="text-align:right">₹{{ invoice.cgst_amount|floatformat:2 }}</td></tr>
+                {% endif %}
+                {% if invoice.sgst_amount > 0 %}
+                <tr><td>SGST ({{ sgst_rate }}%)</td><td style="text-align:right">₹{{ invoice.sgst_amount|floatformat:2 }}</td></tr>
+                {% endif %}
+                {% if invoice.igst_amount > 0 %}
+                <tr><td>IGST ({{ igst_rate }}%)</td><td style="text-align:right">₹{{ invoice.igst_amount|floatformat:2 }}</td></tr>
+                {% endif %}
+                <tr class="grand"><td><b>Total Amount</b></td><td style="text-align:right"><b>₹{{ invoice.total_amount|floatformat:2 }}</b></td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Footer: Notes + Signature -->
+    <div class="footer">
+        <div class="footer-notes">
+            <b>Terms &amp; Conditions:</b>
+            <ul style="padding-left:14px; margin-top:3px;">
+                <li>Payment due within {{ payment_terms_days }} days of invoice date.</li>
+                <li>Subject to {{ legal_entity.state_code|default:"MH" }} jurisdiction.</li>
+                <li>This is a computer-generated invoice and is valid without a physical signature.</li>
+            </ul>
+        </div>
+        <div class="footer-sign">
+            <div>For <b>{{ legal_entity.legal_name }}</b></div>
+            <div class="sign-box"></div>
+            <div>Authorized Signatory</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

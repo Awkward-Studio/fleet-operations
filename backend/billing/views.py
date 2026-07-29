@@ -582,3 +582,32 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice = self.get_object()
         xml = FinanceReportService.export_tally_xml(invoice)
         return HttpResponse(xml, content_type="application/xml")
+
+    @action(detail=True, methods=["get"], url_path="official-pdf")
+    def download_official_pdf(self, request, pk=None):
+        """Stream the official Tax Invoice as a PDF download."""
+        from django.http import HttpResponse
+        from .reports import InvoiceReportService
+
+        invoice = self.get_object()
+        html_content = InvoiceReportService.render_official_tax_invoice(invoice)
+        pdf_bytes = InvoiceReportService.render_pdf_from_html(html_content)
+        invoice_label = invoice.invoice_number or f"DRAFT-{invoice.id}"
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="tax-invoice-{invoice_label}.pdf"'
+        return response
+
+    @action(detail=True, methods=["get"], url_path="duty-slip-pdf")
+    def download_duty_slip_pdf(self, request, pk=None):
+        """Stream the Duty Slip Annexure for all trips on this invoice as a PDF download."""
+        from django.http import HttpResponse
+        from .reports import InvoiceReportService
+
+        invoice = self.get_object()
+        html_content = InvoiceReportService.render_duty_slip_annexure(invoice)
+        pdf_bytes = InvoiceReportService.render_pdf_from_html(html_content)
+        invoice_label = invoice.invoice_number or f"DRAFT-{invoice.id}"
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="duty-slip-{invoice_label}.pdf"'
+        return response
+

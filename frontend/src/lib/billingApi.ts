@@ -360,3 +360,12 @@ export function exportBillingInvoiceTallyXml(invoiceId: number): Promise<string>
 export function downloadBillingInvoiceDocument(invoiceId: number): Promise<Blob> {
   return requestBlob(`/billing/invoices/${invoiceId}/document/`);
 }
+
+export function downloadOfficialInvoicePdf(invoiceId: number): Promise<Blob> {
+  return requestBlob(`/billing/invoices/${invoiceId}/official-pdf/`);
+}
+
+export function downloadDutySlipPdf(invoiceId: number): Promise<Blob> {
+  return requestBlob(`/billing/invoices/${invoiceId}/duty-slip-pdf/`);
+}
+

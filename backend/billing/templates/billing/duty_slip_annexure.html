@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Duty Slip Annexure - Trip #{{ trip.id }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 12mm 10mm 12mm 10mm;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 8.5pt;
+            color: #1a1a1a;
+            background: #fff;
+        }
+        .outer-border {
+            border: 2px solid #000;
+        }
+        /* ─── Header ─────────────────────────────────── */
+        .header {
+            border-bottom: 2px solid #000;
+            padding: 6px 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .company-name {
+            font-size: 12pt;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .company-sub { font-size: 7.5pt; color: #444; margin-top: 1px; }
+        .doc-title { text-align: right; }
+        .doc-title h2 {
+            font-size: 12pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1.5px solid #000;
+            padding-bottom: 2px;
+            margin-bottom: 3px;
+        }
+        .doc-title .slip-no { font-size: 10pt; font-weight: bold; color: #003399; }
+        /* ─── Duty Info Grid ──────────────────────────── */
+        .duty-grid {
+            display: flex;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #000;
+        }
+        .duty-cell {
+            width: 25%;
+            padding: 4px 8px;
+            border-right: 1px solid #ccc;
+            border-bottom: 1px solid #ccc;
+            font-size: 8pt;
+            line-height: 1.5;
+        }
+        .duty-cell:nth-child(4n) { border-right: none; }
+        .duty-cell .lbl { font-weight: bold; color: #555; font-size: 7.5pt; text-transform: uppercase; }
+        .duty-cell .val { color: #111; }
+        /* ─── Trip Summary ────────────────────────────── */
+        .trip-summary {
+            display: flex;
+            border-bottom: 1px solid #000;
+        }
+        .trip-col {
+            flex: 1;
+            padding: 5px 10px;
+            border-right: 1px solid #ccc;
+            font-size: 8.5pt;
+            line-height: 1.6;
+        }
+        .trip-col:last-child { border-right: none; }
+        .trip-col .sec-title {
+            font-weight: bold;
+            font-size: 8pt;
+            text-transform: uppercase;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 2px;
+            margin-bottom: 4px;
+        }
+        /* ─── Milestone Table ─────────────────────────── */
+        .section-header {
+            background: #1a1a2e;
+            color: #fff;
+            padding: 4px 10px;
+            font-size: 8.5pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .milestones-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8.5pt;
+        }
+        .milestones-table th {
+            background: #e8e8e8;
+            border: 1px solid #aaa;
+            padding: 4px 6px;
+            text-align: center;
+            font-size: 7.5pt;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .milestones-table td {
+            border: 1px solid #ccc;
+            padding: 4px 7px;
+            text-align: center;
+            vertical-align: middle;
+        }
+        .milestones-table .milestone-label {
+            text-align: left;
+            font-weight: bold;
+        }
+        /* ─── GPS Audit Log ───────────────────────────── */
+        .gps-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 7.5pt;
+        }
+        .gps-table th {
+            background: #e0e0e0;
+            border: 1px solid #aaa;
+            padding: 3px 5px;
+            text-align: center;
+            font-size: 7pt;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .gps-table td {
+            border: 1px solid #ddd;
+            padding: 3px 5px;
+            text-align: center;
+        }
+        .gps-table tr:nth-child(even) td { background: #f9f9f9; }
+        /* ─── Charges Section ─────────────────────────── */
+        .charges-block {
+            border-top: 1px solid #000;
+            display: flex;
+        }
+        .charges-table-wrap {
+            flex: 1;
+            border-right: 1px solid #ccc;
+        }
+        .charges-inner {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8.5pt;
+        }
+        .charges-inner th {
+            background: #f0f0f0;
+            border: 1px solid #aaa;
+            padding: 4px 7px;
+            font-size: 7.5pt;
+            text-transform: uppercase;
+        }
+        .charges-inner td {
+            border: 1px solid #ddd;
+            padding: 4px 7px;
+        }
+        .charges-inner .right { text-align: right; }
+        .charges-inner .bold-row td { font-weight: bold; background: #f5f5f5; }
+        .receipt-block {
+            width: 200px;
+            padding: 6px 10px;
+            font-size: 8pt;
+            line-height: 1.7;
+        }
+        .receipt-box {
+            border: 1px dashed #aaa;
+            height: 70px;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            font-style: italic;
+        }
+        /* ─── Signature Block ─────────────────────────── */
+        .signature-row {
+            border-top: 2px solid #000;
+            display: flex;
+        }
+        .sig-box {
+            flex: 1;
+            padding: 8px 10px;
+            border-right: 1px solid #ccc;
+            text-align: center;
+            font-size: 8pt;
+        }
+        .sig-box:last-child { border-right: none; }
+        .sig-line {
+            height: 45px;
+            border-bottom: 1px solid #000;
+            margin: 10px 8px 3px 8px;
+        }
+        .sig-label { color: #555; font-size: 7.5pt; }
+    </style>
+</head>
+<body>
+<div class="outer-border">
+
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <div class="company-name">{{ company_name }}</div>
+            {% if company_gstin %}<div class="company-sub">GSTIN: {{ company_gstin }}</div>{% endif %}
+            {% if company_address %}<div class="company-sub">{{ company_address }}</div>{% endif %}
+        </div>
+        <div class="doc-title">
+            <h2>Duty Slip Annexure</h2>
+            <div class="slip-no">Duty #{{ duty_slip_number }}</div>
+            <div>Invoice: {{ invoice_number|default:"N/A" }}</div>
+            <div>Date: {{ report_date }}</div>
+        </div>
+    </div>
+
+    <!-- Duty Info Grid -->
+    <div class="duty-grid">
+        <div class="duty-cell"><div class="lbl">Booked By</div><div class="val">{{ booked_by|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Passenger</div><div class="val">{{ passenger_name|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Vehicle No.</div><div class="val">{{ vehicle_number|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Vehicle Type</div><div class="val">{{ vehicle_type|default:"—" }}</div></div>
+
+        <div class="duty-cell"><div class="lbl">Driver</div><div class="val">{{ driver_name|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Driver Phone</div><div class="val">{{ driver_phone|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Duty Type</div><div class="val">{{ duty_type|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Booking Type</div><div class="val">{{ booking_type|default:"—" }}</div></div>
+
+        <div class="duty-cell"><div class="lbl">Start Date</div><div class="val">{{ start_date|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">End Date</div><div class="val">{{ end_date|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">Package</div><div class="val">{{ package_name|default:"—" }}</div></div>
+        <div class="duty-cell"><div class="lbl">City</div><div class="val">{{ city|default:"—" }}</div></div>
+    </div>
+
+    <!-- Trip Route Summary -->
+    <div class="trip-summary">
+        <div class="trip-col">
+            <div class="sec-title">Route</div>
+            <div><b>From:</b> {{ trip.pickup_city }} — {{ trip.pickup_address|default:"" }}</div>
+            <div><b>To:</b> {{ trip.drop_city }} — {{ trip.drop_address|default:"" }}</div>
+        </div>
+        <div class="trip-col">
+            <div class="sec-title">Odometer</div>
+            <div><b>Start (Garage Dep.):</b> {{ start_odometer }} km</div>
+            <div><b>End (Garage Return):</b> {{ end_odometer }} km</div>
+            <div><b>Total Distance:</b> {{ actual_km }} km</div>
+        </div>
+        <div class="trip-col">
+            <div class="sec-title">Duration</div>
+            <div><b>Start Time:</b> {{ start_time|default:"—" }}</div>
+            <div><b>End Time:</b> {{ end_time|default:"—" }}</div>
+            <div><b>Total Hours:</b> {{ actual_hours }} hrs</div>
+        </div>
+    </div>
+
+    <!-- Milestone Log Table -->
+    <div class="section-header">Milestone Log</div>
+    <table class="milestones-table">
+        <thead>
+            <tr>
+                <th style="width:20%; text-align:left">Milestone</th>
+                <th>S.Date</th>
+                <th>E.Date</th>
+                <th>S.Time</th>
+                <th>E.Time</th>
+                <th>G.Time</th>
+                <th>Speedo S.km</th>
+                <th>Speedo E.km</th>
+                <th>T.Km</th>
+                <th>S.km (Ex)</th>
+                <th>T.Km (Ex)</th>
+                <th>Es.Km Rate</th>
+                <th>Ex.Km Cost</th>
+                <th>Es.hr Rate</th>
+                <th>Ex.hr Cost</th>
+                <th>Ex.Ch.</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for milestone in milestones %}
+            <tr>
+                <td class="milestone-label">{{ milestone.label }}</td>
+                <td>{{ milestone.start_date|default:"" }}</td>
+                <td>{{ milestone.end_date|default:"" }}</td>
+                <td>{{ milestone.start_time|default:"" }}</td>
+                <td>{{ milestone.end_time|default:"" }}</td>
+                <td>{{ milestone.g_time|default:"" }}</td>
+                <td>{{ milestone.speedo_start|default:"" }}</td>
+                <td>{{ milestone.speedo_end|default:"" }}</td>
+                <td>{{ milestone.t_km|default:"" }}</td>
+                <td>{{ milestone.s_km_ex|default:"" }}</td>
+                <td>{{ milestone.t_km_ex|default:"" }}</td>
+                <td>{{ milestone.es_km_rate|default:"" }}</td>
+                <td>{{ milestone.ex_km_cost|default:"" }}</td>
+                <td>{{ milestone.es_hr_rate|default:"" }}</td>
+                <td>{{ milestone.ex_hr_cost|default:"" }}</td>
+                <td>{{ milestone.ex_ch|default:"" }}</td>
+            </tr>
+            {% endfor %}
+            <tr style="font-weight:bold; background:#f0f0f0;">
+                <td>Total</td>
+                <td colspan="7"></td>
+                <td>{{ total_km|default:"" }}</td>
+                <td colspan="4"></td>
+                <td colspan="2"></td>
+                <td>{{ total_extra_charges|default:"" }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Charges Block -->
+    <div class="charges-block">
+        <div class="charges-table-wrap">
+            <table class="charges-inner">
+                <thead>
+                    <tr>
+                        <th>Additional Charges</th>
+                        <th class="right">Amount (₹)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for charge in additional_charges %}
+                    <tr>
+                        <td>{{ charge.label }}</td>
+                        <td class="right">{{ charge.amount|floatformat:2 }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not additional_charges %}
+                    <tr><td colspan="2" style="text-align:center; color:#888;">No additional charges</td></tr>
+                    {% endif %}
+                </tbody>
+                <tfoot>
+                    <tr class="bold-row">
+                        <td>Total Additional</td>
+                        <td class="right">{{ additional_total|floatformat:2 }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="receipt-block">
+            <div><b>Receipt</b></div>
+            <div>View Receipt</div>
+            {% if additional_total %}
+            <div style="margin-top:4px;"><b>Amount: ₹{{ additional_total|floatformat:2 }}</b></div>
+            {% endif %}
+            <div class="receipt-box">Receipt Scan</div>
+        </div>
+    </div>
+
+    <!-- GPS Audit Log -->
+    <div class="section-header">GPS Audit Log</div>
+    <table class="gps-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Timestamp</th>
+                <th>Latitude</th>
+                <th>Longitude</th>
+                <th>Speed (km/h)</th>
+                <th>Heading</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in gps_logs %}
+            <tr>
+                <td>{{ forloop.counter }}</td>
+                <td>{{ log.timestamp }}</td>
+                <td>{{ log.latitude }}</td>
+                <td>{{ log.longitude }}</td>
+                <td>{{ log.speed_kmh|default:"—" }}</td>
+                <td>{{ log.heading|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" style="text-align:center; color:#888; padding:6px;">No GPS data recorded for this trip.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- Signature Row -->
+    <div class="signature-row">
+        <div class="sig-box">
+            <div><b>Customer Signature</b></div>
+            <div class="sig-line"></div>
+            <div class="sig-label">Passenger / Authorized Representative</div>
+        </div>
+        <div class="sig-box">
+            <div><b>Driver Signature</b></div>
+            <div class="sig-line"></div>
+            <div class="sig-label">{{ driver_name|default:"Driver" }}</div>
+        </div>
+        <div class="sig-box">
+            <div><b>For {{ company_name }}</b></div>
+            <div class="sig-line"></div>
+            <div class="sig-label">Authorized Signatory</div>
+        </div>
+    </div>
+
+</div>
+</body>
+</html>

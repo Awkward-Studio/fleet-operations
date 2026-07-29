@@ -39,6 +39,8 @@ import {
   approveBillingInvoice,
   voidBillingInvoice,
   downloadBillingInvoiceDocument,
+  downloadOfficialInvoicePdf,
+  downloadDutySlipPdf,
 } from "@/lib/billingApi";
 import {
   Table,
@@ -137,6 +139,34 @@ export function BillingManager() {
       URL.revokeObjectURL(url);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to download invoice PDF.");
+    }
+  };
+
+  const handleDownloadOfficialPdf = async (invoiceId: number, invNum: string) => {
+    try {
+      const blob = await downloadOfficialInvoicePdf(invoiceId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `tax-invoice-${invNum || invoiceId}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to download official Tax Invoice PDF.");
+    }
+  };
+
+  const handleDownloadDutySlip = async (invoiceId: number, invNum: string) => {
+    try {
+      const blob = await downloadDutySlipPdf(invoiceId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `duty-slip-${invNum || invoiceId}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to download Duty Slip Annexure PDF.");
     }
   };
 
@@ -408,9 +438,25 @@ export function BillingManager() {
                           <button
                             className="button secondary"
                             style={{ padding: "6px 10px", fontSize: 12 }}
+                            title="Download official Tax Invoice PDF"
+                            onClick={() => handleDownloadOfficialPdf(inv.id, inv.invoice_number || "")}
+                          >
+                            <Download size={13} /> Tax Invoice
+                          </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
+                            title="Download Duty Slip Annexure PDF"
+                            onClick={() => handleDownloadDutySlip(inv.id, inv.invoice_number || "")}
+                          >
+                            <ClipboardCheck size={13} /> Duty Slip
+                          </button>
+                          <button
+                            className="button secondary"
+                            style={{ padding: "6px 10px", fontSize: 12 }}
                             onClick={() => handleDownloadDocument(inv.id, inv.invoice_number || "")}
                           >
-                            <Download size={13} /> PDF
+                            <Download size={13} /> Archive PDF
                           </button>
                           <button
                             className="button secondary"

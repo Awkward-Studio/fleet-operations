@@ -9,6 +9,7 @@ import '../domain/trip.dart';
 import 'end_ride_screen.dart';
 import 'pre_ride_inspection_screen.dart';
 import 'pickup_navigation_screen.dart';
+import 'trip_details_modal.dart';
 
 class DriverHomeScreen extends ConsumerWidget {
   const DriverHomeScreen({super.key, required this.onLogout});
@@ -216,6 +217,32 @@ class ActiveTripCard extends ConsumerWidget {
                   ),
                 ],
                 const SizedBox(height: 18),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    showModalBottomSheet(
+                      context: context,
+                      isScrollControlled: true,
+                      useSafeArea: true,
+                      builder: (_) => TripDetailsModal(trip: trip),
+                    );
+                  },
+                  icon: const Icon(Icons.info_outline, color: Color(0xff0f766e)),
+                  label: const Text(
+                    'View Trip Details',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xff0f766e),
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                    side: const BorderSide(color: Color(0xff0f766e)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
                 FilledButton.icon(
                   onPressed: trip.hasAction
                       ? () async {
@@ -254,6 +281,17 @@ class ActiveTripCard extends ConsumerWidget {
                                   ),
                                 );
                             if (changed == true) {
+                              final nextTrip = await ref.refresh(
+                                currentDriverTripProvider.future,
+                              );
+                              if (context.mounted &&
+                                  nextTrip?.status == TripStatus.active) {
+                                await Navigator.of(context).push<bool>(
+                                  MaterialPageRoute(
+                                    builder: (_) => EndRideScreen(trip: nextTrip!),
+                                  ),
+                                );
+                              }
                               ref.invalidate(currentDriverTripProvider);
                             }
                             return;
@@ -267,6 +305,17 @@ class ActiveTripCard extends ConsumerWidget {
                                   GuestOtpVerificationModal(trip: trip),
                             );
                             if (changed == true) {
+                              final nextTrip = await ref.refresh(
+                                currentDriverTripProvider.future,
+                              );
+                              if (context.mounted &&
+                                  nextTrip?.status == TripStatus.active) {
+                                await Navigator.of(context).push<bool>(
+                                  MaterialPageRoute(
+                                    builder: (_) => EndRideScreen(trip: nextTrip!),
+                                  ),
+                                );
+                              }
                               ref.invalidate(currentDriverTripProvider);
                             }
                             return;

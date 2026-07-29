@@ -250,3 +250,32 @@ class BillableTripSerializer(TripSerializer):
             "email": obj.bill_to_email_snapshot,
             "phone": obj.bill_to_phone_snapshot,
         }
+
+
+from .models import PaymentReceipt, PaymentAllocation
+
+class PaymentReceiptSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source="customer.display_name", read_only=True)
+    legal_entity_name = serializers.CharField(source="legal_entity.legal_name", read_only=True)
+
+    class Meta:
+        model = PaymentReceipt
+        fields = "__all__"
+
+
+class PaymentAllocationSerializer(serializers.ModelSerializer):
+    receipt_number = serializers.CharField(source="receipt.receipt_number", read_only=True)
+    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+
+    class Meta:
+        model = PaymentAllocation
+        fields = "__all__"
+
+
+class CreditNoteSerializer(serializers.ModelSerializer):
+    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+    legal_entity_name = serializers.CharField(source="legal_entity.legal_name", read_only=True)
+
+    class Meta:
+        model = CreditNote
+        fields = "__all__"

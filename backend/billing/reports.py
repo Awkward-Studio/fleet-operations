@@ -13,6 +13,9 @@ from .models import (
     InvoiceTrip,
     PaymentReceipt,
     TripExpense,
+    PaymentAllocation,
+    JournalEntry,
+    JournalLine,
 )
 
 
@@ -439,3 +442,136 @@ class InvoiceReportService:
             buf = BytesIO()
             pisa.CreatePDF(html_content.encode("utf-8"), dest=buf, encoding="utf-8")
             return buf.getvalue()
+
+
+class ReconciliationService:
+    @classmethod
+    def reconcile(cls):
+        from .models import (
+            TripCloseout, Invoice, PaymentReceipt, PaymentAllocation, JournalEntry, JournalLine
+        )
+        from fleet.models import Trip, TripStatus
+
+        exceptions = {
+            "trips_missing_closeout": [],
+            "closeouts_not_invoiced": [],
+            "invoices_missing_journals": [],
+            "invoices_journal_amount_mismatches": [],
+            "receipts_missing_journals": [],
+            "receipts_journal_amount_mismatches": [],
+            "allocations_missing_journals": [],
+            "unbalanced_journals": [],
+        }
+
+        # 1. Trips missing closeout
+        completed_trips = Trip.objects.filter(status="completed").select_related("customer", "closeout")
+        for trip in completed_trips:
+            closeout = getattr(trip, "closeout", None)
+            if not closeout:
+                exceptions["trips_missing_closeout"].append({
+                    "trip_id": trip.id,
+                    "customer_name": trip.customer.display_name if trip.customer else "Adhoc",
+                    "pickup_at": trip.pickup_at.isoformat() if trip.pickup_at else None,
+                    "amount": str(trip.quoted_total_amount or 0),
+                    "description": f"Trip #{trip.id} is completed but closeout is missing.",
+                })
+            elif closeout.status != "BILLING_READY":
+                exceptions["trips_missing_closeout"].append({
+                    "trip_id": trip.id,
+                    "customer_name": trip.customer.display_name if trip.customer else "Adhoc",
+                    "pickup_at": trip.pickup_at.isoformat() if trip.pickup_at else None,
+                    "amount": str(trip.quoted_total_amount or 0),
+                    "description": f"Trip #{trip.id} closeout is in status {closeout.status} (not BILLING_READY).",
+                })
+
+        # 2. Closeouts not invoiced
+        billing_ready_closeouts = TripCloseout.objects.filter(status="BILLING_READY").select_related("trip__customer")
+        for closeout in billing_ready_closeouts:
+            invoiced = InvoiceTrip.objects.filter(trip=closeout.trip).exists()
+            if not invoiced:
+                exceptions["closeouts_not_invoiced"].append({
+                    "closeout_id": closeout.id,
+                    "trip_id": closeout.trip_id,
+                    "customer_name": closeout.trip.customer.display_name if closeout.trip.customer else "Adhoc",
+                    "final_total_amount": str(closeout.final_total_amount or 0),
+                    "description": f"Closeout #{closeout.id} is ready for billing but not linked to any invoice.",
+                })
+
+        # 3. Invoices vs Journals
+        invoices = Invoice.objects.exclude(status="VOID")
+        for invoice in invoices:
+            journals = JournalEntry.objects.filter(source_type="INVOICE", source_id=str(invoice.id))
+            if not journals.exists() and invoice.status in ["ISSUED", "SENT", "PARTIALLY_PAID", "PAID"]:
+                exceptions["invoices_missing_journals"].append({
+                    "invoice_id": invoice.id,
+                    "invoice_number": invoice.invoice_number or f"DRAFT-{invoice.id}",
+                    "customer_name": invoice.customer_name,
+                    "total_amount": str(invoice.total_amount),
+                    "description": f"Invoice #{invoice.invoice_number or invoice.id} has no GL journal entry.",
+                })
+            else:
+                for journal in journals:
+                    debits = sum(line.debit_amount for line in journal.lines.all())
+                    if debits != invoice.total_amount:
+                        exceptions["invoices_journal_amount_mismatches"].append({
+                            "invoice_id": invoice.id,
+                            "invoice_number": invoice.invoice_number or f"DRAFT-{invoice.id}",
+                            "journal_entry_number": journal.entry_number,
+                            "invoice_amount": str(invoice.total_amount),
+                            "journal_amount": str(debits),
+                            "description": f"Amount mismatch: Invoice total is {invoice.total_amount} but journal debits are {debits}.",
+                        })
+
+        # 4. Receipts vs Journals
+        receipts = PaymentReceipt.objects.all().select_related("customer")
+        for receipt in receipts:
+            journals = JournalEntry.objects.filter(source_type="PAYMENT_RECEIPT", source_id=str(receipt.id))
+            if not journals.exists():
+                exceptions["receipts_missing_journals"].append({
+                    "receipt_id": receipt.id,
+                    "receipt_number": receipt.receipt_number,
+                    "customer_name": receipt.customer.display_name if receipt.customer else "Unknown",
+                    "amount": str(receipt.amount),
+                    "description": f"Receipt {receipt.receipt_number} has no GL journal entry.",
+                })
+            else:
+                for journal in journals:
+                    debits = sum(line.debit_amount for line in journal.lines.all())
+                    if debits != receipt.amount:
+                        exceptions["receipts_journal_amount_mismatches"].append({
+                            "receipt_id": receipt.id,
+                            "receipt_number": receipt.receipt_number,
+                            "journal_entry_number": journal.entry_number,
+                            "receipt_amount": str(receipt.amount),
+                            "journal_amount": str(debits),
+                            "description": f"Amount mismatch: Receipt amount is {receipt.amount} but journal debits are {debits}.",
+                        })
+
+        # 5. Allocations vs Journals
+        allocations = PaymentAllocation.objects.all().select_related("receipt", "invoice")
+        for allocation in allocations:
+            if allocation.tds_amount > 0:
+                journals = JournalEntry.objects.filter(source_type="PAYMENT_ALLOCATION", source_id=str(allocation.id))
+                if not journals.exists():
+                    exceptions["allocations_missing_journals"].append({
+                        "allocation_id": allocation.id,
+                        "receipt_number": allocation.receipt.receipt_number,
+                        "invoice_number": allocation.invoice.invoice_number,
+                        "tds_amount": str(allocation.tds_amount),
+                        "description": f"TDS allocation {allocation.id} has no GL journal entry.",
+                    })
+
+        # 6. Unbalanced Journals
+        journals = JournalEntry.objects.all()
+        for journal in journals:
+            debits = sum(line.debit_amount for line in journal.lines.all())
+            credits = sum(line.credit_amount for line in journal.lines.all())
+            if debits != credits:
+                exceptions["unbalanced_journals"].append({
+                    "journal_entry_number": journal.entry_number,
+                    "debit_total": str(debits),
+                    "credit_total": str(credits),
+                    "description": f"Unbalanced Journal {journal.entry_number}: Dr {debits} vs Cr {credits}.",
+                })
+
+        return exceptions

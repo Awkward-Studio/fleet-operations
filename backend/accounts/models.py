@@ -9,6 +9,9 @@ class UserRole(models.TextChoices):
     ACCOUNTANT = "accountant", "Accountant"
     COMMERCIAL = "commercial", "Commercial"
     DRIVER = "driver", "Driver"
+    OPERATIONS_APPROVER = "operations_approver", "Operations Approver"
+    FINANCE_APPROVER = "finance_approver", "Finance Approver"
+    AUDITOR = "auditor", "Auditor"
 
 
 class User(AbstractUser):
@@ -18,21 +21,37 @@ class User(AbstractUser):
         choices=UserRole.choices,
         default=UserRole.ADMIN,
     )
+    assigned_legal_entities = models.ManyToManyField(
+        "billing.LegalEntity",
+        blank=True,
+        related_name="assigned_users",
+    )
 
     def __str__(self):
         return f"{self.username} ({self.role})"
 
     @property
     def is_commercial_admin(self):
-        return self.is_superuser or self.role in [UserRole.ADMIN, UserRole.COMMERCIAL, UserRole.ACCOUNTANT]
+        return self.is_superuser or self.role in [
+            UserRole.ADMIN,
+            UserRole.COMMERCIAL,
+            UserRole.ACCOUNTANT,
+            UserRole.OPERATIONS_APPROVER,
+            UserRole.FINANCE_APPROVER,
+        ]
 
     @property
     def permissions_list(self):
         if self.is_superuser or self.role == UserRole.ADMIN:
             return ["read_customers", "write_customers", "read_contracts", "write_contracts", "dispatch_trips"]
-        elif self.role in [UserRole.COMMERCIAL, UserRole.ACCOUNTANT]:
+        elif self.role in [
+            UserRole.COMMERCIAL,
+            UserRole.ACCOUNTANT,
+            UserRole.OPERATIONS_APPROVER,
+            UserRole.FINANCE_APPROVER,
+        ]:
             return ["read_customers", "write_customers", "read_contracts", "write_contracts"]
-        elif self.role == UserRole.DRIVER:
+        elif self.role in [UserRole.DRIVER, UserRole.AUDITOR]:
             return []
         else:
             return ["read_customers", "dispatch_trips"]

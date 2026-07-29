@@ -41,6 +41,8 @@ import {
   downloadBillingInvoiceDocument,
   downloadOfficialInvoicePdf,
   downloadDutySlipPdf,
+  getReconciliationDashboard,
+  ReconciliationDashboardData,
 } from "@/lib/billingApi";
 import {
   Table,
@@ -53,7 +55,7 @@ import {
 
 export function BillingManager() {
   const { user, loading: authLoading } = useAuth();
-  const [activeTab, setActiveTab] = useState<"invoices" | "closeouts" | "generator">("invoices");
+  const [activeTab, setActiveTab] = useState<"invoices" | "closeouts" | "generator" | "reconciliation">("invoices");
   const [invoices, setInvoices] = useState<BillingInvoice[]>([]);
   const [entities, setEntities] = useState<BillingLegalEntity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +67,8 @@ export function BillingManager() {
   const [previewTitle, setPreviewTitle] = useState<string>("");
   const [selectedInvoice, setSelectedInvoice] = useState<BillingInvoice | null>(null);
   const [correctionReason, setCorrectionReason] = useState("");
+  const [recoData, setRecoData] = useState<ReconciliationDashboardData | null>(null);
+  const [recoLoading, setRecoLoading] = useState(false);
 
   // Filters
   const [search, setSearch] = useState<string>("");
@@ -103,6 +107,24 @@ export function BillingManager() {
       setEntitiesLoading(false);
     }
   };
+
+  const fetchReco = async () => {
+    setRecoLoading(true);
+    setError(null);
+    try {
+      setRecoData(await getReconciliationDashboard());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load reconciliation dashboard.");
+    } finally {
+      setRecoLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "reconciliation") {
+      fetchReco();
+    }
+  }, [activeTab]);
 
   const handlePreviewPdf = async (invoiceId: number, invNum: string) => {
     try {
@@ -312,6 +334,14 @@ export function BillingManager() {
           >
             <Plus size={16} /> Generate Invoice
           </button>
+          <button
+            className={`button ${activeTab === "reconciliation" ? "" : "secondary"}`}
+            onClick={() => setActiveTab("reconciliation")}
+            disabled={authLoading || !canManageBilling}
+            title={!canManageBilling ? "Admin or accountant access is required" : undefined}
+          >
+            <AlertTriangle size={16} /> Reconciliation
+          </button>
         </div>
 
         {activeTab === "invoices" && (
@@ -344,6 +374,8 @@ export function BillingManager() {
 
       {activeTab === "closeouts" ? (
         <CloseoutReviewManager />
+      ) : activeTab === "reconciliation" ? (
+        <ReconciliationDashboardView data={recoData} loading={recoLoading} onRefresh={fetchReco} />
       ) : activeTab === "invoices" ? (
         /* Shadcn UI Table for Billing & Invoices */
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
@@ -579,5 +611,277 @@ export function BillingManager() {
     </div>
   );
 }
+
+
+function ReconciliationDashboardView({
+  data,
+  loading,
+  onRefresh,
+}: {
+  data: ReconciliationDashboardData | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  if (loading) {
+    return (
+      <div style={{ textAlign: "center", padding: 48, color: "var(--muted)" }}>
+        <RefreshCw size={24} className="animate-spin" style={{ margin: "0 auto 12px" }} />
+        Analyzing financial subledgers and general ledger balances...
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div style={{ textAlign: "center", padding: 48, color: "var(--muted)" }}>
+        No reconciliation data available.
+        <button className="button" onClick={onRefresh} style={{ marginTop: 12 }}>
+          Load Dashboard
+        </button>
+      </div>
+    );
+  }
+
+  const exceptionCategories = [
+    {
+      title: "Trips Missing Closeout",
+      description: "Completed trips that have no closeout record or are not in BILLING_READY status.",
+      items: data.trips_missing_closeout,
+      renderHeaders: () => (
+        <>
+          <TableHead>Trip ID</TableHead>
+          <TableHead>Customer</TableHead>
+          <TableHead>Pickup Time</TableHead>
+          <TableHead>Quoted Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.trip_id}>
+          <TableCell>#{item.trip_id}</TableCell>
+          <TableCell>{item.customer_name}</TableCell>
+          <TableCell>{item.pickup_at ? new Date(item.pickup_at).toLocaleString() : "—"}</TableCell>
+          <TableCell>₹{item.amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Closeouts Not Invoiced",
+      description: "Billing-ready closeouts that are not linked to any invoice.",
+      items: data.closeouts_not_invoiced,
+      renderHeaders: () => (
+        <>
+          <TableHead>Closeout ID</TableHead>
+          <TableHead>Trip ID</TableHead>
+          <TableHead>Customer</TableHead>
+          <TableHead>Final Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.closeout_id}>
+          <TableCell>#{item.closeout_id}</TableCell>
+          <TableCell>#{item.trip_id}</TableCell>
+          <TableCell>{item.customer_name}</TableCell>
+          <TableCell>₹{item.final_total_amount}</TableCell>
+          <TableCell style={{ color: "var(--warning)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Invoices Missing GL Journal Entries",
+      description: "Issued or paid invoices that have no corresponding journal entry in the GL.",
+      items: data.invoices_missing_journals,
+      renderHeaders: () => (
+        <>
+          <TableHead>Invoice ID</TableHead>
+          <TableHead>Invoice #</TableHead>
+          <TableHead>Customer</TableHead>
+          <TableHead>Invoice Total</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.invoice_id}>
+          <TableCell>#{item.invoice_id}</TableCell>
+          <TableCell>{item.invoice_number || `DRAFT-#${item.invoice_id}`}</TableCell>
+          <TableCell>{item.customer_name}</TableCell>
+          <TableCell>₹{item.total_amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Invoice vs Journal Amount Mismatches",
+      description: "Invoices where the subledger total does not match the sum of debits in the GL journal entry.",
+      items: data.invoices_journal_amount_mismatches,
+      renderHeaders: () => (
+        <>
+          <TableHead>Invoice #</TableHead>
+          <TableHead>Journal entry</TableHead>
+          <TableHead>Invoice Amount</TableHead>
+          <TableHead>Journal Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.invoice_id}>
+          <TableCell>{item.invoice_number}</TableCell>
+          <TableCell>{item.journal_entry_number}</TableCell>
+          <TableCell>₹{item.invoice_amount}</TableCell>
+          <TableCell>₹{item.journal_amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Receipts Missing GL Journal Entries",
+      description: "Payment receipts that have no matching GL journal record.",
+      items: data.receipts_missing_journals,
+      renderHeaders: () => (
+        <>
+          <TableHead>Receipt ID</TableHead>
+          <TableHead>Receipt #</TableHead>
+          <TableHead>Customer</TableHead>
+          <TableHead>Receipt Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.receipt_id}>
+          <TableCell>#{item.receipt_id}</TableCell>
+          <TableCell>{item.receipt_number}</TableCell>
+          <TableCell>{item.customer_name}</TableCell>
+          <TableCell>₹{item.amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Receipt vs Journal Amount Mismatches",
+      description: "Receipts where the cash amount does not match the sum of debits in the GL journal entry.",
+      items: data.receipts_journal_amount_mismatches,
+      renderHeaders: () => (
+        <>
+          <TableHead>Receipt #</TableHead>
+          <TableHead>Journal entry</TableHead>
+          <TableHead>Receipt Amount</TableHead>
+          <TableHead>Journal Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.receipt_id}>
+          <TableCell>{item.receipt_number}</TableCell>
+          <TableCell>{item.journal_entry_number}</TableCell>
+          <TableCell>₹{item.receipt_amount}</TableCell>
+          <TableCell>₹{item.journal_amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "TDS Allocations Missing GL Journals",
+      description: "TDS allocations that lack corresponding journal postings in the GL.",
+      items: data.allocations_missing_journals,
+      renderHeaders: () => (
+        <>
+          <TableHead>Allocation ID</TableHead>
+          <TableHead>Receipt #</TableHead>
+          <TableHead>Invoice #</TableHead>
+          <TableHead>TDS Amount</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.allocation_id}>
+          <TableCell>#{item.allocation_id}</TableCell>
+          <TableCell>{item.receipt_number}</TableCell>
+          <TableCell>{item.invoice_number}</TableCell>
+          <TableCell>₹{item.tds_amount}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+    {
+      title: "Unbalanced GL Journal Entries",
+      description: "Journal entries where total debits do not equal total credits.",
+      items: data.unbalanced_journals,
+      renderHeaders: () => (
+        <>
+          <TableHead>Journal Entry #</TableHead>
+          <TableHead>Total Debits</TableHead>
+          <TableHead>Total Credits</TableHead>
+          <TableHead>Exception Description</TableHead>
+        </>
+      ),
+      renderRow: (item: any) => (
+        <TableRow key={item.journal_entry_number}>
+          <TableCell>{item.journal_entry_number}</TableCell>
+          <TableCell>₹{item.debit_total}</TableCell>
+          <TableCell>₹{item.credit_total}</TableCell>
+          <TableCell style={{ color: "var(--danger)" }}>{item.description}</TableCell>
+        </TableRow>
+      ),
+    },
+  ];
+
+  const totalExceptions = exceptionCategories.reduce((acc, cat) => acc + cat.items.length, 0);
+
+  return (
+    <div className="stack" style={{ gap: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Subledger to GL Reconciliation</h2>
+          <p style={{ color: "var(--muted)", margin: "4px 0 0" }}>
+            Real-time validation matching operational source events, subledgers, and general ledger journal entries.
+          </p>
+        </div>
+        <button className="button" onClick={onRefresh}>
+          <RefreshCw size={14} style={{ marginRight: 8 }} /> Re-run Audit
+        </button>
+      </div>
+
+      <div style={{ padding: 16, background: totalExceptions === 0 ? "rgba(34, 197, 94, 0.1)" : "rgba(239, 68, 68, 0.1)", border: `1px solid ${totalExceptions === 0 ? "rgba(34, 197, 94, 0.25)" : "rgba(239, 68, 68, 0.25)"}`, borderRadius: 8 }}>
+        <h4 style={{ margin: 0, display: "flex", alignItems: "center", gap: 8, color: totalExceptions === 0 ? "var(--ok)" : "var(--danger)" }}>
+          {totalExceptions === 0 ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+          {totalExceptions === 0 ? "Ledger Reconciled: Zero Unexplained Differences" : `${totalExceptions} Reconciliation Exceptions Detected`}
+        </h4>
+        <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--muted)" }}>
+          {totalExceptions === 0 
+            ? "All source records match subledger totals and have balanced double-entry journal postings in the general ledger."
+            : "Review and resolve the mismatch items below to ensure proper financial statement accuracy."}
+        </p>
+      </div>
+
+      {exceptionCategories.map((cat, idx) => {
+        if (cat.items.length === 0) return null;
+        return (
+          <div className="panel" key={idx} style={{ padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, color: "#fff" }}>{cat.title}</h3>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--muted)" }}>{cat.description}</p>
+              </div>
+              <span style={{ background: "rgba(239, 68, 68, 0.15)", color: "var(--danger)", padding: "4px 10px", borderRadius: 12, fontSize: 12, fontWeight: "bold" }}>
+                {cat.items.length} Mismatches
+              </span>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>{cat.renderHeaders()}</TableRow>
+              </TableHeader>
+              <TableBody>
+                {cat.items.map((item: any) => cat.renderRow(item))}
+              </TableBody>
+            </Table>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 
 export default BillingManager;

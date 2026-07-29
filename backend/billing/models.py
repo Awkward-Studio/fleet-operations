@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from django.db import models, transaction
 from django.core.exceptions import ValidationError
 
@@ -595,3 +596,45 @@ class TripExpense(models.Model):
 
     def __str__(self):
         return f"{self.category}: ₹{self.amount} ({self.status})"
+
+
+class FinancialAuditEvent(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="financial_audit_events",
+    )
+    action = models.CharField(max_length=60)
+    entity_type = models.CharField(max_length=60)
+    entity_id = models.CharField(max_length=60)
+    before_snapshot_hash = models.CharField(max_length=64, blank=True)
+    after_snapshot_hash = models.CharField(max_length=64, blank=True)
+    before_snapshot = models.JSONField(default=dict, blank=True)
+    after_snapshot = models.JSONField(default=dict, blank=True)
+    request_idempotency_key = models.CharField(max_length=100, blank=True)
+    source = models.CharField(max_length=50, default="WEB_CONSOLE")
+    timestamp = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
+
+    def __str__(self):
+        return f"{self.action} on {self.entity_type} #{self.entity_id} at {self.timestamp}"
+
+
+class IdempotencyRegistry(models.Model):
+    key = models.CharField(max_length=100, unique=True)
+    response_status_code = models.IntegerField()
+    response_body = models.TextField()  # JSON string
+    request_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"IdempotencyKey {self.key} created at {self.created_at}"

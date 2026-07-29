@@ -22,6 +22,21 @@ from fleet.models import MeteringPolicy, PricingAmountStatus, Trip, TripStatus
 from typing import Optional
 
 
+def check_period_lock(date_val) -> None:
+    if not date_val:
+        return
+    if isinstance(date_val, datetime.datetime):
+        date_val = date_val.date()
+    elif isinstance(date_val, str):
+        try:
+            date_val = datetime.date.fromisoformat(date_val[:10])
+        except ValueError:
+            return
+    period = FiscalPeriod.objects.filter(start_date__lte=date_val, end_date__gte=date_val).first()
+    if period and period.is_locked:
+        raise ValidationError(f"The fiscal period '{period.name}' is locked. Mutations are prohibited.")
+
+
 @dataclass(frozen=True)
 class BillabilityBlocker:
     code: str
@@ -487,6 +502,7 @@ class InvoiceService:
     @staticmethod
     @transaction.atomic
     def generate_invoice_draft(legal_entity: LegalEntity, trip_ids: list, created_by=None) -> Invoice:
+        check_period_lock(datetime.date.today())
         if not trip_ids:
             raise ValidationError("At least one trip must be provided to generate an invoice draft.")
 
@@ -731,6 +747,7 @@ class InvoiceService:
             return invoice
 
         with transaction.atomic():
+            check_period_lock(datetime.date.today())
             prefix = f"INV/{invoice.financial_year.name.replace(' ', '')}/"
             inv_number = DocumentSequence.get_next_number(
                 legal_entity=invoice.legal_entity,
@@ -753,6 +770,7 @@ class PostingEngine:
         from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
 
         with transaction.atomic():
+            check_period_lock(invoice.issue_date)
             ar_account, _ = LedgerAccount.objects.get_or_create(
                 code="1100",
                 defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
@@ -850,9 +868,311 @@ class PostingEngine:
             return journal
 
     @staticmethod
+    def post_invoice_reversal(invoice: Invoice) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            today = datetime.date.today()
+            check_period_lock(today)
+
+            fy = FinancialYear.objects.filter(start_date__lte=today, end_date__gte=today, is_closed=False).first()
+            if not fy:
+                fy = invoice.financial_year
+            period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=today, end_date__gte=today).first()
+            if not period:
+                period = invoice.fiscal_period
+
+            ar_account, _ = LedgerAccount.objects.get_or_create(
+                code="1100",
+                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
+            )
+            rev_account, _ = LedgerAccount.objects.get_or_create(
+                code="4000",
+                defaults={"name": "Passenger Transport Revenue", "account_type": AccountType.REVENUE, "external_mapping_code": "REV_4000"},
+            )
+            cgst_account, _ = LedgerAccount.objects.get_or_create(
+                code="2100",
+                defaults={"name": "Output CGST Payable", "account_type": AccountType.LIABILITY, "external_mapping_code": "TAX_2100"},
+            )
+            sgst_account, _ = LedgerAccount.objects.get_or_create(
+                code="2200",
+                defaults={"name": "Output SGST Payable", "account_type": AccountType.LIABILITY, "external_mapping_code": "TAX_2200"},
+            )
+            igst_account, _ = LedgerAccount.objects.get_or_create(
+                code="2250",
+                defaults={
+                    "name": "Output IGST Payable",
+                    "account_type": AccountType.LIABILITY,
+                    "external_mapping_code": "TAX_2250",
+                },
+            )
+
+            entry_number = f"JV/INV/REV/{invoice.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": invoice.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": today,
+                    "source_type": "INVOICE_REVERSAL",
+                    "source_id": str(invoice.id),
+                    "narration": f"Reversal journal entry for Invoice #{invoice.invoice_number or invoice.id}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=ar_account,
+                debit_amount=Decimal("0.00"),
+                credit_amount=invoice.total_amount,
+                narration=f"Reversal arising from Invoice #{invoice.invoice_number}",
+            )
+
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=rev_account,
+                debit_amount=invoice.taxable_amount,
+                credit_amount=Decimal("0.00"),
+                narration="Reversal of taxable revenue",
+            )
+
+            if invoice.cgst_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=cgst_account,
+                    debit_amount=invoice.cgst_amount,
+                    credit_amount=Decimal("0.00"),
+                    narration="Reversal of Output CGST",
+                )
+
+            if invoice.sgst_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=sgst_account,
+                    debit_amount=invoice.sgst_amount,
+                    credit_amount=Decimal("0.00"),
+                    narration="Reversal of Output SGST",
+                )
+
+            if invoice.igst_amount > Decimal("0.00"):
+                JournalLine.objects.create(
+                    journal_entry=journal,
+                    account=igst_account,
+                    debit_amount=invoice.igst_amount,
+                    credit_amount=Decimal("0.00"),
+                    narration="Reversal of Output IGST",
+                )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Reversal journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
+    def post_receipt_journal(receipt) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            date_val = receipt.receipt_date
+            check_period_lock(date_val)
+
+            fy = getattr(receipt, "financial_year", None)
+            if not fy:
+                fy = FinancialYear.objects.filter(start_date__lte=date_val, end_date__gte=date_val, is_closed=False).first()
+            if not fy:
+                fy = FinancialYear.objects.first()
+            period = getattr(receipt, "fiscal_period", None)
+            if not period:
+                period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=date_val, end_date__gte=date_val).first()
+
+            bank_account, _ = LedgerAccount.objects.get_or_create(
+                code="1000",
+                defaults={"name": "Bank & Cash Account", "account_type": AccountType.ASSET, "external_mapping_code": "CASH_1000"},
+            )
+            ar_account, _ = LedgerAccount.objects.get_or_create(
+                code="1100",
+                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
+            )
+
+            entry_number = f"JV/REC/{receipt.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": receipt.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": date_val,
+                    "source_type": "PAYMENT_RECEIPT",
+                    "source_id": str(receipt.id),
+                    "narration": f"Payment Receipt #{receipt.reference_number or receipt.id} from customer {receipt.customer.display_name}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            # Dr Bank
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=bank_account,
+                debit_amount=receipt.amount,
+                credit_amount=Decimal("0.00"),
+                narration=f"Collection on Receipt #{receipt.id}",
+            )
+
+            # Cr AR
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=ar_account,
+                debit_amount=Decimal("0.00"),
+                credit_amount=receipt.amount,
+                narration=f"Collection on Receipt #{receipt.id}",
+            )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Receipt journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
+    def post_allocation_journal(allocation) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            date_val = allocation.created_at.date() if allocation.created_at else datetime.date.today()
+            check_period_lock(date_val)
+
+            fy = getattr(allocation.receipt, "financial_year", None)
+            if not fy:
+                fy = FinancialYear.objects.filter(start_date__lte=date_val, end_date__gte=date_val, is_closed=False).first()
+            if not fy:
+                fy = FinancialYear.objects.first()
+            period = getattr(allocation.receipt, "fiscal_period", None)
+            if not period:
+                period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=date_val, end_date__gte=date_val).first()
+
+            tds_account, _ = LedgerAccount.objects.get_or_create(
+                code="1300",
+                defaults={"name": "TDS Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "TDS_1300"},
+            )
+            ar_account, _ = LedgerAccount.objects.get_or_create(
+                code="1100",
+                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
+            )
+
+            entry_number = f"JV/ALLOC/{allocation.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": allocation.receipt.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": date_val,
+                    "source_type": "PAYMENT_ALLOCATION",
+                    "source_id": str(allocation.id),
+                    "narration": f"TDS allocation for Invoice #{allocation.invoice.invoice_number} / Receipt #{allocation.receipt.id}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            # Dr TDS Receivable
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=tds_account,
+                debit_amount=allocation.tds_amount,
+                credit_amount=Decimal("0.00"),
+                narration=f"TDS deducted on allocation {allocation.id}",
+            )
+
+            # Cr AR
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=ar_account,
+                debit_amount=Decimal("0.00"),
+                credit_amount=allocation.tds_amount,
+                narration=f"AR credit for TDS on allocation {allocation.id}",
+            )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Allocation journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
+    def post_credit_note_journal(credit_note) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            date_val = credit_note.created_at.date() if credit_note.created_at else datetime.date.today()
+            check_period_lock(date_val)
+
+            fy = credit_note.invoice.financial_year
+            period = credit_note.invoice.fiscal_period
+
+            rev_account, _ = LedgerAccount.objects.get_or_create(
+                code="4000",
+                defaults={"name": "Passenger Transport Revenue", "account_type": AccountType.REVENUE, "external_mapping_code": "REV_4000"},
+            )
+            ar_account, _ = LedgerAccount.objects.get_or_create(
+                code="1100",
+                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
+            )
+
+            entry_number = f"JV/CN/{credit_note.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": credit_note.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": date_val,
+                    "source_type": "CREDIT_NOTE",
+                    "source_id": str(credit_note.id),
+                    "narration": f"Credit Note #{credit_note.credit_note_number} against Invoice #{credit_note.invoice.invoice_number}: {credit_note.reason}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            # Dr Revenue
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=rev_account,
+                debit_amount=credit_note.total_amount,
+                credit_amount=Decimal("0.00"),
+                narration=f"Adjustment arising from Credit Note {credit_note.credit_note_number}",
+            )
+
+            # Cr AR
+            JournalLine.objects.create(
+                journal_entry=journal,
+                account=ar_account,
+                debit_amount=Decimal("0.00"),
+                credit_amount=credit_note.total_amount,
+                narration=f"AR credit for Credit Note {credit_note.credit_note_number}",
+            )
+
+            total_debits = sum(line.debit_amount for line in journal.lines.all())
+            total_credits = sum(line.credit_amount for line in journal.lines.all())
+            if total_debits != total_credits:
+                raise ValidationError(f"Credit Note journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+            return journal
+
+    @staticmethod
     def post_fuel_journal(fuel_transaction, trip_expense) -> "JournalEntry":
         from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
         with transaction.atomic():
+            check_period_lock(datetime.date.today())
             fuel_exp_acc, _ = LedgerAccount.objects.get_or_create(
                 code="5100",
                 defaults={"name": "Fuel Expense", "account_type": AccountType.EXPENSE, "external_mapping_code": "EXP_5100"}
@@ -939,6 +1259,7 @@ class PostingEngine:
     def post_fuel_reversal_journal(fuel_transaction) -> "JournalEntry":
         from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
         with transaction.atomic():
+            check_period_lock(datetime.date.today())
             fuel_exp_acc, _ = LedgerAccount.objects.get_or_create(
                 code="5100",
                 defaults={"name": "Fuel Expense", "account_type": AccountType.EXPENSE, "external_mapping_code": "EXP_5100"}
@@ -1028,6 +1349,7 @@ class PaymentService:
     def record_receipt(legal_entity, customer, amount, payment_method="BANK_TRANSFER", reference_number="", created_by=None):
         from .models import PaymentReceipt
         with transaction.atomic():
+            check_period_lock(datetime.date.today())
             fy = FinancialYear.objects.filter(is_closed=False).first()
             prefix = f"REC/{fy.name.replace(' ', '')}/" if fy else "REC/2026/"
             rec_num = DocumentSequence.get_next_number(
@@ -1046,6 +1368,7 @@ class PaymentService:
                 reference_number=reference_number,
                 created_by=created_by,
             )
+            PostingEngine.post_receipt_journal(receipt)
             return receipt
 
     @staticmethod
@@ -1057,6 +1380,7 @@ class PaymentService:
             raise ValidationError("Allocation amount cannot exceed invoice remaining balance.")
 
         with transaction.atomic():
+            check_period_lock(datetime.date.today())
             allocation = PaymentAllocation.objects.create(
                 receipt=receipt,
                 invoice=invoice,
@@ -1075,4 +1399,67 @@ class PaymentService:
                 invoice.status = InvoiceStatus.PARTIALLY_PAID
             invoice.save()
 
+            if tds_amount > Decimal("0.00"):
+                PostingEngine.post_allocation_journal(allocation)
+
             return allocation
+
+
+class AuditService:
+    @staticmethod
+    def serialize_model(instance) -> dict:
+        import uuid
+        import json
+        if not instance:
+            return {}
+        data = {}
+        for field in instance._meta.fields:
+            value = getattr(instance, field.name)
+            if isinstance(value, (datetime.date, datetime.datetime)):
+                data[field.name] = value.isoformat()
+            elif isinstance(value, Decimal):
+                data[field.name] = str(value)
+            elif isinstance(value, uuid.UUID):
+                data[field.name] = str(value)
+            elif hasattr(value, "id"):
+                data[field.name] = str(value.id)
+            else:
+                try:
+                    data[field.name] = value
+                except Exception:
+                    data[field.name] = str(value)
+        return data
+
+    @staticmethod
+    def compute_hash(data: dict) -> str:
+        import json
+        import hashlib
+        from django.core.serializers.json import DjangoJSONEncoder
+        serialized = json.dumps(data, sort_keys=True, cls=DjangoJSONEncoder)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def record_event(actor, action, instance, before_snapshot=None, reason="", request_idempotency_key="") -> "FinancialAuditEvent":
+        from .models import FinancialAuditEvent
+        
+        entity_type = instance.__class__.__name__
+        entity_id = str(instance.id)
+        
+        after_snapshot = AuditService.serialize_model(instance)
+        after_hash = AuditService.compute_hash(after_snapshot)
+        
+        before_snapshot = before_snapshot or {}
+        before_hash = AuditService.compute_hash(before_snapshot) if before_snapshot else ""
+        
+        return FinancialAuditEvent.objects.create(
+            actor=actor if (actor and actor.is_authenticated) else None,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            before_snapshot=before_snapshot,
+            before_snapshot_hash=before_hash,
+            after_snapshot=after_snapshot,
+            after_snapshot_hash=after_hash,
+            reason=reason,
+            request_idempotency_key=request_idempotency_key,
+        )

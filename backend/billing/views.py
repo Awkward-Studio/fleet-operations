@@ -1,3 +1,6 @@
+import hashlib
+import json
+from functools import wraps
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -7,27 +10,100 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDeliveryAttempt, LegalEntity, TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus
-from .serializers import BillableTripSerializer, LegalEntitySerializer, TripCloseoutSerializer, TripChargeSerializer, InvoiceSerializer
-from .services import BillabilityService, CloseoutService, InvoiceService
+from .models import (
+    CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDeliveryAttempt, LegalEntity,
+    TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus,
+    IdempotencyRegistry, FinancialAuditEvent, PaymentReceipt, PaymentAllocation, CreditNote
+)
+from .serializers import (
+    BillableTripSerializer, LegalEntitySerializer, TripCloseoutSerializer, TripChargeSerializer, InvoiceSerializer,
+    PaymentReceiptSerializer, PaymentAllocationSerializer, CreditNoteSerializer
+)
+from .services import BillabilityService, CloseoutService, InvoiceService, check_period_lock, PostingEngine, AuditService
 from .reports import CloseoutReconciliationReport
 from fleet.models import PricingAmountStatus, Trip
 from fleet.permissions import IsCommercialAdmin
+from accounts.permissions import HasFinancialRolePermission, HasLegalEntityScope, HasCustomerScope
+from accounts.models import UserRole
+
+
+def idempotent_action():
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, request, *args, **kwargs):
+            key = request.headers.get("X-Idempotency-Key") or request.data.get("idempotency_key")
+            
+            try:
+                body_bytes = json.dumps(request.data or {}, sort_keys=True).encode("utf-8")
+            except Exception:
+                body_bytes = str(request.data or {}).encode("utf-8")
+            
+            request_hash = hashlib.sha256(body_bytes).hexdigest()
+            
+            if not key:
+                user_id = request.user.id if request.user and request.user.is_authenticated else "anonymous"
+                key = f"auto-{user_id}-{request.path}-{request_hash}"
+                
+            entry = IdempotencyRegistry.objects.filter(key=key).first()
+            if entry:
+                if entry.request_hash != request_hash:
+                    return Response(
+                        {"detail": "Idempotency key conflict: key already used for a different request payload."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                try:
+                    stored_body = json.loads(entry.response_body)
+                except Exception:
+                    stored_body = entry.response_body
+                return Response(stored_body, status=entry.response_status_code)
+                
+            response = func(self, request, *args, **kwargs)
+            
+            if response.status_code < 500:
+                try:
+                    resp_body_str = json.dumps(response.data)
+                except Exception:
+                    resp_body_str = str(response.data)
+                IdempotencyRegistry.objects.create(
+                    key=key,
+                    response_status_code=response.status_code,
+                    response_body=resp_body_str,
+                    request_hash=request_hash,
+                )
+                
+            return response
+        return wrapper
+    return decorator
 
 
 class LegalEntityViewSet(viewsets.ModelViewSet):
     queryset = LegalEntity.objects.filter(is_active=True)
     serializer_class = LegalEntitySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasLegalEntityScope]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            assigned = self.request.user.assigned_legal_entities.all()
+            if assigned.exists():
+                queryset = queryset.filter(id__in=assigned.values_list("id", flat=True))
+        return queryset
 
 
 class TripCloseoutViewSet(viewsets.ModelViewSet):
     queryset = TripCloseout.objects.select_related("trip").prefetch_related("extra_charges", "audit_events").all()
     serializer_class = TripCloseoutSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasCustomerScope]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        
+        # Enforce Customer Scope
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            active_companies = self.request.user.active_memberships.values_list("company_id", flat=True)
+            if active_companies.exists():
+                queryset = queryset.filter(trip__customer_id__in=active_companies)
+                
         closeout_status = self.request.query_params.get("status")
         trip_id = self.request.query_params.get("trip")
         if closeout_status:
@@ -68,9 +144,11 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         return Response(CloseoutReconciliationReport.build())
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def submit(self, request, pk=None):
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         if closeout.status not in (CloseoutStatus.INCOMPLETE, CloseoutStatus.REOPENED, CloseoutStatus.EXCEPTION_REVIEW):
             return Response({"detail": "Closeout is not editable/submittable."}, status=status.HTTP_409_CONFLICT)
         CloseoutService.derive_actual_quantities(closeout)
@@ -79,6 +157,7 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         if closeout.blockers:
             closeout.status = CloseoutStatus.EXCEPTION_REVIEW
             closeout.save(update_fields=["status", "updated_at"])
+            AuditService.record_event(request.user, "CLOSEOUT_SUBMIT_FAIL", closeout, before_snap, "Blockers found", request.headers.get("X-Idempotency-Key", ""))
             return Response(TripCloseoutSerializer(closeout).data, status=status.HTTP_409_CONFLICT)
         previous = closeout.status
         closeout.status = CloseoutStatus.SUBMITTED
@@ -86,13 +165,16 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         closeout.submitted_at = timezone.now()
         closeout.save(update_fields=["status", "submitted_by", "submitted_at", "updated_at"])
         self._audit(closeout, "SUBMIT", request.user, previous)
+        AuditService.record_event(request.user, "CLOSEOUT_SUBMIT", closeout, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
         return Response(TripCloseoutSerializer(closeout).data)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def approve(self, request, pk=None):
         self._commercial_or_403(request)
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         if closeout.status != CloseoutStatus.SUBMITTED:
             return Response({"detail": "Only submitted closeouts can be approved."}, status=status.HTTP_409_CONFLICT)
         if closeout.submitted_by_id == request.user.id:
@@ -105,13 +187,16 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         closeout.approved_at = timezone.now()
         closeout.save(update_fields=["status", "approved_by", "approved_at", "billing_ready", "updated_at"])
         self._audit(closeout, "APPROVE", request.user, previous)
+        AuditService.record_event(request.user, "CLOSEOUT_APPROVE", closeout, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
         return Response(TripCloseoutSerializer(closeout).data)
 
     @action(detail=True, methods=["post"], url_path="return")
+    @idempotent_action()
     @transaction.atomic
     def return_for_changes(self, request, pk=None):
         self._commercial_or_403(request)
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         if closeout.status not in (CloseoutStatus.SUBMITTED, CloseoutStatus.EXCEPTION_REVIEW):
             return Response({"detail": "Only submitted/exception closeouts can be returned."}, status=status.HTTP_409_CONFLICT)
         reason = self._reason(request)
@@ -119,13 +204,16 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         closeout.status = CloseoutStatus.REOPENED
         closeout.save(update_fields=["status", "billing_ready", "updated_at"])
         self._audit(closeout, "RETURN", request.user, previous, reason)
+        AuditService.record_event(request.user, "CLOSEOUT_RETURN", closeout, before_snap, reason, request.headers.get("X-Idempotency-Key", ""))
         return Response(TripCloseoutSerializer(closeout).data)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def reopen(self, request, pk=None):
         self._commercial_or_403(request)
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         if closeout.status not in (CloseoutStatus.APPROVED, CloseoutStatus.BILLING_READY):
             return Response({"detail": "Only approved closeouts can be reopened."}, status=status.HTTP_409_CONFLICT)
         if InvoiceTrip.objects.filter(trip=closeout.trip).exists():
@@ -137,13 +225,16 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         closeout.approved_at = None
         closeout.save(update_fields=["status", "approved_by", "approved_at", "billing_ready", "updated_at"])
         self._audit(closeout, "REOPEN", request.user, previous, reason)
+        AuditService.record_event(request.user, "CLOSEOUT_REOPEN", closeout, before_snap, reason, request.headers.get("X-Idempotency-Key", ""))
         return Response(TripCloseoutSerializer(closeout).data)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def mark_billing_ready(self, request, pk=None):
         self._commercial_or_403(request)
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         if closeout.status != CloseoutStatus.APPROVED:
             return Response({"detail": "Closeout must be approved first."}, status=status.HTTP_409_CONFLICT)
         previous = closeout.status
@@ -164,6 +255,7 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
         self._audit(closeout, "MARK_BILLING_READY", request.user, previous)
+        AuditService.record_event(request.user, "CLOSEOUT_MARK_BILLING_READY", closeout, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
         serialized = self.get_queryset().get(pk=closeout.pk)
         return Response(TripCloseoutSerializer(serialized).data)
 
@@ -179,10 +271,12 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def approve_charge(self, request, pk=None):
         self._commercial_or_403(request)
         closeout = self.get_object()
+        before_snap = AuditService.serialize_model(closeout)
         charge = closeout.extra_charges.filter(pk=request.data.get("charge_id")).first()
         if not charge:
             return Response({"detail": "Charge not found for this closeout."}, status=status.HTTP_404_NOT_FOUND)
@@ -195,13 +289,31 @@ class TripCloseoutViewSet(viewsets.ModelViewSet):
         CloseoutService.rerate_from_original_snapshot(closeout.id)
         closeout.refresh_from_db()
         self._audit(closeout, "APPROVE_CHARGE", request.user, closeout.status, f"Charge {charge.id}")
+        AuditService.record_event(request.user, "CLOSEOUT_APPROVE_CHARGE", closeout, before_snap, f"Charge {charge.id}", request.headers.get("X-Idempotency-Key", ""))
         return Response(TripCloseoutSerializer(closeout).data)
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
     queryset = Invoice.objects.select_related("legal_entity", "customer").prefetch_related("lines", "audit_events", "documents__delivery_attempts").all()
     serializer_class = InvoiceSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasLegalEntityScope, HasCustomerScope]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Enforce Customer Scope
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            active_companies = self.request.user.active_memberships.values_list("company_id", flat=True)
+            if active_companies.exists():
+                queryset = queryset.filter(customer_id__in=active_companies)
+                
+        # Enforce Legal Entity Scope
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            assigned = self.request.user.assigned_legal_entities.all()
+            if assigned.exists():
+                queryset = queryset.filter(legal_entity__in=assigned)
+                
+        return queryset
 
     def _commercial_or_403(self, request):
         permission = IsCommercialAdmin()
@@ -227,10 +339,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def submit_review(self, request, pk=None):
         self._commercial_or_403(request)
         invoice = self.get_object()
+        before_snap = AuditService.serialize_model(invoice)
         if invoice.status != InvoiceStatus.DRAFT:
             return Response(
                 {"detail": "Only draft invoices can be submitted for review."},
@@ -242,21 +356,24 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.submitted_at = timezone.now()
         invoice.save(update_fields=["status", "submitted_by", "submitted_at", "updated_at"])
         self._audit(invoice, "SUBMIT_REVIEW", request.user, previous)
+        AuditService.record_event(request.user, "INVOICE_SUBMIT_REVIEW", invoice, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
         return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def approve(self, request, pk=None):
         self._commercial_or_403(request)
         invoice = self.get_object()
+        before_snap = AuditService.serialize_model(invoice)
         if invoice.status != InvoiceStatus.REVIEW:
             return Response(
                 {"detail": "Only invoices in review can be approved."},
                 status=status.HTTP_409_CONFLICT,
             )
-        if invoice.submitted_by_id == request.user.id:
+        if invoice.submitted_by_id == request.user.id or invoice.created_by_id == request.user.id:
             return Response(
-                {"detail": "The submitter cannot approve their own invoice."},
+                {"detail": "The creator or submitter cannot approve their own invoice."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         previous = invoice.status
@@ -265,13 +382,17 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.approved_at = timezone.now()
         invoice.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
         self._audit(invoice, "APPROVE", request.user, previous)
+        AuditService.record_event(request.user, "INVOICE_APPROVE", invoice, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
         return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     @transaction.atomic
     def void(self, request, pk=None):
         self._commercial_or_403(request)
+        check_period_lock(timezone.now().date())
         invoice = self.get_object()
+        before_snap = AuditService.serialize_model(invoice)
         reason = str(request.data.get("reason", "")).strip()
         if not reason:
             return Response(
@@ -297,7 +418,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         previous = invoice.status
         invoice.status = InvoiceStatus.VOID
         invoice.save(update_fields=["status", "updated_at"])
+
+        # Post Reversal Journal Entry if issued or sent
+        if previous in [InvoiceStatus.ISSUED, InvoiceStatus.SENT]:
+            PostingEngine.post_invoice_reversal(invoice)
+
         self._audit(invoice, "VOID", request.user, previous, reason)
+        AuditService.record_event(request.user, "INVOICE_VOID", invoice, before_snap, reason, request.headers.get("X-Idempotency-Key", ""))
         return Response(InvoiceSerializer(self.get_queryset().get(pk=invoice.pk)).data)
 
     @action(detail=False, methods=["get"])
@@ -462,6 +589,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return Response({"groups": payload})
 
     @action(detail=False, methods=["post"])
+    @idempotent_action()
     def generate_draft(self, request):
         legal_entity_id = request.data.get("legal_entity_id")
         trip_ids = request.data.get("trip_ids", [])
@@ -472,6 +600,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         try:
             entity = LegalEntity.objects.get(id=legal_entity_id)
             invoice = InvoiceService.generate_invoice_draft(entity, trip_ids, created_by=request.user)
+            AuditService.record_event(request.user, "INVOICE_GENERATE_DRAFT", invoice, None, "", request.headers.get("X-Idempotency-Key", ""))
             return Response(InvoiceSerializer(invoice).data, status=status.HTTP_201_CREATED)
         except LegalEntity.DoesNotExist:
             return Response({"detail": "Legal entity not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -479,9 +608,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return Response({"detail": str(ve)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["post"])
+    @idempotent_action()
     def issue(self, request, pk=None):
         self._commercial_or_403(request)
         invoice = self.get_object()
+        before_snap = AuditService.serialize_model(invoice)
         if invoice.status != InvoiceStatus.APPROVED:
             return Response(
                 {"detail": "Invoice must be independently approved before issue."},
@@ -491,6 +622,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             previous = invoice.status
             issued = InvoiceService.issue_invoice(invoice, created_by=request.user)
             self._audit(issued, "ISSUE", request.user, previous)
+            AuditService.record_event(request.user, "INVOICE_ISSUE", issued, before_snap, "", request.headers.get("X-Idempotency-Key", ""))
             return Response(
                 InvoiceSerializer(self.get_queryset().get(pk=issued.pk)).data
             )
@@ -610,4 +742,134 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="duty-slip-{invoice_label}.pdf"'
         return response
+
+    @action(detail=False, methods=["get"], url_path="reconciliation-dashboard")
+    def reconciliation_dashboard(self, request):
+        self._commercial_or_403(request)
+        from .reports import ReconciliationService
+        data = ReconciliationService.reconcile()
+        return Response(data)
+
+
+class PaymentReceiptViewSet(viewsets.ModelViewSet):
+    queryset = PaymentReceipt.objects.select_related("customer", "legal_entity").all().order_by("-receipt_date", "-id")
+    serializer_class = PaymentReceiptSerializer
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasLegalEntityScope, HasCustomerScope]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            active_companies = self.request.user.active_memberships.values_list("company_id", flat=True)
+            if active_companies.exists():
+                queryset = queryset.filter(customer_id__in=active_companies)
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            assigned = self.request.user.assigned_legal_entities.all()
+            if assigned.exists():
+                queryset = queryset.filter(legal_entity__in=assigned)
+        return queryset
+
+    @idempotent_action()
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        check_period_lock(timezone.now().date())
+        response = super().create(request, *args, **kwargs)
+        if response.status_code == status.HTTP_201_CREATED:
+            receipt = PaymentReceipt.objects.get(pk=response.data["id"])
+            PostingEngine.post_receipt_journal(receipt)
+            AuditService.record_event(request.user, "RECEIPT_CREATE", receipt, None, "", request.headers.get("X-Idempotency-Key", ""))
+        return response
+
+
+class PaymentAllocationViewSet(viewsets.ModelViewSet):
+    queryset = PaymentAllocation.objects.select_related("receipt", "invoice").all().order_by("-id")
+    serializer_class = PaymentAllocationSerializer
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission]
+
+    @idempotent_action()
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        check_period_lock(timezone.now().date())
+        receipt_id = request.data.get("receipt")
+        invoice_id = request.data.get("invoice")
+        amount = Decimal(str(request.data.get("allocated_amount", "0.00")))
+        tds_amount = Decimal(str(request.data.get("tds_amount", "0.00")))
+
+        receipt = PaymentReceipt.objects.get(pk=receipt_id)
+        invoice = Invoice.objects.get(pk=invoice_id)
+
+        total_credit = amount + tds_amount
+        if total_credit > invoice.balance_amount:
+            raise ValidationError("Allocation amount cannot exceed invoice remaining balance.")
+        if amount > receipt.unapplied_amount:
+            raise ValidationError("Allocation amount cannot exceed receipt unapplied amount.")
+
+        allocation = PaymentAllocation.objects.create(
+            receipt=receipt,
+            invoice=invoice,
+            allocated_amount=amount,
+            tds_amount=tds_amount,
+        )
+        receipt.unapplied_amount -= amount
+        receipt.save()
+
+        invoice.paid_amount += total_credit
+        if invoice.paid_amount >= invoice.total_amount:
+            invoice.status = InvoiceStatus.PAID
+        elif invoice.paid_amount > Decimal("0.00"):
+            invoice.status = InvoiceStatus.PARTIALLY_PAID
+        invoice.save()
+
+        if tds_amount > Decimal("0.00"):
+            PostingEngine.post_allocation_journal(allocation)
+
+        AuditService.record_event(request.user, "ALLOCATION_CREATE", allocation, None, "", request.headers.get("X-Idempotency-Key", ""))
+        return Response(PaymentAllocationSerializer(allocation).data, status=status.HTTP_201_CREATED)
+
+
+class CreditNoteViewSet(viewsets.ModelViewSet):
+    queryset = CreditNote.objects.select_related("invoice", "legal_entity").all().order_by("-created_at", "-id")
+    serializer_class = CreditNoteSerializer
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasLegalEntityScope]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            assigned = self.request.user.assigned_legal_entities.all()
+            if assigned.exists():
+                queryset = queryset.filter(legal_entity__in=assigned)
+        return queryset
+
+    @idempotent_action()
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        check_period_lock(timezone.now().date())
+        invoice_id = request.data.get("invoice")
+        invoice = Invoice.objects.get(pk=invoice_id)
+        if invoice.status not in [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID]:
+            raise ValidationError("Credit notes can only be issued against Issued or Partially Paid invoices.")
+
+        amount = Decimal(str(request.data.get("amount", "0.00")))
+        reason = request.data.get("reason", "")
+        if amount > invoice.balance_amount:
+            raise ValidationError("Credit note amount cannot exceed invoice remaining balance.")
+
+        credit_note = CreditNote.objects.create(
+            invoice=invoice,
+            legal_entity=invoice.legal_entity,
+            credit_note_number=f"CN-{timezone.now().strftime('%Y%m%d%H%M%S')}",
+            total_amount=amount,
+            reason=reason,
+            created_by=request.user,
+        )
+
+        PostingEngine.post_credit_note_journal(credit_note)
+        invoice.paid_amount += amount
+        if invoice.paid_amount >= invoice.total_amount:
+            invoice.status = InvoiceStatus.PAID
+        elif invoice.paid_amount > Decimal("0.00"):
+            invoice.status = InvoiceStatus.PARTIALLY_PAID
+        invoice.save()
+
+        AuditService.record_event(request.user, "CREDIT_NOTE_CREATE", credit_note, None, reason, request.headers.get("X-Idempotency-Key", ""))
+        return Response(CreditNoteSerializer(credit_note).data, status=status.HTTP_201_CREATED)
 

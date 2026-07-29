@@ -369,3 +369,68 @@ export function downloadDutySlipPdf(invoiceId: number): Promise<Blob> {
   return requestBlob(`/billing/invoices/${invoiceId}/duty-slip-pdf/`);
 }
 
+
+export type ReconciliationDashboardData = {
+  trips_missing_closeout: Array<{
+    trip_id: number;
+    customer_name: string;
+    pickup_at: string | null;
+    amount: string;
+    description: string;
+  }>;
+  closeouts_not_invoiced: Array<{
+    closeout_id: number;
+    trip_id: number;
+    customer_name: string;
+    final_total_amount: string;
+    description: string;
+  }>;
+  invoices_missing_journals: Array<{
+    invoice_id: number;
+    invoice_number: string;
+    customer_name: string;
+    total_amount: string;
+    description: string;
+  }>;
+  invoices_journal_amount_mismatches: Array<{
+    invoice_id: number;
+    invoice_number: string;
+    journal_entry_number: string;
+    invoice_amount: string;
+    journal_amount: string;
+    description: string;
+  }>;
+  receipts_missing_journals: Array<{
+    receipt_id: number;
+    receipt_number: string;
+    customer_name: string;
+    amount: string;
+    description: string;
+  }>;
+  receipts_journal_amount_mismatches: Array<{
+    receipt_id: number;
+    receipt_number: string;
+    journal_entry_number: string;
+    receipt_amount: string;
+    journal_amount: string;
+    description: string;
+  }>;
+  allocations_missing_journals: Array<{
+    allocation_id: number;
+    receipt_number: string;
+    invoice_number: string;
+    tds_amount: string;
+    description: string;
+  }>;
+  unbalanced_journals: Array<{
+    journal_entry_number: string;
+    debit_total: string;
+    credit_total: string;
+    description: string;
+  }>;
+};
+
+export function getReconciliationDashboard(): Promise<ReconciliationDashboardData> {
+  return request<ReconciliationDashboardData>("/billing/invoices/reconciliation-dashboard/");
+}
+

@@ -413,7 +413,7 @@ export default function ContractManager() {
             background: "rgba(30, 41, 59, 0.7)",
             border: "1px solid rgba(56, 189, 248, 0.3)",
             display: "flex",
-            justify: "space-between",
+            justifyContent: "space-between",
             alignItems: "center",
           }}
         >

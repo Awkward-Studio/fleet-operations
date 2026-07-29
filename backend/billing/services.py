@@ -614,12 +614,22 @@ class InvoiceService:
                 snapshot = t.pricing_snapshot or {}
                 itemized = snapshot.get("itemized_charges", {})
                 contract = t.contract
-                cgst_rate = (
-                    contract.cgst_rate if contract else itemized.get("cgst_rate", 0)
-                )
-                sgst_rate = (
-                    contract.sgst_rate if contract else itemized.get("sgst_rate", 0)
-                )
+                rate_terms = snapshot.get("rate_terms", {})
+                taxes = snapshot.get("taxes", {})
+
+                def _get_rate(key):
+                    if contract and getattr(contract, key, None) is not None:
+                        return getattr(contract, key)
+                    if key in itemized and itemized[key] is not None:
+                        return itemized[key]
+                    if key in rate_terms and rate_terms[key] is not None:
+                        return rate_terms[key]
+                    if key in taxes and taxes[key] is not None:
+                        return taxes[key]
+                    return "2.50"
+
+                cgst_rate = Decimal(str(_get_rate("cgst_rate")))
+                sgst_rate = Decimal(str(_get_rate("sgst_rate")))
                 tax = TaxService.calculate_line(
                     taxable_value=taxable,
                     cgst_rate=cgst_rate,

@@ -6,55 +6,24 @@ import {
   Building2,
   CheckCircle2,
   AlertTriangle,
-  Search,
   Plus,
   Pencil,
   Trash2,
-  Copy,
-  ShieldCheck,
-  Percent,
-  Clock,
-  Car,
-  MapPin,
-  HelpCircle,
-  FileCheck,
-  Eye,
-  X,
-  Grid,
-  Layers,
-  Settings2,
-  BookOpen,
-  Filter,
-  Tag,
   RefreshCw,
+  Save,
+  X,
 } from "lucide-react";
 import {
   CorporateContract,
-  ContractRate,
-  ContractAllowance,
   CorporateCustomer,
   RateBook,
-  RatePackage,
   getContracts,
   getCustomers,
   getRateBooks,
-  updateRatePackage,
   createContract,
   updateContract,
-  activateContract,
-  validateContract,
-  copyContract,
-  deleteContract,
 } from "@/lib/api";
 import { useAuth } from "@/lib/AuthContext";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from "@/components/ui/table";
 
 export default function ContractManager() {
   const { user } = useAuth();
@@ -66,23 +35,15 @@ export default function ContractManager() {
 
   const [contracts, setContracts] = useState<CorporateContract[]>([]);
   const [customers, setCustomers] = useState<CorporateCustomer[]>([]);
+  const [rateBooks, setRateBooks] = useState<RateBook[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Navigation Tab State ("excel" | "matrix" | "contracts" | "default_books")
-  const [activeTab, setActiveTab] = useState<"excel" | "matrix" | "contracts" | "default_books">("excel");
-
-  // Excel Sub-Tab State ("pivot" | "detailed" | "allowances")
-  const [excelSubTab, setExcelSubTab] = useState<"pivot" | "detailed" | "allowances">("pivot");
-
-  // Excel Spreadsheet State
-  const [excelContractId, setExcelContractId] = useState<string>("PUBLIC"); // "PUBLIC" or contract ID
-  const [excelVehicleCategory, setExcelVehicleCategory] = useState<string>("Dzire/Amaze/Etios");
+  const [excelContractId, setExcelContractId] = useState<string>("PUBLIC");
   const [excelCity, setExcelCity] = useState<string>("Mumbai");
-  const [isAxesSwapped, setIsAxesSwapped] = useState<boolean>(true); // Toggle Y-Axis / X-Axis
+  const [isAxesSwapped, setIsAxesSwapped] = useState<boolean>(true);
 
-  // 2D Matrix Pivot Columns (Car Types) & Rows (Duty Types)
   const [pivotVehicles, setPivotVehicles] = useState<string[]>([
     "Dzire / Amaze / Etios",
     "Ertiga / SUV",
@@ -102,210 +63,46 @@ export default function ContractManager() {
     "Extra HR Rate (₹/hr)",
   ]);
 
-  // 2D Grid Store: pivotGrid[dutyType][vehicleCat] = rateValue
-  const [pivotGrid, setPivotGrid] = useState<{ [dutyType: string]: { [vehicleCat: string]: number | string } }>({
-    "4 Hrs / 40 KMs": {
-      "Dzire / Amaze / Etios": 1000,
-      "Ertiga / SUV": 1400,
-      "Innova Crysta": 1800,
-      "Luxury (Camry / Merc)": 3500,
-      "Tempo Traveller": 4500,
-    },
-    "8 Hrs / 80 KMs": {
-      "Dzire / Amaze / Etios": 1800,
-      "Ertiga / SUV": 2400,
-      "Innova Crysta": 3000,
-      "Luxury (Camry / Merc)": 6000,
-      "Tempo Traveller": 7500,
-    },
-    "10 Hrs / 100 KMs": {
-      "Dzire / Amaze / Etios": 2200,
-      "Ertiga / SUV": 2900,
-      "Innova Crysta": 3600,
-      "Luxury (Camry / Merc)": 7200,
-      "Tempo Traveller": 9000,
-    },
-    "12 Hrs / 120 KMs": {
-      "Dzire / Amaze / Etios": 2600,
-      "Ertiga / SUV": 3400,
-      "Innova Crysta": 4200,
-      "Luxury (Camry / Merc)": 8400,
-      "Tempo Traveller": 10500,
-    },
-    "Airport Transfer (4H/40K)": {
-      "Dzire / Amaze / Etios": 1350,
-      "Ertiga / SUV": 1800,
-      "Innova Crysta": 2200,
-      "Luxury (Camry / Merc)": 4000,
-      "Tempo Traveller": 5000,
-    },
-    "Outstation (Daily Min 300Km)": {
-      "Dzire / Amaze / Etios": 3600,
-      "Ertiga / SUV": 4800,
-      "Innova Crysta": 6000,
-      "Luxury (Camry / Merc)": 12000,
-      "Tempo Traveller": 15000,
-    },
-    "Extra KM Rate (₹/km)": {
-      "Dzire / Amaze / Etios": 16,
-      "Ertiga / SUV": 20,
-      "Innova Crysta": 24,
-      "Luxury (Camry / Merc)": 50,
-      "Tempo Traveller": 60,
-    },
-    "Extra HR Rate (₹/hr)": {
-      "Dzire / Amaze / Etios": 125,
-      "Ertiga / SUV": 175,
-      "Innova Crysta": 225,
-      "Luxury (Camry / Merc)": 400,
-      "Tempo Traveller": 500,
-    },
-  });
+  const [pivotGrid, setPivotGrid] = useState<{ [dutyType: string]: { [vehicleCat: string]: number | string } }>({});
 
-  // Excel Duty Rows Draft
-  const [excelRows, setExcelRows] = useState<Array<{
-    id: string;
-    dutyType: string;
-    baseRate: string | number;
-    extraKmRate: string | number;
-    extraHourRate: string | number;
-    autoSwitchKm: string | number;
-    autoSwitchTime: string;
-    switchGroup: string;
-    isCustom?: boolean;
-  }>>([]);
-
-  // Excel Allowances Draft
-  const [excelAllowances, setExcelAllowances] = useState<{
-    driverDaily: string | number;
-    outstationAllowance: string | number;
-    outstationNight: string | number;
-    nightAllowance: string | number;
-    earlyStart: string | number;
-    sundayAllowance: string | number;
-    extraDuty: string | number;
-    overtimeHr: string | number;
-  }>({
-    driverDaily: 300,
+  const [excelAllowances, setExcelAllowances] = useState({
     outstationAllowance: 300,
     outstationNight: 300,
     nightAllowance: 250,
     earlyStart: 150,
-    sundayAllowance: 200,
-    extraDuty: 200,
-    overtimeHr: 150,
   });
 
   const [savingExcel, setSavingExcel] = useState<boolean>(false);
-
-  const handleAddPivotDutyRow = () => {
-    const newRowName = prompt("Enter Custom Duty Type (e.g. 6 Hrs / 60 KMs or Outstation 250Km):");
-    if (!newRowName || !newRowName.trim()) return;
-    const name = newRowName.trim();
-    setPivotDutyTypes([...pivotDutyTypes, name]);
-    const updatedGrid = { ...pivotGrid };
-    updatedGrid[name] = {};
-    pivotVehicles.forEach((v) => {
-      updatedGrid[name][v] = 1500;
-    });
-    setPivotGrid(updatedGrid);
-  };
-
-  const handleAddPivotVehicleCol = () => {
-    const newColName = prompt("Enter Custom Car / Vehicle Category Name (e.g. Electric Sedan or Luxury SUV):");
-    if (!newColName || !newColName.trim()) return;
-    const name = newColName.trim();
-    setPivotVehicles([...pivotVehicles, name]);
-    const updatedGrid = { ...pivotGrid };
-    pivotDutyTypes.forEach((dt) => {
-      if (!updatedGrid[dt]) updatedGrid[dt] = {};
-      updatedGrid[dt][name] = dt.includes("Extra KM") ? 18 : dt.includes("Extra HR") ? 150 : 2000;
-    });
-    setPivotGrid(updatedGrid);
-  };
-
-  const handleSavePivotMatrix = async () => {
-    try {
-      setSavingExcel(true);
-      setError(null);
-      if (excelContractId === "PUBLIC") {
-        setSuccess("Public default 2D rate matrix updated successfully!");
-      } else {
-        const contract = contracts.find((c) => c.id.toString() === excelContractId);
-        if (contract) {
-          const updatedRates: any[] = [];
-          pivotDutyTypes.forEach((dt) => {
-            pivotVehicles.forEach((v) => {
-              const baseRate = pivotGrid[dt]?.[v];
-              if (baseRate !== undefined && baseRate !== "") {
-                updatedRates.push({
-                  city: excelCity,
-                  vehicle_category: v.split("/")[0].trim().toLowerCase(),
-                  duty_type: dt,
-                  included_hours: dt.includes("4") ? 4 : dt.includes("8") ? 8 : dt.includes("10") ? 10 : dt.includes("12") ? 12 : 8,
-                  included_km: dt.includes("40") ? 40 : dt.includes("80") ? 80 : dt.includes("100") ? 100 : dt.includes("120") ? 120 : 80,
-                  base_rate: baseRate,
-                  extra_hour_rate: 150,
-                  extra_km_rate: 18,
-                });
-              }
-            });
-          });
-
-          await updateContract(contract.id, { rates: updatedRates });
-          setSuccess(`Contract '${contract.title}' 2D rate matrix updated successfully!`);
-        }
-      }
-      fetchInitialData();
-    } catch (err: any) {
-      setError(err.message || "Failed to save 2D matrix.");
-    } finally {
-      setSavingExcel(false);
-    }
-  };
-
-  // Rate Books State
-  const [rateBooks, setRateBooks] = useState<RateBook[]>([]);
-
-  // Master Rate Matrix Filters
-  const [matrixScopeFilter, setMatrixScopeFilter] = useState<string>("ALL");
-  const [matrixCategoryFilter, setMatrixCategoryFilter] = useState<string>("ALL");
-  const [matrixDutyFilter, setMatrixDutyFilter] = useState<string>("ALL");
-
-  // Rate Package Quick Edit State
-  const [editingRatePkg, setEditingRatePkg] = useState<RatePackage | null>(null);
-  const [savingRatePkg, setSavingRatePkg] = useState<boolean>(false);
-
-  // Filters
-  const [search, setSearch] = useState<string>("");
-  const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>("ALL");
-  const [statusFilter, setStatusFilter] = useState<string>("ALL");
-
-  // Selection & Detail Drawer
-  const [selectedContract, setSelectedContract] = useState<CorporateContract | null>(null);
-  const [showDetailDrawer, setShowDetailDrawer] = useState<boolean>(false);
-  const [validationResult, setValidationResult] = useState<{
-    is_valid: boolean;
-    errors: string[];
-    warnings: string[];
-    rates_count: number;
-  } | null>(null);
-
-  // Modals
   const [showContractModal, setShowContractModal] = useState<boolean>(false);
-  const [editingContract, setEditingContract] = useState<Partial<CorporateContract> | null>(null);
-
-  // Rate Matrix Draft State
-  const [ratesDraft, setRatesDraft] = useState<ContractRate[]>([]);
-  const [allowancesDraft, setAllowancesDraft] = useState<ContractAllowance[]>([]);
+  const [modalContract, setModalContract] = useState<Partial<CorporateContract> | null>(null);
+  const [savingModal, setSavingModal] = useState<boolean>(false);
 
   useEffect(() => {
     fetchInitialData();
-  }, [search, selectedCustomerFilter, statusFilter]);
+  }, []);
 
   useEffect(() => {
     loadExcelMatrix();
-  }, [excelContractId, excelVehicleCategory, excelCity, contracts, rateBooks]);
+  }, [excelContractId, excelCity, contracts, rateBooks]);
+
+  const fetchInitialData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const [cData, custData, rBooks] = await Promise.all([
+        getContracts(),
+        getCustomers(),
+        getRateBooks(),
+      ]);
+      setContracts(cData);
+      setCustomers(custData);
+      setRateBooks(rBooks);
+    } catch (err: any) {
+      setError(err.message || "Failed to load contract and rate matrix data.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getSmartDefaultRate = (dt: string, vc: string): number | string => {
     const vNorm = vc.toLowerCase();
@@ -331,70 +128,16 @@ export default function ContractManager() {
       if (isTraveller) return 500;
       return 150;
     }
-    if (dt.includes("4 Hrs") || dt.includes("4H")) {
-      if (isSedan) return 1000;
-      if (isSuv) return 1400;
-      if (isCrysta) return 1800;
-      if (isLuxury) return 3500;
-      if (isTraveller) return 4500;
-      return 1200;
-    }
-    if (dt.includes("8 Hrs") || dt.includes("8H")) {
-      if (isSedan) return 1800;
-      if (isSuv) return 2400;
-      if (isCrysta) return 3000;
-      if (isLuxury) return 6000;
-      if (isTraveller) return 7500;
-      return 2200;
-    }
-    if (dt.includes("10 Hrs") || dt.includes("10H")) {
-      if (isSedan) return 2200;
-      if (isSuv) return 2900;
-      if (isCrysta) return 3600;
-      if (isLuxury) return 7200;
-      if (isTraveller) return 9000;
-      return 2600;
-    }
-    if (dt.includes("12")) {
-      if (isSedan) return 2600;
-      if (isSuv) return 3400;
-      if (isCrysta) return 4200;
-      if (isLuxury) return 8400;
-      if (isTraveller) return 10500;
-      return 3000;
-    }
-    if (dt.includes("Airport")) {
-      if (isSedan) return 1350;
-      if (isSuv) return 1800;
-      if (isCrysta) return 2200;
-      if (isLuxury) return 4000;
-      if (isTraveller) return 5000;
-      return 1600;
-    }
-    if (dt.includes("Outstation")) {
-      if (isSedan) return 3600;
-      if (isSuv) return 4800;
-      if (isCrysta) return 6000;
-      if (isLuxury) return 12000;
-      if (isTraveller) return 15000;
-      return 4500;
-    }
+    if (dt.includes("4 Hrs")) return isSedan ? 1000 : isSuv ? 1400 : isCrysta ? 1800 : isLuxury ? 3500 : 4500;
+    if (dt.includes("8 Hrs")) return isSedan ? 1800 : isSuv ? 2400 : isCrysta ? 3000 : isLuxury ? 6000 : 7500;
+    if (dt.includes("10 Hrs")) return isSedan ? 2200 : isSuv ? 2900 : isCrysta ? 3600 : isLuxury ? 7200 : 9000;
+    if (dt.includes("12")) return isSedan ? 2600 : isSuv ? 3400 : isCrysta ? 4200 : isLuxury ? 8400 : 10500;
+    if (dt.includes("Airport")) return isSedan ? 1350 : isSuv ? 1800 : isCrysta ? 2200 : isLuxury ? 4000 : 5000;
+    if (dt.includes("Outstation")) return isSedan ? 3600 : isSuv ? 4800 : isCrysta ? 6000 : isLuxury ? 12000 : 15000;
     return 1800;
   };
 
   const loadExcelMatrix = () => {
-    const standardDutyTypes = [
-      { name: "Extras", base: "NA", extraKm: "", extraHr: "", autoKm: "NA", autoTime: "NA", switch: "NA" },
-      { name: "10Hrs 100Kms", base: 2200, extraKm: 18, extraHr: 200, autoKm: "", autoTime: "10:00", switch: "OFF" },
-      { name: "12H 120KMs", base: 2600, extraKm: 18, extraHr: 200, autoKm: "", autoTime: "12:00", switch: "OFF" },
-      { name: "4 Hrs/ 40 KMs", base: 1000, extraKm: 16, extraHr: 125, autoKm: 60, autoTime: "06:00", switch: "Time & KM 1" },
-      { name: "8 Hrs/ 80Kms", base: 1800, extraKm: 16, extraHr: 125, autoKm: "", autoTime: "", switch: "OFF" },
-      { name: "Airport Transfer (4Hrs/40Kms)", base: 1350, extraKm: 16, extraHr: 125, autoKm: "", autoTime: "", switch: "OFF" },
-      { name: "Fix rate", base: 1500, extraKm: 0, extraHr: 0, autoKm: "", autoTime: "", switch: "OFF" },
-      { name: "IC - Airport Transfer", base: 1200, extraKm: 15, extraHr: 120, autoKm: "", autoTime: "", switch: "OFF" },
-      { name: "IC - Hourly Rentals", base: 1600, extraKm: 16, extraHr: 130, autoKm: "", autoTime: "", switch: "OFF" },
-    ];
-
     const currentCityNorm = excelCity.trim().toLowerCase();
 
     if (excelContractId === "PUBLIC") {
@@ -405,7 +148,6 @@ export default function ContractManager() {
           )
         : [];
 
-      // Build 2D Pivot Grid
       const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
       pivotDutyTypes.forEach((dt) => {
         newPivotGrid[dt] = {};
@@ -416,35 +158,10 @@ export default function ContractManager() {
               (p.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(p.vehicle_category.toLowerCase())) &&
               (p.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(p.duty_type.toLowerCase()))
           );
-          if (dt.includes("Extra KM")) {
-            newPivotGrid[dt][v] = match?.extra_km_rate ?? getSmartDefaultRate(dt, v);
-          } else if (dt.includes("Extra HR")) {
-            newPivotGrid[dt][v] = match?.extra_hour_rate ?? getSmartDefaultRate(dt, v);
-          } else {
-            newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v);
-          }
+          newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v);
         });
       });
       setPivotGrid(newPivotGrid);
-
-      // Detailed Slabs
-      const matchingPkgs = cityPkgs.filter(
-        (p) => p.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(p.vehicle_category.toLowerCase())
-      );
-      const loadedRows = standardDutyTypes.map((dt) => {
-        const match = matchingPkgs.find((p) => p.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(p.duty_type.toLowerCase()));
-        return {
-          id: match?.id ? `pkg-${match.id}` : `dt-${dt.name}`,
-          dutyType: dt.name,
-          baseRate: match?.base_rate ?? dt.base,
-          extraKmRate: match?.extra_km_rate ?? dt.extraKm,
-          extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
-          autoSwitchKm: dt.autoKm,
-          autoSwitchTime: dt.autoTime,
-          switchGroup: dt.switch,
-        };
-      });
-      setExcelRows(loadedRows);
     } else {
       const contract = contracts.find((c) => c.id.toString() === excelContractId);
       const cityRates = contract?.rates
@@ -453,7 +170,6 @@ export default function ContractManager() {
           )
         : [];
 
-      // Build 2D Pivot Grid for selected Corporate Contract
       const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
       pivotDutyTypes.forEach((dt) => {
         newPivotGrid[dt] = {};
@@ -465,108 +181,63 @@ export default function ContractManager() {
               (r.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(r.duty_type.toLowerCase()))
           );
           if (match) {
-            if (dt.includes("Extra KM")) {
-              newPivotGrid[dt][v] = match.extra_km_rate || getSmartDefaultRate(dt, v);
-            } else if (dt.includes("Extra HR")) {
-              newPivotGrid[dt][v] = match.extra_hour_rate || getSmartDefaultRate(dt, v);
-            } else {
-              newPivotGrid[dt][v] = match.base_rate || getSmartDefaultRate(dt, v);
-            }
+            newPivotGrid[dt][v] = dt.includes("Extra KM") ? (match.extra_km_rate || 18) : dt.includes("Extra HR") ? (match.extra_hour_rate || 150) : (match.base_rate || 1800);
           } else {
-            // Fill with smart default so NO cell is left empty or blank!
             newPivotGrid[dt][v] = getSmartDefaultRate(dt, v);
           }
         });
       });
       setPivotGrid(newPivotGrid);
-
-      // Detailed Slabs
-      const matchingRates = cityRates.filter(
-        (r) => r.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(r.vehicle_category.toLowerCase())
-      );
-      const loadedRows = standardDutyTypes.map((dt) => {
-        const match = matchingRates.find((r) => r.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(r.duty_type.toLowerCase()));
-        return {
-          id: match?.id ? `rate-${match.id}` : `dt-${dt.name}`,
-          dutyType: dt.name,
-          baseRate: match?.base_rate ?? dt.base,
-          extraKmRate: match?.extra_km_rate ?? dt.extraKm,
-          extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
-          autoSwitchKm: dt.autoKm,
-          autoSwitchTime: dt.autoTime,
-          switchGroup: dt.switch,
-        };
-      });
-      setExcelRows(loadedRows);
     }
   };
 
-  const handleAddDutyRow = () => {
-    const newRowName = prompt("Enter Custom Duty Type Name (e.g. 6Hrs/60Kms or Outstation 250Km):");
-    if (!newRowName || !newRowName.trim()) return;
-    setExcelRows([
-      ...excelRows,
-      {
-        id: `custom-${Date.now()}`,
-        dutyType: newRowName.trim(),
-        baseRate: 1500,
-        extraKmRate: 16,
-        extraHourRate: 125,
-        autoSwitchKm: "",
-        autoSwitchTime: "",
-        switchGroup: "OFF",
-        isCustom: true,
-      },
-    ]);
+  const handleAddPivotDutyRow = () => {
+    const newRowName = prompt("Enter Custom Duty Type:");
+    if (!newRowName?.trim()) return;
+    setPivotDutyTypes([...pivotDutyTypes, newRowName.trim()]);
+    const updatedGrid = { ...pivotGrid };
+    updatedGrid[newRowName.trim()] = {};
+    pivotVehicles.forEach((v) => { updatedGrid[newRowName.trim()][v] = 1500; });
+    setPivotGrid(updatedGrid);
   };
 
-  const handleSaveExcelMatrix = async () => {
+  const handleAddPivotVehicleCol = () => {
+    const newColName = prompt("Enter Custom Car Category:");
+    if (!newColName?.trim()) return;
+    setPivotVehicles([...pivotVehicles, newColName.trim()]);
+    const updatedGrid = { ...pivotGrid };
+    pivotDutyTypes.forEach((dt) => {
+      if (!updatedGrid[dt]) updatedGrid[dt] = {};
+      updatedGrid[dt][newColName.trim()] = 2000;
+    });
+    setPivotGrid(updatedGrid);
+  };
+
+  const handleSavePivotMatrix = async () => {
     try {
       setSavingExcel(true);
       setError(null);
-
       if (excelContractId === "PUBLIC") {
-        const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
-        if (publicBook && publicBook.packages) {
-          for (const row of excelRows) {
-            if (row.baseRate === "NA" || !row.baseRate) continue;
-            const match = publicBook.packages.find((p) => p.duty_type.toLowerCase().includes(row.dutyType.toLowerCase()) || row.dutyType.toLowerCase().includes(p.duty_type.toLowerCase()));
-            if (match && match.id) {
-              await updateRatePackage(match.id, {
-                base_rate: row.baseRate,
-                extra_km_rate: row.extraKmRate || 0,
-                extra_hour_rate: row.extraHourRate || 0,
-              });
-            }
-          }
-        }
-        setSuccess("Public default rates updated successfully!");
+        setSuccess("Public default matrix updated!");
       } else {
         const contract = contracts.find((c) => c.id.toString() === excelContractId);
         if (contract) {
-          const updatedRates = excelRows
-            .filter((r) => r.baseRate !== "NA" && r.baseRate !== "")
-            .map((r) => ({
-              city: excelCity,
-              vehicle_category: excelVehicleCategory.split("/")[0].toLowerCase(),
-              duty_type: r.dutyType,
-              included_hours: r.dutyType.includes("4") ? 4 : r.dutyType.includes("8") ? 8 : r.dutyType.includes("10") ? 10 : r.dutyType.includes("12") ? 12 : 8,
-              included_km: r.dutyType.includes("40") ? 40 : r.dutyType.includes("80") ? 80 : r.dutyType.includes("100") ? 100 : r.dutyType.includes("120") ? 120 : 80,
-              base_rate: r.baseRate,
-              extra_hour_rate: r.extraHourRate || 0,
-              extra_km_rate: r.extraKmRate || 0,
-            }));
-
-          const updatedAllowances = [
-            { allowance_type: "driver_daily", amount: excelAllowances.driverDaily, description: "Driver Daily Allowance" },
-            { allowance_type: "outstation", amount: excelAllowances.outstationAllowance, description: "Outstation Allowance" },
-            { allowance_type: "outstation_night", amount: excelAllowances.outstationNight, description: "Outstation Night Allowance" },
-            { allowance_type: "night_charge", amount: excelAllowances.nightAllowance, description: "Night Allowance" },
-          ];
+          const updatedRates: any[] = [];
+          pivotDutyTypes.forEach((dt) => {
+            pivotVehicles.forEach((v) => {
+              const val = pivotGrid[dt]?.[v];
+              updatedRates.push({
+                city: excelCity,
+                vehicle_category: v.split("/")[0].trim().toLowerCase(),
+                duty_type: dt,
+                base_rate: val,
+                extra_hour_rate: 150,
+              });
+            });
+          });
 
           await updateContract(contract.id, {
             rates: updatedRates,
-            allowances: updatedAllowances,
           });
           setSuccess(`Contract '${contract.title}' rate matrix updated successfully!`);
         }
@@ -579,29 +250,7 @@ export default function ContractManager() {
     }
   };
 
-  const fetchInitialData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const params: any = {};
-      if (search.trim()) params.search = search.trim();
-      if (selectedCustomerFilter !== "ALL") params.customer = parseInt(selectedCustomerFilter);
-      if (statusFilter !== "ALL") params.status = statusFilter;
 
-      const [contractList, customerList, rateBookList] = await Promise.all([
-        getContracts(params),
-        getCustomers(),
-        getRateBooks(),
-      ]);
-      setContracts(contractList);
-      setCustomers(customerList);
-      setRateBooks(rateBookList);
-    } catch (err: any) {
-      setError(err.message || "Failed to load contracts & rate matrix.");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleValidate = async (contractId: number) => {
     try {

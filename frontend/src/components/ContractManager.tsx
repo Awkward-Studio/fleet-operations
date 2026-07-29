@@ -69,8 +69,49 @@ export default function ContractManager() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Navigation Tab State
-  const [activeTab, setActiveTab] = useState<"contracts" | "matrix" | "default_books">("matrix");
+  // Navigation Tab State ("excel" | "matrix" | "contracts" | "default_books")
+  const [activeTab, setActiveTab] = useState<"excel" | "matrix" | "contracts" | "default_books">("excel");
+
+  // Excel Spreadsheet State
+  const [excelContractId, setExcelContractId] = useState<string>("PUBLIC"); // "PUBLIC" or contract ID
+  const [excelVehicleCategory, setExcelVehicleCategory] = useState<string>("Dzire/Amaze/Etios");
+  const [excelCity, setExcelCity] = useState<string>("Mumbai");
+
+  // Excel Duty Rows Draft
+  const [excelRows, setExcelRows] = useState<Array<{
+    id: string;
+    dutyType: string;
+    baseRate: string | number;
+    extraKmRate: string | number;
+    extraHourRate: string | number;
+    autoSwitchKm: string | number;
+    autoSwitchTime: string;
+    switchGroup: string;
+    isCustom?: boolean;
+  }>>([]);
+
+  // Excel Allowances Draft
+  const [excelAllowances, setExcelAllowances] = useState<{
+    driverDaily: string | number;
+    outstationAllowance: string | number;
+    outstationNight: string | number;
+    nightAllowance: string | number;
+    earlyStart: string | number;
+    sundayAllowance: string | number;
+    extraDuty: string | number;
+    overtimeHr: string | number;
+  }>({
+    driverDaily: 300,
+    outstationAllowance: 300,
+    outstationNight: 300,
+    nightAllowance: 250,
+    earlyStart: 150,
+    sundayAllowance: 200,
+    extraDuty: 200,
+    overtimeHr: 150,
+  });
+
+  const [savingExcel, setSavingExcel] = useState<boolean>(false);
 
   // Rate Books State
   const [rateBooks, setRateBooks] = useState<RateBook[]>([]);
@@ -110,6 +151,165 @@ export default function ContractManager() {
   useEffect(() => {
     fetchInitialData();
   }, [search, selectedCustomerFilter, statusFilter]);
+
+  useEffect(() => {
+    loadExcelMatrix();
+  }, [excelContractId, excelVehicleCategory, excelCity, contracts, rateBooks]);
+
+  const loadExcelMatrix = () => {
+    const standardDutyTypes = [
+      { name: "Extras", base: "NA", extraKm: "", extraHr: "", autoKm: "NA", autoTime: "NA", switch: "NA" },
+      { name: "10Hrs 100Kms", base: 2200, extraKm: 18, extraHr: 200, autoKm: "", autoTime: "10:00", switch: "OFF" },
+      { name: "12H 120KMs", base: 2600, extraKm: 18, extraHr: 200, autoKm: "", autoTime: "12:00", switch: "OFF" },
+      { name: "4 Hrs/ 40 KMs", base: 1000, extraKm: 16, extraHr: 125, autoKm: 60, autoTime: "06:00", switch: "Time & KM 1" },
+      { name: "8 Hrs/ 80Kms", base: 1800, extraKm: 16, extraHr: 125, autoKm: "", autoTime: "", switch: "OFF" },
+      { name: "Airport Transfer (4Hrs/40Kms)", base: 1350, extraKm: 16, extraHr: 125, autoKm: "", autoTime: "", switch: "OFF" },
+      { name: "Fix rate", base: 1500, extraKm: 0, extraHr: 0, autoKm: "", autoTime: "", switch: "OFF" },
+      { name: "IC - Airport Transfer", base: 1200, extraKm: 15, extraHr: 120, autoKm: "", autoTime: "", switch: "OFF" },
+      { name: "IC - Hourly Rentals", base: 1600, extraKm: 16, extraHr: 130, autoKm: "", autoTime: "", switch: "OFF" },
+    ];
+
+    if (excelContractId === "PUBLIC") {
+      const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
+      if (publicBook && publicBook.packages) {
+        const matchingPkgs = publicBook.packages.filter(
+          (p) => p.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(p.vehicle_category.toLowerCase())
+        );
+        if (matchingPkgs.length > 0) {
+          const loadedRows = standardDutyTypes.map((dt) => {
+            const match = matchingPkgs.find((p) => p.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(p.duty_type.toLowerCase()));
+            return {
+              id: match?.id ? `pkg-${match.id}` : `dt-${dt.name}`,
+              dutyType: dt.name,
+              baseRate: match?.base_rate ?? dt.base,
+              extraKmRate: match?.extra_km_rate ?? dt.extraKm,
+              extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
+              autoSwitchKm: dt.autoKm,
+              autoSwitchTime: dt.autoTime,
+              switchGroup: dt.switch,
+            };
+          });
+          setExcelRows(loadedRows);
+          return;
+        }
+      }
+    } else {
+      const contract = contracts.find((c) => c.id.toString() === excelContractId);
+      if (contract && contract.rates) {
+        const matchingRates = contract.rates.filter(
+          (r) => r.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(r.vehicle_category.toLowerCase())
+        );
+        if (matchingRates.length > 0) {
+          const loadedRows = standardDutyTypes.map((dt) => {
+            const match = matchingRates.find((r) => r.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(r.duty_type.toLowerCase()));
+            return {
+              id: match?.id ? `rate-${match.id}` : `dt-${dt.name}`,
+              dutyType: dt.name,
+              baseRate: match?.base_rate ?? dt.base,
+              extraKmRate: match?.extra_km_rate ?? dt.extraKm,
+              extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
+              autoSwitchKm: dt.autoKm,
+              autoSwitchTime: dt.autoTime,
+              switchGroup: dt.switch,
+            };
+          });
+          setExcelRows(loadedRows);
+          return;
+        }
+      }
+    }
+
+    setExcelRows(
+      standardDutyTypes.map((dt) => ({
+        id: `dt-${dt.name}`,
+        dutyType: dt.name,
+        baseRate: dt.base,
+        extraKmRate: dt.extraKm,
+        extraHourRate: dt.extraHr,
+        autoSwitchKm: dt.autoKm,
+        autoSwitchTime: dt.autoTime,
+        switchGroup: dt.switch,
+      }))
+    );
+  };
+
+  const handleAddDutyRow = () => {
+    const newRowName = prompt("Enter Custom Duty Type Name (e.g. 6Hrs/60Kms or Outstation 250Km):");
+    if (!newRowName || !newRowName.trim()) return;
+    setExcelRows([
+      ...excelRows,
+      {
+        id: `custom-${Date.now()}`,
+        dutyType: newRowName.trim(),
+        baseRate: 1500,
+        extraKmRate: 16,
+        extraHourRate: 125,
+        autoSwitchKm: "",
+        autoSwitchTime: "",
+        switchGroup: "OFF",
+        isCustom: true,
+      },
+    ]);
+  };
+
+  const handleSaveExcelMatrix = async () => {
+    try {
+      setSavingExcel(true);
+      setError(null);
+
+      if (excelContractId === "PUBLIC") {
+        const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
+        if (publicBook && publicBook.packages) {
+          for (const row of excelRows) {
+            if (row.baseRate === "NA" || !row.baseRate) continue;
+            const match = publicBook.packages.find((p) => p.duty_type.toLowerCase().includes(row.dutyType.toLowerCase()) || row.dutyType.toLowerCase().includes(p.duty_type.toLowerCase()));
+            if (match && match.id) {
+              await updateRatePackage(match.id, {
+                base_rate: row.baseRate,
+                extra_km_rate: row.extraKmRate || 0,
+                extra_hour_rate: row.extraHourRate || 0,
+              });
+            }
+          }
+        }
+        setSuccess("Public default rates updated successfully!");
+      } else {
+        const contract = contracts.find((c) => c.id.toString() === excelContractId);
+        if (contract) {
+          const updatedRates = excelRows
+            .filter((r) => r.baseRate !== "NA" && r.baseRate !== "")
+            .map((r) => ({
+              city: excelCity,
+              vehicle_category: excelVehicleCategory.split("/")[0].toLowerCase(),
+              duty_type: r.dutyType,
+              included_hours: r.dutyType.includes("4") ? 4 : r.dutyType.includes("8") ? 8 : r.dutyType.includes("10") ? 10 : r.dutyType.includes("12") ? 12 : 8,
+              included_km: r.dutyType.includes("40") ? 40 : r.dutyType.includes("80") ? 80 : r.dutyType.includes("100") ? 100 : r.dutyType.includes("120") ? 120 : 80,
+              base_rate: r.baseRate,
+              extra_hour_rate: r.extraHourRate || 0,
+              extra_km_rate: r.extraKmRate || 0,
+            }));
+
+          const updatedAllowances = [
+            { allowance_type: "driver_daily", amount: excelAllowances.driverDaily, description: "Driver Daily Allowance" },
+            { allowance_type: "outstation", amount: excelAllowances.outstationAllowance, description: "Outstation Allowance" },
+            { allowance_type: "outstation_night", amount: excelAllowances.outstationNight, description: "Outstation Night Allowance" },
+            { allowance_type: "night_charge", amount: excelAllowances.nightAllowance, description: "Night Allowance" },
+          ];
+
+          await updateContract(contract.id, {
+            rates: updatedRates,
+            allowances: updatedAllowances,
+          });
+          setSuccess(`Contract '${contract.title}' rate matrix updated successfully!`);
+        }
+      }
+      fetchInitialData();
+    } catch (err: any) {
+      setError(err.message || "Failed to save Excel rate matrix.");
+    } finally {
+      setSavingExcel(false);
+    }
+  };
 
   const fetchInitialData = async () => {
     try {
@@ -478,12 +678,21 @@ export default function ContractManager() {
       {/* Navigation Tabs */}
       <div style={{ display: "flex", gap: 12, borderBottom: "1px solid var(--line)", paddingBottom: 12 }}>
         <button
+          className={`button ${activeTab === "excel" ? "primary" : "secondary"}`}
+          onClick={() => setActiveTab("excel")}
+          style={{ gap: 8 }}
+        >
+          <Layers size={18} />
+          <span>Interactive Excel Rate Matrix</span>
+        </button>
+
+        <button
           className={`button ${activeTab === "matrix" ? "primary" : "secondary"}`}
           onClick={() => setActiveTab("matrix")}
           style={{ gap: 8 }}
         >
           <Grid size={18} />
-          <span>Master Rate Matrix ({masterMatrixItems.length})</span>
+          <span>Master Rate Card ({masterMatrixItems.length})</span>
         </button>
 
         <button
@@ -504,6 +713,307 @@ export default function ContractManager() {
           <span>Default Public & OTA Rate Books ({rateBooks.length})</span>
         </button>
       </div>
+
+      {activeTab === "excel" && (
+        <div className="stack" style={{ gap: 20 }}>
+          {/* Excel Controls Bar */}
+          <div className="panel" style={{ padding: 20, background: "rgba(15, 23, 42, 0.7)", border: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <h2 style={{ margin: 0, fontSize: 20, color: "#fff", fontWeight: 700 }}>
+                    {excelContractId === "PUBLIC" ? "PUBLIC DEFAULT RATES" : contracts.find(c => c.id.toString() === excelContractId)?.title || "Custom Pricing"}
+                  </h2>
+                  <span className="status ok" style={{ fontSize: 11 }}>Excel Live Sync</span>
+                </div>
+                <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 4 }}>
+                  Contract Dates: <strong style={{ color: "#cbd5e1" }}>15/01/2026 - 31/03/2027</strong> • <a style={{ color: "var(--accent)", cursor: "pointer", textDecoration: "underline" }}>Edit dates</a>
+                </span>
+              </div>
+
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="button secondary sm" onClick={handleAddDutyRow}>
+                  <Plus size={14} /> Add Duty Slab
+                </button>
+                <button className="button primary sm" onClick={handleSaveExcelMatrix} disabled={savingExcel}>
+                  {savingExcel ? "Saving Matrix..." : "Save All Rates (Excel)"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Select Contract / Rates Scope</label>
+                <select
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
+                  value={excelContractId}
+                  onChange={(e) => setExcelContractId(e.target.value)}
+                >
+                  <option value="PUBLIC">🌐 PUBLIC DEFAULT RATES (Standard Ad-hoc Pricing)</option>
+                  {contracts.map((c) => (
+                    <option key={c.id} value={c.id.toString()}>
+                      🏢 {c.title} [{c.customer_display_name || `Customer #${c.customer}`}] ({c.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Vehicle Groups</label>
+                <select
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
+                  value={excelVehicleCategory}
+                  onChange={(e) => setExcelVehicleCategory(e.target.value)}
+                >
+                  <option value="Dzire/Amaze/Etios">Sedan (Dzire / Amaze / Etios)</option>
+                  <option value="Ertiga/Crysta">SUV (Ertiga / Innova Crysta)</option>
+                  <option value="Luxury">Luxury (Camry / Mercedes-Benz)</option>
+                  <option value="Tempo Traveller">Tempo Traveller (13/17 Seater)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>City Scope</label>
+                <select
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
+                  value={excelCity}
+                  onChange={(e) => setExcelCity(e.target.value)}
+                >
+                  <option value="Mumbai">Mumbai</option>
+                  <option value="Pune">Pune</option>
+                  <option value="Delhi">Delhi NCR</option>
+                  <option value="Bengaluru">Bengaluru</option>
+                  <option value="All Cities">All Cities</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Excel Grid Spreadsheet Table (Duty Types) */}
+          <div className="panel" style={{ padding: 0, overflowX: "auto", border: "1px solid var(--line)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "rgba(30, 41, 59, 0.9)", borderBottom: "2px solid var(--line)" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 13, color: "#cbd5e1", minWidth: 220 }}>Duty Types</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Base Rate (₹)</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra KM rate</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra HR rate</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total KM crosses</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total Time crosses</th>
+                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 160 }}>Switch path group</th>
+                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: 13, color: "#cbd5e1", width: 80 }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {excelRows.map((row, index) => (
+                  <tr key={row.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: index % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
+                    <td style={{ padding: "8px 16px", fontWeight: 600, color: "#fff", fontSize: 13 }}>
+                      {row.dutyType}
+                    </td>
+
+                    {/* Base Rate Cell */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.baseRate === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                      ) : (
+                        <input
+                          type="number"
+                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#22c55e", fontWeight: 700, textAlign: "center", fontSize: 13 }}
+                          value={row.baseRate}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].baseRate = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        />
+                      )}
+                    </td>
+
+                    {/* Extra KM Rate Cell */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.baseRate === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
+                      ) : (
+                        <input
+                          type="number"
+                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
+                          value={row.extraKmRate}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].extraKmRate = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        />
+                      )}
+                    </td>
+
+                    {/* Extra HR Rate Cell */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.baseRate === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
+                      ) : (
+                        <input
+                          type="number"
+                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
+                          value={row.extraHourRate}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].extraHourRate = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        />
+                      )}
+                    </td>
+
+                    {/* Auto Switch KM */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.autoSwitchKm === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                      ) : (
+                        <input
+                          type="text"
+                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
+                          value={row.autoSwitchKm || ""}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].autoSwitchKm = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        />
+                      )}
+                    </td>
+
+                    {/* Auto Switch Time */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.autoSwitchTime === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                      ) : (
+                        <input
+                          type="text"
+                          placeholder="00:00"
+                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
+                          value={row.autoSwitchTime || ""}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].autoSwitchTime = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        />
+                      )}
+                    </td>
+
+                    {/* Switch Path Group */}
+                    <td style={{ padding: "6px 12px" }}>
+                      {row.switchGroup === "NA" ? (
+                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                      ) : (
+                        <select
+                          style={{ width: "100%", padding: "6px 8px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", fontSize: 12 }}
+                          value={row.switchGroup || "OFF"}
+                          onChange={(e) => {
+                            const updated = [...excelRows];
+                            updated[index].switchGroup = e.target.value;
+                            setExcelRows(updated);
+                          }}
+                        >
+                          <option value="OFF">OFF</option>
+                          <option value="Time & KM 1">Time & KM 1</option>
+                          <option value="Time Only">Time Only</option>
+                          <option value="KM Only">KM Only</option>
+                        </select>
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                      {row.isCustom && (
+                        <button
+                          className="button secondary sm"
+                          style={{ color: "var(--danger)", padding: 4 }}
+                          onClick={() => {
+                            setExcelRows(excelRows.filter((_, i) => i !== index));
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Extras, Allowances & Taxes Grid (Bottom Section - 20260721_151605.jpg) */}
+          <div className="panel" style={{ padding: 20, background: "rgba(15, 23, 42, 0.7)", border: "1px solid var(--line)" }}>
+            <h3 style={{ margin: "0 0 16px 0", color: "#fff", fontSize: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+              Driver Allowances & Statutory Taxes (Outstation / Extra Duties)
+            </h3>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              {/* Allowances Table */}
+              <div>
+                <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Daily & Overnight Allowances (₹)</h4>
+                <div className="stack" style={{ gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation allowance (per day)</span>
+                    <input
+                      type="number"
+                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                      value={excelAllowances.outstationAllowance}
+                      onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationAllowance: e.target.value })}
+                    />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation overnight allowance (after 00:00)</span>
+                    <input
+                      type="number"
+                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                      value={excelAllowances.outstationNight}
+                      onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationNight: e.target.value })}
+                    />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Night allowance</span>
+                    <input
+                      type="number"
+                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                      value={excelAllowances.nightAllowance}
+                      onChange={(e) => setExcelAllowances({ ...excelAllowances, nightAllowance: e.target.value })}
+                    />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Early start allowance</span>
+                    <input
+                      type="number"
+                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                      value={excelAllowances.earlyStart}
+                      onChange={(e) => setExcelAllowances({ ...excelAllowances, earlyStart: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Taxes & Fuel Rates */}
+              <div>
+                <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Applicable Statutory Taxes</h4>
+                <div style={{ padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid var(--line)", marginBottom: 16 }}>
+                  <ul style={{ margin: 0, paddingLeft: 20, color: "#cbd5e1", fontSize: 13 }}>
+                    <li><strong>CGST 2.5%</strong> - Central Goods and Services Tax</li>
+                    <li><strong>SGST 2.5%</strong> - State Goods and Services Tax</li>
+                  </ul>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+                  <button className="button primary" onClick={handleSaveExcelMatrix} disabled={savingExcel}>
+                    {savingExcel ? "Saving Matrix..." : "Save Rate Changes"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeTab === "matrix" && (
         <>

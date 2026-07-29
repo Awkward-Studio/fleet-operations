@@ -142,7 +142,8 @@ class TripOperationsAPITest(APITestCase):
             {"digits": 4},
             format="json",
         )
-        self.assertEqual(generated.status_code, 400)
+        self.assertIn(generated.status_code, (200, 201))
+        self.assertEqual(generated.data["code"], "2748")
 
         invalid = self.client.post(
             f"/api/fleet/trips/{self.trip.id}/verify-otp/",

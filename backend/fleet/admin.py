@@ -32,11 +32,29 @@ class VehicleAdmin(admin.ModelAdmin):
     list_filter = ["status", "category", "current_city"]
 
 
+class TripOTPInline(admin.TabularInline):
+    model = TripOTP
+    extra = 0
+    readonly_fields = ["code", "is_verified", "created_at", "verified_at"]
+
+
 @admin.register(Trip)
 class TripAdmin(admin.ModelAdmin):
-    list_display = ["customer_name", "pickup_city", "drop_city", "pickup_at", "status", "vehicle", "driver"]
+    list_display = ["id", "customer_name", "pickup_city", "drop_city", "pickup_at", "status", "active_otp_code", "vehicle", "driver"]
     search_fields = ["customer_name", "pickup_city", "drop_city"]
     list_filter = ["status", "ota_source"]
+    inlines = [TripOTPInline]
+
+    @admin.display(description="OTP Code")
+    def active_otp_code(self, obj):
+        otp_session = getattr(obj, "otp_session", None)
+        if otp_session:
+            status_str = " (Verified)" if otp_session.is_verified else ""
+            return f"{otp_session.code}{status_str}"
+        if obj.mmt_verification_code:
+            return f"{obj.mmt_verification_code} (MMT)"
+        return "-"
+
 
 
 @admin.register(TripChecklist)

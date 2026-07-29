@@ -119,19 +119,27 @@ def _ensure_local_trip_otp(trip, request, digits=4, idempotency_key=None):
     if otp_session and not otp_session.is_verified:
         return otp_session, False
 
-    code = _generate_numeric_otp(digits)
+    if trip.is_mmt_booking and trip.mmt_verification_code:
+        code = trip.mmt_verification_code
+    else:
+        code = _generate_numeric_otp(digits)
+
+    user = getattr(request, "user", None)
+    generated_by = user if (user and getattr(user, "is_authenticated", False)) else None
+
     otp_session, created = TripOTP.objects.update_or_create(
         trip=trip,
         defaults={
             "code": code,
             "is_verified": False,
             "idempotency_key": idempotency_key,
-            "generated_by": request.user if request.user.is_authenticated else None,
+            "generated_by": generated_by,
             "verified_by": None,
             "verified_at": None,
         },
     )
     return otp_session, created
+
 
 
 @api_view(["GET"])
@@ -215,7 +223,7 @@ class TripViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             trip = serializer.save()
-            if trip.status == TripStatus.ARRIVED_AT_PICKUP and not trip.is_mmt_booking:
+            if trip.status == TripStatus.ARRIVED_AT_PICKUP:
                 _ensure_local_trip_otp(trip, request, digits=4)
         return Response(TripSerializer(trip).data)
 
@@ -299,11 +307,6 @@ class TripViewSet(viewsets.ModelViewSet):
         permission_error = _assert_driver_can_operate_trip(request, trip)
         if permission_error:
             return permission_error
-        if trip.is_mmt_booking:
-            return Response(
-                {"detail": "MMT trips use the MMT verification code. Local OTP generation is disabled for this trip."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         serializer = TripGenerateOTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -316,7 +319,7 @@ class TripViewSet(viewsets.ModelViewSet):
         otp_session, created = _ensure_local_trip_otp(
             trip,
             request,
-            digits=serializer.validated_data["digits"],
+            digits=serializer.validated_data.get("digits", 4),
             idempotency_key=idempotency_key,
         )
         return Response(
@@ -334,20 +337,16 @@ class TripViewSet(viewsets.ModelViewSet):
         serializer = TripVerifyOTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         code = serializer.validated_data["code"]
-        otp_session = getattr(trip, "otp_session", None)
-        expected_codes = set()
-        if trip.is_mmt_booking:
-            if trip.mmt_verification_code:
-                expected_codes.add(trip.mmt_verification_code)
-        elif otp_session:
-            expected_codes.add(otp_session.code)
+
+        otp_session, _ = _ensure_local_trip_otp(trip, request)
+        expected_codes = {otp_session.code}
+        if trip.is_mmt_booking and trip.mmt_verification_code:
+            expected_codes.add(trip.mmt_verification_code)
 
         if code not in expected_codes:
             return Response({"detail": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            if not otp_session:
-                otp_session = TripOTP.objects.create(trip=trip, code=code)
             otp_session.is_verified = True
             otp_session.verified_by = request.user if request.user.is_authenticated else None
             otp_session.verified_at = timezone.now()

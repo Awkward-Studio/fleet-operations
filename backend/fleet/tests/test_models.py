@@ -226,3 +226,30 @@ class FleetModelTests(TestCase):
         override.reason = "Changed later"
         with self.assertRaises(ValidationError):
             override.save()
+
+    def test_driver_deletion_deletes_associated_user(self):
+        from django.contrib.auth import get_user_model
+        from fleet.models import Driver
+
+        User = get_user_model()
+        user = User.objects.create_user(username="driver_user_test", password="password123")
+        driver = Driver.objects.create(
+            user=user,
+            name="Driver Test",
+            phone="9999999999",
+            license_number="DL-TEST-9999",
+            home_base="Mumbai",
+        )
+
+        user_id = user.id
+        driver_id = driver.id
+
+        # Delete driver
+        driver.delete()
+
+        # Check driver is deleted
+        self.assertFalse(Driver.objects.filter(id=driver_id).exists())
+
+        # Check corresponding user is also deleted
+        self.assertFalse(User.objects.filter(id=user_id).exists())
+

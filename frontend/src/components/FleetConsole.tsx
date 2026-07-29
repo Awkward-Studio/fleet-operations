@@ -42,6 +42,7 @@ import {
   Building2,
   FileText,
   Receipt,
+  ShieldAlert,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
@@ -84,24 +85,36 @@ import {
 import { DocumentUpload } from "@/components/DocumentUpload";
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals" | "admin-panel";
 
-const navItems = [
+type NavItem = {
+  href: string;
+  section: string;
+  label: string;
+  icon: any;
+  allowedRoles?: string[];
+  requiredPermission?: string;
+  adminOnly?: boolean;
+  external?: boolean;
+};
+
+const navItems: NavItem[] = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/trips", section: "trips", label: "Trips", icon: Route },
-  { href: "/rentals", section: "rentals", label: "Rentals", icon: KeyRound },
-  { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus },
-  { href: "/customers", section: "customers", label: "Customers", icon: Building2 },
-  { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText },
-  { href: "/billing", section: "billing", label: "Fleet Billing", icon: Receipt },
-  { href: "/fuel", section: "fuel", label: "Fuel & Mileage", icon: Fuel },
-  { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car },
-  { href: "/drivers", section: "drivers", label: "Drivers", icon: Users },
-  { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned },
-  { href: "/availability", section: "availability", label: "Availability", icon: CalendarClock },
-  { href: "/compliance", section: "compliance", label: "Compliance", icon: ShieldCheck },
-  { href: "/ota", section: "ota", label: "OTA Bidding", icon: Wifi }
-] as const;
+  { href: "/trips", section: "trips", label: "Trips", icon: Route, allowedRoles: ["admin", "dispatcher", "accountant", "commercial"] },
+  { href: "/rentals", section: "rentals", label: "Rentals", icon: KeyRound, allowedRoles: ["admin", "dispatcher", "accountant", "commercial"] },
+  { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus, allowedRoles: ["admin", "dispatcher", "commercial"], requiredPermission: "dispatch_trips" },
+  { href: "/customers", section: "customers", label: "Customers", icon: Building2, allowedRoles: ["admin", "accountant", "commercial"], requiredPermission: "read_customers" },
+  { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText, allowedRoles: ["admin", "accountant", "commercial"], requiredPermission: "read_contracts" },
+  { href: "/billing", section: "billing", label: "Fleet Billing", icon: Receipt, allowedRoles: ["admin", "accountant", "commercial"] },
+  { href: "/fuel", section: "fuel", label: "Fuel & Mileage", icon: Fuel, allowedRoles: ["admin", "dispatcher", "accountant"] },
+  { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car, allowedRoles: ["admin", "dispatcher"] },
+  { href: "/drivers", section: "drivers", label: "Drivers", icon: Users, allowedRoles: ["admin", "dispatcher"] },
+  { href: "/tracking", section: "tracking", label: "Tracking", icon: MapPinned, allowedRoles: ["admin", "dispatcher"] },
+  { href: "/availability", section: "availability", label: "Availability", icon: CalendarClock, allowedRoles: ["admin", "dispatcher"] },
+  { href: "/compliance", section: "compliance", label: "Compliance", icon: ShieldCheck, allowedRoles: ["admin", "dispatcher", "commercial"] },
+  { href: "/ota", section: "ota", label: "OTA Bidding", icon: Wifi, allowedRoles: ["admin", "commercial"] },
+  { href: "/admin/", section: "admin-panel", label: "Django Admin Panel", icon: ShieldAlert, adminOnly: true, external: true }
+];
 
 const tripTransitions = ["en_route_pickup", "active", "completed", "cancelled"];
 
@@ -118,6 +131,25 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   }, [user, router]);
 
   const [role, setRole] = useState<Role>("dispatcher");
+
+  const isSuperOrAdmin = Boolean(
+    user?.is_superuser || user?.is_staff || user?.role === "admin" || user?.permissions?.includes("superuser") || role === "admin"
+  );
+  const userRole = (user?.role || role || "dispatcher").toLowerCase();
+
+  const visibleNavItems = useMemo(() => {
+    return navItems.filter((item) => {
+      if (isSuperOrAdmin) return true;
+      if (item.adminOnly) return false;
+      if (item.requiredPermission && user?.permissions && !user.permissions.includes(item.requiredPermission)) {
+        return false;
+      }
+      if (item.allowedRoles && !item.allowedRoles.includes(userRole)) {
+        return false;
+      }
+      return true;
+    });
+  }, [user, userRole, isSuperOrAdmin]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -437,9 +469,27 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
           </div>
         </div>
         <nav className="sidebar-nav" aria-label="Fleet console navigation">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            if (item.external) {
+              return (
+                <a
+                  className={item.adminOnly ? "admin-link" : ""}
+                  href={item.href}
+                  key={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#f59e0b",
+                    fontWeight: 600,
+                  }}
+                >
+                  <Icon size={17} />
+                  {item.label}
+                </a>
+              );
+            }
             return (
               <Link className={active ? "active" : ""} href={item.href} key={item.href}>
                 <Icon size={17} />
@@ -1068,6 +1118,8 @@ function TripsView(props: {
     props.trips.forEach((trip) => {
       if (trip.status === "requested" || trip.status === "assigned") {
         groups.assigned.push(trip);
+      } else if (trip.status === "en_route_pickup" || trip.status === "arrived_at_pickup") {
+        groups.en_route_pickup.push(trip);
       } else if (groups[trip.status]) {
         groups[trip.status].push(trip);
       }
@@ -1207,7 +1259,7 @@ function TripsView(props: {
                     // Decide card icon
                     let CardIcon = ClipboardCheck;
                     let iconColorClass = "update";
-                    if (trip.status === "en_route_pickup") {
+                    if (trip.status === "en_route_pickup" || trip.status === "arrived_at_pickup") {
                       CardIcon = Navigation;
                       iconColorClass = "en_route_pickup";
                     } else if (trip.status === "active") {
@@ -1230,6 +1282,9 @@ function TripsView(props: {
                     if (trip.status === "requested") {
                       badgeText = "PENDING ASSIGNMENT";
                       badgeClass = "requested";
+                    } else if (trip.status === "arrived_at_pickup") {
+                      badgeText = "ARRIVED AT PICKUP";
+                      badgeClass = "en_route_pickup";
                     } else if (trip.status === "en_route_pickup") {
                       badgeText = "EN ROUTE PICKUP";
                       badgeClass = "en_route_pickup";
@@ -2894,7 +2949,8 @@ function pageTitle(section: ConsoleSection) {
     availability: "Predictive Availability",
     compliance: "Compliance",
     ota: "OTA Bidding",
-    fuel: "Fuel & Mileage Log"
+    fuel: "Fuel & Mileage Log",
+    "admin-panel": "Django Admin Panel"
   };
   return titles[section];
 }
@@ -2914,7 +2970,8 @@ function pageSubtitle(section: ConsoleSection) {
     availability: "See where every car can accept its next booking and when",
     compliance: "Prevent non-compliant cars from being used for outstation work",
     ota: "Prepare route acquisition decisions from OTA opportunities",
-    fuel: "Log fuel refilling, track fuel receipts, analyze fuel consumption anomalies, and calculate true vehicle mileage"
+    fuel: "Log fuel refilling, track fuel receipts, analyze fuel consumption anomalies, and calculate true vehicle mileage",
+    "admin-panel": "Access low-level Django database models, permissions, and system administration"
   };
   return subtitles[section];
 }

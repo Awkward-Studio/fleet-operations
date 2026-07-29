@@ -16,6 +16,9 @@ class ServerUrlStore {
   static Future<String> get baseUrl async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_key);
+    if (apiBaseUrl != 'http://10.0.2.2:8000' && (stored == null || stored == 'http://10.0.2.2:8000')) {
+      return _cleanUrl(apiBaseUrl);
+    }
     if (stored != null && stored.trim().isNotEmpty) {
       return _cleanUrl(stored);
     }

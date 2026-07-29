@@ -256,22 +256,10 @@ Future<Position?> _readPosition() async {
     }
 
     return Geolocator.getCurrentPosition(
-      locationSettings: Platform.isAndroid
-          ? AndroidSettings(
-              accuracy: LocationAccuracy.high,
-              distanceFilter: 50,
-              intervalDuration: _trackingPollInterval,
-              foregroundNotificationConfig: const ForegroundNotificationConfig(
-                notificationTitle: 'Live GPS Tracking Active',
-                notificationText: 'Streaming active trip location',
-                enableWakeLock: true,
-              ),
-            )
-          : const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              distanceFilter: 50,
-              timeLimit: Duration(seconds: 10),
-            ),
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
     );
   } catch (_) {
     return null;

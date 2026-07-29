@@ -710,7 +710,7 @@ export default function ContractManager() {
             background: "rgba(0, 0, 0, 0.8)",
             display: "flex",
             alignItems: "center",
-            justify: "center",
+            justifyContent: "center",
             zIndex: 9999,
           }}
         >

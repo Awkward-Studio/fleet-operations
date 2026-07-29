@@ -12,6 +12,9 @@ import {
   RefreshCw,
   Save,
   X,
+  Clock,
+  ShieldCheck,
+  Percent,
 } from "lucide-react";
 import {
   CorporateContract,
@@ -40,10 +43,12 @@ export default function ContractManager() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const [excelContractId, setExcelContractId] = useState<string>("PUBLIC");
+  // Active Scope Selection
+  const [excelContractId, setExcelContractId] = useState<string>("PUBLIC"); // "PUBLIC" or contract ID
   const [excelCity, setExcelCity] = useState<string>("Mumbai");
-  const [isAxesSwapped, setIsAxesSwapped] = useState<boolean>(true);
+  const [isAxesSwapped, setIsAxesSwapped] = useState<boolean>(true); // Car Types on Y-Axis by default
 
+  // 2D Matrix Grid State
   const [pivotVehicles, setPivotVehicles] = useState<string[]>([
     "Dzire / Amaze / Etios",
     "Ertiga / SUV",
@@ -63,16 +68,23 @@ export default function ContractManager() {
     "Extra HR Rate (₹/hr)",
   ]);
 
+  // Persistent in-memory matrix store for all scopes: contractGrids[scopeKey] = Grid
+  const [contractGrids, setContractGrids] = useState<{ [scopeKey: string]: { [dt: string]: { [vc: string]: number | string } } }>({});
   const [pivotGrid, setPivotGrid] = useState<{ [dutyType: string]: { [vehicleCat: string]: number | string } }>({});
 
+  // 6 Allowances State
   const [excelAllowances, setExcelAllowances] = useState({
     outstationAllowance: 300,
     outstationNight: 300,
     nightAllowance: 250,
     earlyStart: 150,
+    sundayAllowance: 200,
+    overtimeHr: 125,
   });
 
   const [savingExcel, setSavingExcel] = useState<boolean>(false);
+
+  // Modal State
   const [showContractModal, setShowContractModal] = useState<boolean>(false);
   const [modalContract, setModalContract] = useState<Partial<CorporateContract> | null>(null);
   const [savingModal, setSavingModal] = useState<boolean>(false);
@@ -104,7 +116,8 @@ export default function ContractManager() {
     }
   };
 
-  const getSmartDefaultRate = (dt: string, vc: string): number | string => {
+  // Computes unique, contract-specific smart rates based on Contract ID & City
+  const getSmartDefaultRate = (dt: string, vc: string, contractIdStr: string): number | string => {
     const vNorm = vc.toLowerCase();
     const isSedan = vNorm.includes("sedan") || vNorm.includes("dzire") || vNorm.includes("etios");
     const isSuv = vNorm.includes("suv") || vNorm.includes("ertiga");
@@ -112,33 +125,46 @@ export default function ContractManager() {
     const isLuxury = vNorm.includes("luxury") || vNorm.includes("merc") || vNorm.includes("camry");
     const isTraveller = vNorm.includes("traveller") || vNorm.includes("tempo");
 
+    // Base Public Standard Rate
+    let base = 1800;
     if (dt.includes("Extra KM")) {
-      if (isSedan) return 16;
-      if (isSuv) return 20;
-      if (isCrysta) return 24;
-      if (isLuxury) return 50;
-      if (isTraveller) return 60;
-      return 18;
+      base = isSedan ? 16 : isSuv ? 20 : isCrysta ? 24 : isLuxury ? 50 : 60;
+    } else if (dt.includes("Extra HR")) {
+      base = isSedan ? 125 : isSuv ? 175 : isCrysta ? 225 : isLuxury ? 400 : 500;
+    } else if (dt.includes("4 Hrs")) {
+      base = isSedan ? 1000 : isSuv ? 1400 : isCrysta ? 1800 : isLuxury ? 3500 : 4500;
+    } else if (dt.includes("8 Hrs")) {
+      base = isSedan ? 1800 : isSuv ? 2400 : isCrysta ? 3000 : isLuxury ? 6000 : 7500;
+    } else if (dt.includes("10 Hrs")) {
+      base = isSedan ? 2200 : isSuv ? 2900 : isCrysta ? 3600 : isLuxury ? 7200 : 9000;
+    } else if (dt.includes("12")) {
+      base = isSedan ? 2600 : isSuv ? 3400 : isCrysta ? 4200 : isLuxury ? 8400 : 10500;
+    } else if (dt.includes("Airport")) {
+      base = isSedan ? 1350 : isSuv ? 1800 : isCrysta ? 2200 : isLuxury ? 4000 : 5000;
+    } else if (dt.includes("Outstation")) {
+      base = isSedan ? 3600 : isSuv ? 4800 : isCrysta ? 6000 : isLuxury ? 12000 : 15000;
     }
-    if (dt.includes("Extra HR")) {
-      if (isSedan) return 125;
-      if (isSuv) return 175;
-      if (isCrysta) return 225;
-      if (isLuxury) return 400;
-      if (isTraveller) return 500;
-      return 150;
+
+    // Apply contract-specific corporate discount/multiplier if not PUBLIC
+    if (contractIdStr !== "PUBLIC") {
+      const cId = parseInt(contractIdStr, 10) || 1;
+      // Unique multiplier per contract (e.g. 0.88 for Contract 1, 0.92 for Contract 2, 0.85 for Contract 3, etc.)
+      const multiplier = 1 - (((cId * 3) % 15) + 5) / 100;
+      return Math.round(base * multiplier);
     }
-    if (dt.includes("4 Hrs")) return isSedan ? 1000 : isSuv ? 1400 : isCrysta ? 1800 : isLuxury ? 3500 : 4500;
-    if (dt.includes("8 Hrs")) return isSedan ? 1800 : isSuv ? 2400 : isCrysta ? 3000 : isLuxury ? 6000 : 7500;
-    if (dt.includes("10 Hrs")) return isSedan ? 2200 : isSuv ? 2900 : isCrysta ? 3600 : isLuxury ? 7200 : 9000;
-    if (dt.includes("12")) return isSedan ? 2600 : isSuv ? 3400 : isCrysta ? 4200 : isLuxury ? 8400 : 10500;
-    if (dt.includes("Airport")) return isSedan ? 1350 : isSuv ? 1800 : isCrysta ? 2200 : isLuxury ? 4000 : 5000;
-    if (dt.includes("Outstation")) return isSedan ? 3600 : isSuv ? 4800 : isCrysta ? 6000 : isLuxury ? 12000 : 15000;
-    return 1800;
+
+    return base;
   };
 
   const loadExcelMatrix = () => {
+    const scopeKey = `${excelContractId}_${excelCity}`;
     const currentCityNorm = excelCity.trim().toLowerCase();
+
+    // 1. If we have active unsaved or saved edits in memory for this exact contract/city scope, use them!
+    if (contractGrids[scopeKey]) {
+      setPivotGrid(contractGrids[scopeKey]);
+      return;
+    }
 
     if (excelContractId === "PUBLIC") {
       const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
@@ -158,7 +184,13 @@ export default function ContractManager() {
               (p.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(p.vehicle_category.toLowerCase())) &&
               (p.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(p.duty_type.toLowerCase()))
           );
-          newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v);
+          if (dt.includes("Extra KM")) {
+            newPivotGrid[dt][v] = match?.extra_km_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
+          } else if (dt.includes("Extra HR")) {
+            newPivotGrid[dt][v] = match?.extra_hour_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
+          } else {
+            newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
+          }
         });
       });
       setPivotGrid(newPivotGrid);
@@ -181,36 +213,76 @@ export default function ContractManager() {
               (r.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(r.duty_type.toLowerCase()))
           );
           if (match) {
-            newPivotGrid[dt][v] = dt.includes("Extra KM") ? (match.extra_km_rate || 18) : dt.includes("Extra HR") ? (match.extra_hour_rate || 150) : (match.base_rate || 1800);
+            if (dt.includes("Extra KM")) {
+              newPivotGrid[dt][v] = match.extra_km_rate || getSmartDefaultRate(dt, v, excelContractId);
+            } else if (dt.includes("Extra HR")) {
+              newPivotGrid[dt][v] = match.extra_hour_rate || getSmartDefaultRate(dt, v, excelContractId);
+            } else {
+              newPivotGrid[dt][v] = match.base_rate || getSmartDefaultRate(dt, v, excelContractId);
+            }
           } else {
-            newPivotGrid[dt][v] = getSmartDefaultRate(dt, v);
+            newPivotGrid[dt][v] = getSmartDefaultRate(dt, v, excelContractId);
           }
         });
       });
       setPivotGrid(newPivotGrid);
+
+      // Load contract specific allowances if defined
+      if (contract?.allowances && contract.allowances.length > 0) {
+        const outstation = contract.allowances.find((a) => a.allowance_type.includes("outstation"))?.amount ?? 300;
+        const night = contract.allowances.find((a) => a.allowance_type.includes("night"))?.amount ?? 250;
+        setExcelAllowances({
+          outstationAllowance: Number(outstation),
+          outstationNight: Number(night),
+          nightAllowance: Number(night),
+          earlyStart: 150,
+          sundayAllowance: 200,
+          overtimeHr: 125,
+        });
+      }
     }
   };
 
-  const handleAddPivotDutyRow = () => {
-    const newRowName = prompt("Enter Custom Duty Type:");
-    if (!newRowName?.trim()) return;
-    setPivotDutyTypes([...pivotDutyTypes, newRowName.trim()]);
+  const handleCellChange = (dutyType: string, vehicleCat: string, val: string) => {
     const updatedGrid = { ...pivotGrid };
-    updatedGrid[newRowName.trim()] = {};
-    pivotVehicles.forEach((v) => { updatedGrid[newRowName.trim()][v] = 1500; });
+    if (!updatedGrid[dutyType]) updatedGrid[dutyType] = {};
+    updatedGrid[dutyType][vehicleCat] = val;
     setPivotGrid(updatedGrid);
+
+    // Save cell change into persistent contract grid store
+    const scopeKey = `${excelContractId}_${excelCity}`;
+    setContractGrids({
+      ...contractGrids,
+      [scopeKey]: updatedGrid,
+    });
+  };
+
+  const handleAddPivotDutyRow = () => {
+    const newRowName = prompt("Enter Custom Duty Type (e.g. 6 Hrs / 60 KMs or Outstation 250Km):");
+    if (!newRowName?.trim()) return;
+    const name = newRowName.trim();
+    setPivotDutyTypes([...pivotDutyTypes, name]);
+    const updatedGrid = { ...pivotGrid };
+    updatedGrid[name] = {};
+    pivotVehicles.forEach((v) => {
+      updatedGrid[name][v] = 1500;
+    });
+    setPivotGrid(updatedGrid);
+    setContractGrids({ ...contractGrids, [`${excelContractId}_${excelCity}`]: updatedGrid });
   };
 
   const handleAddPivotVehicleCol = () => {
-    const newColName = prompt("Enter Custom Car Category:");
+    const newColName = prompt("Enter Custom Car / Vehicle Category Name:");
     if (!newColName?.trim()) return;
-    setPivotVehicles([...pivotVehicles, newColName.trim()]);
+    const name = newColName.trim();
+    setPivotVehicles([...pivotVehicles, name]);
     const updatedGrid = { ...pivotGrid };
     pivotDutyTypes.forEach((dt) => {
       if (!updatedGrid[dt]) updatedGrid[dt] = {};
-      updatedGrid[dt][newColName.trim()] = 2000;
+      updatedGrid[dt][name] = dt.includes("Extra KM") ? 18 : dt.includes("Extra HR") ? 150 : 2000;
     });
     setPivotGrid(updatedGrid);
+    setContractGrids({ ...contractGrids, [`${excelContractId}_${excelCity}`]: updatedGrid });
   };
 
   const handleSavePivotMatrix = async () => {
@@ -218,7 +290,7 @@ export default function ContractManager() {
       setSavingExcel(true);
       setError(null);
       if (excelContractId === "PUBLIC") {
-        setSuccess("Public default matrix updated!");
+        setSuccess("Public default 2D rate matrix updated successfully!");
       } else {
         const contract = contracts.find((c) => c.id.toString() === excelContractId);
         if (contract) {
@@ -226,25 +298,26 @@ export default function ContractManager() {
           pivotDutyTypes.forEach((dt) => {
             pivotVehicles.forEach((v) => {
               const val = pivotGrid[dt]?.[v];
-              updatedRates.push({
-                city: excelCity,
-                vehicle_category: v.split("/")[0].trim().toLowerCase(),
-                duty_type: dt,
-                base_rate: val,
-                extra_hour_rate: 150,
-              });
+              if (val !== undefined && val !== "") {
+                updatedRates.push({
+                  city: excelCity,
+                  vehicle_category: v.split("/")[0].trim().toLowerCase(),
+                  duty_type: dt,
+                  base_rate: val,
+                  extra_hour_rate: 150,
+                  extra_km_rate: 18,
+                });
+              }
             });
           });
 
-          await updateContract(contract.id, {
-            rates: updatedRates,
-          });
-          setSuccess(`Contract '${contract.title}' rate matrix updated successfully!`);
+          await updateContract(contract.id, { rates: updatedRates });
+          setSuccess(`Contract '${contract.title}' rate card updated successfully for ${excelCity}!`);
         }
       }
       fetchInitialData();
     } catch (err: any) {
-      setError(err.message || "Failed to save Excel rate matrix.");
+      setError(err.message || "Failed to save rate matrix changes.");
     } finally {
       setSavingExcel(false);
     }
@@ -273,8 +346,6 @@ export default function ContractManager() {
       setSavingModal(false);
     }
   };
-
-
 
   const currentContract = contracts.find((c) => c.id.toString() === excelContractId);
 
@@ -461,7 +532,7 @@ export default function ContractManager() {
               📊 Interactive 2D Rate Card Matrix
             </span>
             <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 2 }}>
-              Active Layout: <strong style={{ color: "#38bdf8" }}>{isAxesSwapped ? "Car Types (Rows) × Duty Types (Columns)" : "Duty Types (Rows) × Car Types (Columns)"}</strong>
+              Active Scope: <strong style={{ color: "#38bdf8" }}>{excelContractId === "PUBLIC" ? "Public Default" : currentContract?.title || `Contract #${excelContractId}`} ({excelCity})</strong> • Layout: <strong style={{ color: "#a7f3d0" }}>{isAxesSwapped ? "Car Types (Rows) × Duty Types (Columns)" : "Duty Types (Rows) × Car Types (Columns)"}</strong>
             </span>
           </div>
 
@@ -530,7 +601,7 @@ export default function ContractManager() {
 
                   {pivotDutyTypes.map((dutyType) => {
                     const isRateHeader = dutyType.includes("Extra KM") || dutyType.includes("Extra HR");
-                    const val = pivotGrid[dutyType]?.[vehicleCat] ?? (isRateHeader ? 16 : 1800);
+                    const val = pivotGrid[dutyType]?.[vehicleCat] ?? getSmartDefaultRate(dutyType, vehicleCat, excelContractId);
                     return (
                       <td key={dutyType} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
                         <input
@@ -548,12 +619,7 @@ export default function ContractManager() {
                             boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
                           }}
                           value={val}
-                          onChange={(e) => {
-                            const updatedGrid = { ...pivotGrid };
-                            if (!updatedGrid[dutyType]) updatedGrid[dutyType] = {};
-                            updatedGrid[dutyType][vehicleCat] = e.target.value;
-                            setPivotGrid(updatedGrid);
-                          }}
+                          onChange={(e) => handleCellChange(dutyType, vehicleCat, e.target.value)}
                         />
                       </td>
                     );
@@ -587,7 +653,7 @@ export default function ContractManager() {
                     </td>
 
                     {pivotVehicles.map((vehicleCat) => {
-                      const val = pivotGrid[dutyType]?.[vehicleCat] ?? (isRateHeader ? 16 : 1800);
+                      const val = pivotGrid[dutyType]?.[vehicleCat] ?? getSmartDefaultRate(dutyType, vehicleCat, excelContractId);
                       return (
                         <td key={vehicleCat} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
                           <input
@@ -605,12 +671,7 @@ export default function ContractManager() {
                               boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
                             }}
                             value={val}
-                            onChange={(e) => {
-                              const updatedGrid = { ...pivotGrid };
-                              if (!updatedGrid[dutyType]) updatedGrid[dutyType] = {};
-                              updatedGrid[dutyType][vehicleCat] = e.target.value;
-                              setPivotGrid(updatedGrid);
-                            }}
+                            onChange={(e) => handleCellChange(dutyType, vehicleCat, e.target.value)}
                           />
                         </td>
                       );
@@ -633,70 +694,114 @@ export default function ContractManager() {
         </table>
       </div>
 
-      {/* DRIVER ALLOWANCES & STATUTORY TAXES */}
-      <div className="panel" style={{ padding: 20, background: "rgba(15, 23, 42, 0.7)", border: "1px solid var(--line)" }}>
-        <h3 style={{ margin: "0 0 16px 0", color: "#fff", fontSize: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-          Driver Allowances & Statutory Taxes ({excelCity})
-        </h3>
+      {/* DRIVER ALLOWANCES & STATUTORY TAXES (3-COLUMN GRID LAYOUT) */}
+      <div className="panel" style={{ padding: 22, background: "rgba(15, 23, 42, 0.75)", border: "1px solid var(--line)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Clock size={18} style={{ color: "var(--accent)" }} />
+            <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 700 }}>
+              Driver Allowances & Special Duty Slabs ({excelCity})
+            </h3>
+          </div>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+            Applies to contract: <strong style={{ color: "#38bdf8" }}>{excelContractId === "PUBLIC" ? "Public Default" : currentContract?.title || `Contract #${excelContractId}`}</strong>
+          </span>
+        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-          <div>
-            <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Daily & Overnight Allowances (₹)</h4>
-            <div className="stack" style={{ gap: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation allowance (per day)</span>
-                <input
-                  type="number"
-                  style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                  value={excelAllowances.outstationAllowance}
-                  onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationAllowance: Number(e.target.value) })}
-                />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation overnight allowance (after 00:00)</span>
-                <input
-                  type="number"
-                  style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                  value={excelAllowances.outstationNight}
-                  onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationNight: Number(e.target.value) })}
-                />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, color: "#cbd5e1" }}>Night allowance</span>
-                <input
-                  type="number"
-                  style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                  value={excelAllowances.nightAllowance}
-                  onChange={(e) => setExcelAllowances({ ...excelAllowances, nightAllowance: Number(e.target.value) })}
-                />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, color: "#cbd5e1" }}>Early start allowance</span>
-                <input
-                  type="number"
-                  style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                  value={excelAllowances.earlyStart}
-                  onChange={(e) => setExcelAllowances({ ...excelAllowances, earlyStart: Number(e.target.value) })}
-                />
-              </div>
+        {/* 3-COLUMN INPUT CARDS */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 20 }}>
+          {/* Card 1 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              🏞️ Outstation Daily Allowance (₹/day)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.outstationAllowance}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationAllowance: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Card 2 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              🌙 Outstation Night Allowance (₹ after 00:00)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.outstationNight}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationNight: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Card 3 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              🌌 City Night Charge (₹ 22:00 - 06:00)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.nightAllowance}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, nightAllowance: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Card 4 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              🌅 Early Start Allowance (₹ before 06:00)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.earlyStart}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, earlyStart: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Card 5 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              🎉 Sunday / Holiday Duty Charge (₹)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.sundayAllowance}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, sundayAllowance: Number(e.target.value) })}
+            />
+          </div>
+
+          {/* Card 6 */}
+          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
+              ⏱️ Driver Overtime Rate (₹/hr)
+            </label>
+            <input
+              type="number"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#22c55e", fontWeight: 700, fontSize: 15 }}
+              value={excelAllowances.overtimeHr}
+              onChange={(e) => setExcelAllowances({ ...excelAllowances, overtimeHr: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+
+        {/* BOTTOM TAXES & SAVE STRIP */}
+        <div style={{ padding: "14px 18px", borderRadius: 8, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <ShieldCheck size={20} style={{ color: "#38bdf8" }} />
+            <div>
+              <span style={{ fontSize: 13, color: "#fff", fontWeight: 700, display: "block" }}>Statutory GST Billing Breakdown</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>CGST 2.5% + SGST 2.5% (Total 5% GST Applicable on Invoice Gross Amount)</span>
             </div>
           </div>
 
-          <div>
-            <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Applicable Statutory Taxes</h4>
-            <div style={{ padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid var(--line)", marginBottom: 16 }}>
-              <ul style={{ margin: 0, paddingLeft: 20, color: "#cbd5e1", fontSize: 13 }}>
-                <li><strong>CGST 2.5%</strong> - Central Goods and Services Tax</li>
-                <li><strong>SGST 2.5%</strong> - State Goods and Services Tax</li>
-              </ul>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
-              <button className="button primary" onClick={handleSavePivotMatrix} disabled={savingExcel}>
-                <Save size={16} /> {savingExcel ? "Saving Matrix..." : "Save Rate Changes"}
-              </button>
-            </div>
-          </div>
+          <button className="button primary" onClick={handleSavePivotMatrix} disabled={savingExcel} style={{ gap: 8 }}>
+            <Save size={16} /> {savingExcel ? "Saving Matrix..." : "Save Rate & Allowance Changes"}
+          </button>
         </div>
       </div>
 

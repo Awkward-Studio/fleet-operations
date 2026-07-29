@@ -248,6 +248,8 @@ export default function ContractManager() {
     } finally {
       setSavingExcel(false);
     }
+  };
+
   const handleSaveContractModal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalContract) return;
@@ -803,5 +805,4 @@ export default function ContractManager() {
       )}
     </div>
   );
-}
 }

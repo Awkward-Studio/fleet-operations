@@ -56,11 +56,15 @@ class LocationTrackingService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_trackingTripIdKey, trip!.id);
 
-    final service = FlutterBackgroundService();
-    if (!await service.isRunning()) {
-      await service.startService();
-    } else {
-      service.invoke('setTrip', {'trip_id': trip.id});
+    try {
+      final service = FlutterBackgroundService();
+      if (!await service.isRunning()) {
+        await service.startService();
+      } else {
+        service.invoke('setTrip', {'trip_id': trip.id});
+      }
+    } catch (e) {
+      debugPrint('Location tracking service start failed: $e');
     }
 
     return true;
@@ -69,11 +73,15 @@ class LocationTrackingService {
   static Future<void> startAfterOtpSuccess(Trip trip) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_trackingTripIdKey, trip.id);
-    final service = FlutterBackgroundService();
-    if (!await service.isRunning()) {
-      await service.startService();
-    } else {
-      service.invoke('setTrip', {'trip_id': trip.id});
+    try {
+      final service = FlutterBackgroundService();
+      if (!await service.isRunning()) {
+        await service.startService();
+      } else {
+        service.invoke('setTrip', {'trip_id': trip.id});
+      }
+    } catch (e) {
+      debugPrint('Location tracking service start after OTP failed: $e');
     }
   }
 

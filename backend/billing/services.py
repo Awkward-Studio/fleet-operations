@@ -176,27 +176,35 @@ class CloseoutService:
         time_source = "trip_checklist"
 
         if policy in (MeteringPolicy.PICKUP_TO_DROP, MeteringPolicy.AIRPORT_TRANSFER):
-            pickup = milestones.get("pickup") or {}
-            drop = milestones.get("drop") or {}
-            if pickup.get("odometer_km") is None or drop.get("odometer_km") is None:
+            pickup = milestones.get("pickup") or milestones.get("garage_departure")
+            drop = milestones.get("drop")
+
+            pickup_odom = pickup.get("odometer_km") if pickup else None
+            drop_odom = drop.get("odometer_km") if drop else None
+
+            if pickup_odom is None or drop_odom is None:
                 blockers.append({
                     "code": "METERING_PICKUP_DROP_ODOMETER_MISSING",
                     "message": "Pickup and drop odometer milestones are required for this metering policy.",
                 })
                 start_km = end_km = Decimal("0")
             else:
-                start_km = Decimal(str(pickup["odometer_km"]))
-                end_km = Decimal(str(drop["odometer_km"]))
+                start_km = Decimal(str(pickup_odom))
+                end_km = Decimal(str(drop_odom))
                 odometer_source = "milestone_snapshot.pickup/drop"
-            if not pickup.get("timestamp") or not drop.get("timestamp"):
+
+            pickup_time = pickup.get("timestamp") if pickup else None
+            drop_time = drop.get("timestamp") if drop else None
+
+            if not pickup_time or not drop_time:
                 blockers.append({
                     "code": "METERING_PICKUP_DROP_TIME_MISSING",
                     "message": "Pickup and drop timestamps are required for this metering policy.",
                 })
                 start_at = end_at = None
             else:
-                start_at = datetime.datetime.fromisoformat(pickup["timestamp"])
-                end_at = datetime.datetime.fromisoformat(drop["timestamp"])
+                start_at = datetime.datetime.fromisoformat(pickup_time)
+                end_at = datetime.datetime.fromisoformat(drop_time)
                 time_source = "milestone_snapshot.pickup/drop"
         elif policy == MeteringPolicy.FIXED_PACKAGE:
             odometer_source = "informational_trip_checklist"
@@ -453,6 +461,10 @@ class CloseoutService:
             evidence_snapshot=evidence,
             milestone_snapshot={
                 "garage_departure": {
+                    "timestamp": actual_pickup_at.isoformat() if actual_pickup_at else None,
+                    "odometer_km": str(start_odometer),
+                },
+                "pickup": {
                     "timestamp": actual_pickup_at.isoformat() if actual_pickup_at else None,
                     "odometer_km": str(start_odometer),
                 },

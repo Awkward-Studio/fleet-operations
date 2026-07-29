@@ -53,6 +53,59 @@ class ApiClient {
     );
   }
 
+  Future<dynamic> postMultipartFiles(
+    String path, {
+    required Map<String, String> fields,
+    required List<File> files,
+    required String fileField,
+    String contentType = 'image/jpeg',
+  }) async {
+    final token = await TokenStore.accessToken;
+    final request = http.MultipartRequest('POST', _uri(path))
+      ..fields.addAll(fields);
+
+    for (final file in files) {
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          fileField,
+          file.path,
+          contentType: MediaType.parse(contentType),
+        ),
+      );
+    }
+
+    if (token != null) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+
+    var streamed = await request.send();
+    var response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode == 401 && await _refreshToken()) {
+      final nextToken = await TokenStore.accessToken;
+      final retry = http.MultipartRequest('POST', _uri(path))
+        ..fields.addAll(fields);
+
+      for (final file in files) {
+        retry.files.add(
+          await http.MultipartFile.fromPath(
+            fileField,
+            file.path,
+            contentType: MediaType.parse(contentType),
+          ),
+        );
+      }
+
+      if (nextToken != null) {
+        retry.headers['Authorization'] = 'Bearer $nextToken';
+      }
+      streamed = await retry.send();
+      response = await http.Response.fromStream(streamed);
+    }
+
+    return decode(response);
+  }
+
   Future<http.Response> _authorizedGet(String path) async {
     final token = await TokenStore.accessToken;
     final response = await http.get(

@@ -5,6 +5,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,6 +23,36 @@ class LocationTrackingService {
 
   static Future<void> initialize() async {
     final service = FlutterBackgroundService();
+
+    if (Platform.isAndroid) {
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      const AndroidInitializationSettings initializationSettingsAndroid =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const InitializationSettings initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid,
+      );
+      await flutterLocalNotificationsPlugin.initialize(
+        settings: initializationSettings,
+      );
+
+      const AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'driver_location_tracking',
+        'Live GPS Tracking',
+        description: 'Used for streaming live location during active trips.',
+        importance: Importance.low,
+      );
+
+      await flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(channel);
+
+      await flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    }
+
     await service.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: locationTrackingServiceEntryPoint,

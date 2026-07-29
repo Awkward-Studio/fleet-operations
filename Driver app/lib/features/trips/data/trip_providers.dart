@@ -10,6 +10,16 @@ final currentDriverTripProvider = FutureProvider<Trip?>((ref) async {
   return Trip.fromJson(response as Map<String, dynamic>);
 });
 
+final driverProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  final api = ref.watch(apiClientProvider);
+  try {
+    final response = await api.get('/fleet/drivers/me/');
+    return response as Map<String, dynamic>?;
+  } catch (e) {
+    return null;
+  }
+});
+
 final tripActionControllerProvider = Provider<TripActionController>(
   (ref) => TripActionController(ref),
 );

@@ -9,20 +9,28 @@ import '../domain/trip.dart';
 import 'end_ride_screen.dart';
 import 'pre_ride_inspection_screen.dart';
 import 'pickup_navigation_screen.dart';
+import 'fuel_logging_screen.dart';
 import 'trip_details_modal.dart';
 
-class DriverHomeScreen extends ConsumerWidget {
+class DriverHomeScreen extends ConsumerStatefulWidget {
   const DriverHomeScreen({super.key, required this.onLogout});
 
   final VoidCallback onLogout;
 
+  @override
+  ConsumerState<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
+  int _currentIndex = 0;
+
   Future<void> _logout() async {
     await TokenStore.clear();
-    onLogout();
+    widget.onLogout();
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final tripState = ref.watch(currentDriverTripProvider);
     ref.listen(currentDriverTripProvider, (_, next) {
       next.when(
@@ -38,15 +46,19 @@ class DriverHomeScreen extends ConsumerWidget {
       );
     });
 
+    // Automatically trigger driver profile load so vehicle info is fetched
+    ref.watch(driverProfileProvider);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Driver Dashboard'),
+        title: Text(_currentIndex == 0 ? 'Driver Dashboard' : 'Log Fuel Purchase'),
         actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: () => ref.invalidate(currentDriverTripProvider),
-            icon: const Icon(Icons.refresh),
-          ),
+          if (_currentIndex == 0)
+            IconButton(
+              tooltip: 'Refresh',
+              onPressed: () => ref.invalidate(currentDriverTripProvider),
+              icon: const Icon(Icons.refresh),
+            ),
           IconButton(
             tooltip: 'Sign out',
             onPressed: _logout,
@@ -54,31 +66,56 @@ class DriverHomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: tripState.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => _DashboardError(
-          message: error.toString().replaceFirst('Exception: ', ''),
-          onRetry: () => ref.invalidate(currentDriverTripProvider),
-        ),
-        data: (trip) => RefreshIndicator(
-          onRefresh: () => ref.refresh(currentDriverTripProvider.future),
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-            children: [
-              _Header(trip: trip),
-              const SizedBox(height: 18),
-              if (trip?.status == TripStatus.active) ...[
-                const _LiveTrackingBanner(),
-                const SizedBox(height: 14),
-              ],
-              if (trip == null)
-                const _EmptyTripState()
-              else
-                ActiveTripCard(trip: trip),
-            ],
+      body: IndexedStack(
+        index: _currentIndex,
+        children: [
+          // Trips Tab
+          tripState.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => _DashboardError(
+              message: error.toString().replaceFirst('Exception: ', ''),
+              onRetry: () => ref.invalidate(currentDriverTripProvider),
+            ),
+            data: (trip) => RefreshIndicator(
+              onRefresh: () => ref.refresh(currentDriverTripProvider.future),
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                children: [
+                  _Header(trip: trip),
+                  const SizedBox(height: 18),
+                  if (trip?.status == TripStatus.active) ...[
+                    const _LiveTrackingBanner(),
+                    const SizedBox(height: 14),
+                  ],
+                  if (trip == null)
+                    const _EmptyTripState()
+                  else
+                    ActiveTripCard(trip: trip),
+                ],
+              ),
+            ),
           ),
-        ),
+          
+          // Fuel Tab
+          const FuelLoggingScreen(),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) => setState(() => _currentIndex = index),
+        selectedItemColor: const Color(0xff0f766e),
+        unselectedItemColor: Colors.black54,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.route),
+            label: 'Trips',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.local_gas_station),
+            label: 'Fuel',
+          ),
+        ],
       ),
     );
   }

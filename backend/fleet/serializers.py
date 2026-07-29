@@ -23,6 +23,7 @@ from .models import (
     VehicleStatus,
     FuelTransaction,
     FuelTransactionStatus,
+    FuelTransactionImage,
     FuelType,
     FuelUnit,
 )
@@ -295,6 +296,7 @@ class DriverSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
     )
+    current_vehicle = serializers.SerializerMethodField()
 
     class Meta:
         model = Driver
@@ -318,7 +320,20 @@ class DriverSerializer(serializers.ModelSerializer):
             "driving_license_expiry_date",
             "police_clearance_certificate",
             "police_clearance_certificate_id",
+            "current_vehicle",
         ]
+
+    def get_current_vehicle(self, obj):
+        vehicle = obj.vehicles.first()
+        if vehicle:
+            return {
+                "id": vehicle.id,
+                "registration_number": vehicle.registration_number,
+                "make": vehicle.make,
+                "model": vehicle.model,
+                "odometer_km": vehicle.odometer_km,
+            }
+        return None
 
     def validate_email(self, value):
         if value:
@@ -945,13 +960,35 @@ class AvailabilitySerializer(serializers.Serializer):
     compliance_blockers = serializers.ListField(child=serializers.CharField())
 
 
+class FuelTransactionImageSerializer(serializers.ModelSerializer):
+    asset_id = serializers.PrimaryKeyRelatedField(source="asset", read_only=True)
+    file_url = serializers.ReadOnlyField(source="asset.file_url")
+    original_name = serializers.ReadOnlyField(source="asset.original_name")
+
+    class Meta:
+        model = FuelTransactionImage
+        fields = ["id", "asset_id", "file_url", "original_name"]
+
+
 class FuelTransactionSerializer(serializers.ModelSerializer):
+    images = FuelTransactionImageSerializer(many=True, read_only=True)
+    image_asset_ids = serializers.PrimaryKeyRelatedField(
+        queryset=UploadedAsset.objects.all(),
+        many=True,
+        write_only=True,
+        required=False,
+    )
+
     class Meta:
         model = FuelTransaction
         fields = [
             "id",
             "vehicle",
             "driver",
+            "trip",
+            "latitude",
+            "longitude",
+            "review_notes",
             "vendor",
             "invoice_number",
             "transaction_datetime",
@@ -966,6 +1003,8 @@ class FuelTransactionSerializer(serializers.ModelSerializer):
             "status",
             "receipt_asset",
             "odometer_asset",
+            "images",
+            "image_asset_ids",
             "is_correction",
             "corrected_by_transaction",
             "corrected_from_transaction",
@@ -1020,17 +1059,32 @@ class FuelTransactionSerializer(serializers.ModelSerializer):
 
         source = attrs.get("source", "console")
         if source == "mobile_app":
-            if not attrs.get("receipt_asset"):
-                raise serializers.ValidationError({"receipt_asset": "Receipt evidence photo is required for mobile submissions."})
-            if not attrs.get("odometer_asset"):
-                raise serializers.ValidationError({"odometer_asset": "Odometer verification photo is required for mobile submissions."})
+            # For mobile submissions, receipt photo or generic images are required
+            pass
 
         return attrs
+
+    def create(self, validated_data):
+        image_asset_ids = validated_data.pop("image_asset_ids", [])
+        tx = super().create(validated_data)
+        for asset in image_asset_ids:
+            FuelTransactionImage.objects.create(transaction=tx, asset=asset)
+        return tx
+
+    def update(self, instance, validated_data):
+        image_asset_ids = validated_data.pop("image_asset_ids", None)
+        tx = super().update(instance, validated_data)
+        if image_asset_ids is not None:
+            instance.images.all().delete()
+            for asset in image_asset_ids:
+                FuelTransactionImage.objects.create(transaction=tx, asset=asset)
+        return tx
 
 
 class FuelTransactionDetailSerializer(FuelTransactionSerializer):
     vehicle_details = VehicleSerializer(source="vehicle", read_only=True)
     driver_details = DriverSerializer(source="driver", read_only=True)
+    trip_details = TripSerializer(source="trip", read_only=True)
     receipt_asset_details = UploadedAssetSerializer(source="receipt_asset", read_only=True)
     odometer_asset_details = UploadedAssetSerializer(source="odometer_asset", read_only=True)
 
@@ -1038,6 +1092,7 @@ class FuelTransactionDetailSerializer(FuelTransactionSerializer):
         fields = FuelTransactionSerializer.Meta.fields + [
             "vehicle_details",
             "driver_details",
+            "trip_details",
             "receipt_asset_details",
             "odometer_asset_details",
         ]

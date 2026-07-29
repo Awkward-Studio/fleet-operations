@@ -1009,6 +1009,10 @@ class FuelTransactionStatus(models.TextChoices):
 class FuelTransaction(models.Model):
     vehicle = models.ForeignKey(Vehicle, on_delete=models.PROTECT, related_name="fuel_transactions")
     driver = models.ForeignKey(Driver, on_delete=models.PROTECT, related_name="fuel_transactions", null=True, blank=True)
+    trip = models.ForeignKey(Trip, null=True, blank=True, on_delete=models.SET_NULL, related_name="fuel_transactions")
+    latitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
+    review_notes = models.TextField(blank=True)
     vendor = models.CharField(max_length=150, blank=True)
     invoice_number = models.CharField(max_length=100, blank=True)
     transaction_datetime = models.DateTimeField()
@@ -1120,3 +1124,23 @@ class FuelTransaction(models.Model):
 
     def __str__(self):
         return f"Fuel Tx {self.id or 'Draft'} - {self.vehicle.registration_number} (₹{self.total_amount})"
+
+
+class FuelTransactionImage(models.Model):
+    transaction = models.ForeignKey(
+        FuelTransaction,
+        on_delete=models.CASCADE,
+        related_name="images",
+    )
+    asset = models.ForeignKey(
+        "media_store.UploadedAsset",
+        on_delete=models.CASCADE,
+        related_name="fuel_images",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Image for Fuel Tx {self.transaction_id} (Asset: {self.asset_id})"

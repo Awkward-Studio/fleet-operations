@@ -787,6 +787,18 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
     queryset = FuelTransaction.objects.all().order_by("-transaction_datetime")
     serializer_class = FuelTransactionSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return FuelTransaction.objects.none()
+
+        # Drivers can only view their own fuel logs
+        if hasattr(user, "driver_profile"):
+            return FuelTransaction.objects.filter(driver=user.driver_profile).order_by("-transaction_datetime")
+
+        # Dispatchers / Managers can see all
+        return FuelTransaction.objects.all().order_by("-transaction_datetime")
+
     def get_serializer_class(self):
         if self.action in ["retrieve", "list"]:
             return FuelTransactionDetailSerializer
@@ -796,6 +808,74 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
         if self.action in ["approve", "reject", "reverse", "correct", "resolve_anomaly"]:
             return [permissions.IsAuthenticated(), IsCommercialAdmin()]
         return [permissions.IsAuthenticated()]
+
+    def create(self, request, *args, **kwargs):
+        # Dispatchers / Managers cannot manually create fuel transactions
+        if not hasattr(request.user, "driver_profile") and not request.user.is_superuser:
+            return Response(
+                {"detail": "Only drivers can log fuel purchases."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Support multipart file upload
+        files = request.FILES.getlist("images")
+        image_assets = []
+        for file_obj in files:
+            asset = upload_asset(
+                file_obj,
+                kind=UploadedAsset.KIND_IMAGE,
+                folder="fuel-assets",
+                request=request,
+            )
+            image_assets.append(asset.id)
+
+        data = request.data
+        if hasattr(data, "_mutable"):
+            old_mutable = data._mutable
+            data._mutable = True
+            data.setlist("image_asset_ids", image_assets + data.getlist("image_asset_ids"))
+            data._mutable = old_mutable
+        else:
+            if isinstance(data, dict):
+                data = data.copy()
+                data["image_asset_ids"] = image_assets + data.get("image_asset_ids", [])
+            else:
+                data = data.copy()
+                data.setlist("image_asset_ids", image_assets + data.getlist("image_asset_ids"))
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+
+        # Drivers cannot edit approved logs
+        if hasattr(request.user, "driver_profile") and instance.status == FuelTransactionStatus.APPROVED:
+            return Response(
+                {"detail": "Drivers cannot edit an approved fuel log."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Drivers cannot delete fuel logs
+        if hasattr(request.user, "driver_profile"):
+            return Response(
+                {"detail": "Drivers cannot delete fuel logs."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         tx = serializer.save()
@@ -825,7 +905,8 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
         tx.status = FuelTransactionStatus.APPROVED
         tx.approved_by = request.user
         tx.approved_at = timezone.now()
-        tx.save(update_fields=["status", "approved_by", "approved_at"])
+        tx.review_notes = request.data.get("review_notes", "")
+        tx.save(update_fields=["status", "approved_by", "approved_at", "review_notes"])
 
         # Post to Fleet Accounting (Task 7)
         try:
@@ -879,7 +960,8 @@ class FuelTransactionViewSet(viewsets.ModelViewSet):
             )
 
         tx.status = FuelTransactionStatus.REJECTED
-        tx.save(update_fields=["status"])
+        tx.review_notes = request.data.get("review_notes", "")
+        tx.save(update_fields=["status", "review_notes"])
         return Response(FuelTransactionDetailSerializer(tx).data)
 
     @action(detail=True, methods=["post"])

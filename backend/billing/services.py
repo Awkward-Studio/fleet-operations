@@ -19,6 +19,7 @@ from .models import (
 )
 from .tax_service import TaxService, money
 from fleet.models import MeteringPolicy, PricingAmountStatus, Trip, TripStatus
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -395,7 +396,10 @@ class CloseoutService:
 
     @staticmethod
     @transaction.atomic
-    def create_from_trip_completion(trip_id: int, event_key: str | None = None) -> TripCloseout:
+    def create_from_trip_completion(
+    trip_id: int,
+    event_key: Optional[str] = None
+) -> TripCloseout:
         trip = (
             Trip.objects.select_for_update()
             .select_related("checklist", "driver", "vehicle")

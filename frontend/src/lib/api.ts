@@ -826,6 +826,10 @@ export type FuelTransaction = {
   vehicle_details?: Vehicle;
   driver?: number | null;
   driver_details?: Driver | null;
+  trip?: number | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  review_notes?: string;
   vendor: string;
   invoice_number: string;
   transaction_datetime: string;
@@ -882,15 +886,17 @@ export function updateFuelTransaction(id: number, payload: Partial<FuelTransacti
   });
 }
 
-export function approveFuelTransaction(id: number) {
+export function approveFuelTransaction(id: number, reviewNotes?: string) {
   return request<FuelTransaction>(`/fuel-transactions/${id}/approve/`, {
     method: "POST",
+    body: JSON.stringify({ review_notes: reviewNotes || "" })
   });
 }
 
-export function rejectFuelTransaction(id: number) {
+export function rejectFuelTransaction(id: number, reviewNotes?: string) {
   return request<FuelTransaction>(`/fuel-transactions/${id}/reject/`, {
     method: "POST",
+    body: JSON.stringify({ review_notes: reviewNotes || "" })
   });
 }
 

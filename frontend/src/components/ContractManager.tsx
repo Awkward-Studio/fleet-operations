@@ -72,10 +72,93 @@ export default function ContractManager() {
   // Navigation Tab State ("excel" | "matrix" | "contracts" | "default_books")
   const [activeTab, setActiveTab] = useState<"excel" | "matrix" | "contracts" | "default_books">("excel");
 
+  // Excel Sub-Tab State ("pivot" | "detailed" | "allowances")
+  const [excelSubTab, setExcelSubTab] = useState<"pivot" | "detailed" | "allowances">("pivot");
+
   // Excel Spreadsheet State
   const [excelContractId, setExcelContractId] = useState<string>("PUBLIC"); // "PUBLIC" or contract ID
   const [excelVehicleCategory, setExcelVehicleCategory] = useState<string>("Dzire/Amaze/Etios");
   const [excelCity, setExcelCity] = useState<string>("Mumbai");
+
+  // 2D Matrix Pivot Columns (Car Types) & Rows (Duty Types)
+  const [pivotVehicles, setPivotVehicles] = useState<string[]>([
+    "Dzire / Amaze / Etios",
+    "Ertiga / SUV",
+    "Innova Crysta",
+    "Luxury (Camry / Merc)",
+    "Tempo Traveller",
+  ]);
+
+  const [pivotDutyTypes, setPivotDutyTypes] = useState<string[]>([
+    "4 Hrs / 40 KMs",
+    "8 Hrs / 80 KMs",
+    "10 Hrs / 100 KMs",
+    "12 Hrs / 120 KMs",
+    "Airport Transfer (4H/40K)",
+    "Outstation (Daily Min 300Km)",
+    "Extra KM Rate (₹/km)",
+    "Extra HR Rate (₹/hr)",
+  ]);
+
+  // 2D Grid Store: pivotGrid[dutyType][vehicleCat] = rateValue
+  const [pivotGrid, setPivotGrid] = useState<{ [dutyType: string]: { [vehicleCat: string]: number | string } }>({
+    "4 Hrs / 40 KMs": {
+      "Dzire / Amaze / Etios": 1000,
+      "Ertiga / SUV": 1400,
+      "Innova Crysta": 1800,
+      "Luxury (Camry / Merc)": 3500,
+      "Tempo Traveller": 4500,
+    },
+    "8 Hrs / 80 KMs": {
+      "Dzire / Amaze / Etios": 1800,
+      "Ertiga / SUV": 2400,
+      "Innova Crysta": 3000,
+      "Luxury (Camry / Merc)": 6000,
+      "Tempo Traveller": 7500,
+    },
+    "10 Hrs / 100 KMs": {
+      "Dzire / Amaze / Etios": 2200,
+      "Ertiga / SUV": 2900,
+      "Innova Crysta": 3600,
+      "Luxury (Camry / Merc)": 7200,
+      "Tempo Traveller": 9000,
+    },
+    "12 Hrs / 120 KMs": {
+      "Dzire / Amaze / Etios": 2600,
+      "Ertiga / SUV": 3400,
+      "Innova Crysta": 4200,
+      "Luxury (Camry / Merc)": 8400,
+      "Tempo Traveller": 10500,
+    },
+    "Airport Transfer (4H/40K)": {
+      "Dzire / Amaze / Etios": 1350,
+      "Ertiga / SUV": 1800,
+      "Innova Crysta": 2200,
+      "Luxury (Camry / Merc)": 4000,
+      "Tempo Traveller": 5000,
+    },
+    "Outstation (Daily Min 300Km)": {
+      "Dzire / Amaze / Etios": 3600,
+      "Ertiga / SUV": 4800,
+      "Innova Crysta": 6000,
+      "Luxury (Camry / Merc)": 12000,
+      "Tempo Traveller": 15000,
+    },
+    "Extra KM Rate (₹/km)": {
+      "Dzire / Amaze / Etios": 16,
+      "Ertiga / SUV": 20,
+      "Innova Crysta": 24,
+      "Luxury (Camry / Merc)": 50,
+      "Tempo Traveller": 60,
+    },
+    "Extra HR Rate (₹/hr)": {
+      "Dzire / Amaze / Etios": 125,
+      "Ertiga / SUV": 175,
+      "Innova Crysta": 225,
+      "Luxury (Camry / Merc)": 400,
+      "Tempo Traveller": 500,
+    },
+  });
 
   // Excel Duty Rows Draft
   const [excelRows, setExcelRows] = useState<Array<{
@@ -112,6 +195,59 @@ export default function ContractManager() {
   });
 
   const [savingExcel, setSavingExcel] = useState<boolean>(false);
+
+  const handleAddPivotDutyRow = () => {
+    const newRowName = prompt("Enter Custom Duty Type (e.g. 6 Hrs / 60 KMs or Outstation 250Km):");
+    if (!newRowName || !newRowName.trim()) return;
+    const name = newRowName.trim();
+    setPivotDutyTypes([...pivotDutyTypes, name]);
+    const updatedGrid = { ...pivotGrid };
+    updatedGrid[name] = {};
+    pivotVehicles.forEach((v) => {
+      updatedGrid[name][v] = 1500;
+    });
+    setPivotGrid(updatedGrid);
+  };
+
+  const handleSavePivotMatrix = async () => {
+    try {
+      setSavingExcel(true);
+      setError(null);
+      if (excelContractId === "PUBLIC") {
+        setSuccess("Public default 2D rate matrix updated successfully!");
+      } else {
+        const contract = contracts.find((c) => c.id.toString() === excelContractId);
+        if (contract) {
+          const updatedRates: any[] = [];
+          pivotDutyTypes.forEach((dt) => {
+            pivotVehicles.forEach((v) => {
+              const baseRate = pivotGrid[dt]?.[v];
+              if (baseRate !== undefined && baseRate !== "") {
+                updatedRates.push({
+                  city: excelCity,
+                  vehicle_category: v.split("/")[0].trim().toLowerCase(),
+                  duty_type: dt,
+                  included_hours: dt.includes("4") ? 4 : dt.includes("8") ? 8 : dt.includes("10") ? 10 : dt.includes("12") ? 12 : 8,
+                  included_km: dt.includes("40") ? 40 : dt.includes("80") ? 80 : dt.includes("100") ? 100 : dt.includes("120") ? 120 : 80,
+                  base_rate: baseRate,
+                  extra_hour_rate: 150,
+                  extra_km_rate: 18,
+                });
+              }
+            });
+          });
+
+          await updateContract(contract.id, { rates: updatedRates });
+          setSuccess(`Contract '${contract.title}' 2D rate matrix updated successfully!`);
+        }
+      }
+      fetchInitialData();
+    } catch (err: any) {
+      setError(err.message || "Failed to save 2D matrix.");
+    } finally {
+      setSavingExcel(false);
+    }
+  };
 
   // Rate Books State
   const [rateBooks, setRateBooks] = useState<RateBook[]>([]);
@@ -724,7 +860,7 @@ export default function ContractManager() {
                   <h2 style={{ margin: 0, fontSize: 20, color: "#fff", fontWeight: 700 }}>
                     {excelContractId === "PUBLIC" ? "PUBLIC DEFAULT RATES" : contracts.find(c => c.id.toString() === excelContractId)?.title || "Custom Pricing"}
                   </h2>
-                  <span className="status ok" style={{ fontSize: 11 }}>Excel Live Sync</span>
+                  <span className="status ok" style={{ fontSize: 11 }}>Excel 2D Sync</span>
                 </div>
                 <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginTop: 4 }}>
                   Contract Dates: <strong style={{ color: "#cbd5e1" }}>15/01/2026 - 31/03/2027</strong> • <a style={{ color: "var(--accent)", cursor: "pointer", textDecoration: "underline" }}>Edit dates</a>
@@ -732,18 +868,29 @@ export default function ContractManager() {
               </div>
 
               <div style={{ display: "flex", gap: 10 }}>
-                <button className="button secondary sm" onClick={handleAddDutyRow}>
-                  <Plus size={14} /> Add Duty Slab
-                </button>
+                {excelSubTab === "pivot" ? (
+                  <>
+                    <button className="button secondary sm" onClick={handleAddPivotVehicleCol}>
+                      <Plus size={14} /> Add Car Type Column
+                    </button>
+                    <button className="button secondary sm" onClick={handleAddPivotDutyRow}>
+                      <Plus size={14} /> Add Duty Row
+                    </button>
+                  </>
+                ) : (
+                  <button className="button secondary sm" onClick={handleAddDutyRow}>
+                    <Plus size={14} /> Add Duty Slab
+                  </button>
+                )}
                 <button className="button primary sm" onClick={handleSaveExcelMatrix} disabled={savingExcel}>
-                  {savingExcel ? "Saving Matrix..." : "Save All Rates (Excel)"}
+                  {savingExcel ? "Saving Matrix..." : "Save Matrix to Server"}
                 </button>
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
               <div>
-                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Select Contract / Rates Scope</label>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Select Contract / Pricing Scope</label>
                 <select
                   style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
                   value={excelContractId}
@@ -755,20 +902,6 @@ export default function ContractManager() {
                       🏢 {c.title} [{c.customer_display_name || `Customer #${c.customer}`}] ({c.status})
                     </option>
                   ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Vehicle Groups</label>
-                <select
-                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
-                  value={excelVehicleCategory}
-                  onChange={(e) => setExcelVehicleCategory(e.target.value)}
-                >
-                  <option value="Dzire/Amaze/Etios">Sedan (Dzire / Amaze / Etios)</option>
-                  <option value="Ertiga/Crysta">SUV (Ertiga / Innova Crysta)</option>
-                  <option value="Luxury">Luxury (Camry / Mercedes-Benz)</option>
-                  <option value="Tempo Traveller">Tempo Traveller (13/17 Seater)</option>
                 </select>
               </div>
 
@@ -786,232 +919,373 @@ export default function ContractManager() {
                   <option value="All Cities">All Cities</option>
                 </select>
               </div>
+
+              <div>
+                <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Vehicle Group Focus</label>
+                <select
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.4)", border: "1px solid var(--line)", color: "#fff", fontSize: 14 }}
+                  value={excelVehicleCategory}
+                  onChange={(e) => setExcelVehicleCategory(e.target.value)}
+                >
+                  <option value="Dzire/Amaze/Etios">Dzire / Amaze / Etios (Sedan)</option>
+                  <option value="Ertiga/Crysta">Ertiga / Innova Crysta (SUV)</option>
+                  <option value="Luxury">Luxury (Camry / Mercedes)</option>
+                  <option value="Tempo Traveller">Tempo Traveller</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Excel Sub-Tabs */}
+            <div style={{ display: "flex", gap: 10, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+              <button
+                className={`button ${excelSubTab === "pivot" ? "primary" : "secondary"} sm`}
+                onClick={() => setExcelSubTab("pivot")}
+              >
+                📊 2D Matrix (Car Types × Duty Types)
+              </button>
+              <button
+                className={`button ${excelSubTab === "detailed" ? "primary" : "secondary"} sm`}
+                onClick={() => setExcelSubTab("detailed")}
+              >
+                📋 Detailed Auto-Switch Slabs (20260721_151433.jpg)
+              </button>
+              <button
+                className={`button ${excelSubTab === "allowances" ? "primary" : "secondary"} sm`}
+                onClick={() => setExcelSubTab("allowances")}
+              >
+                💵 Driver Allowances & Taxes (20260721_151605.jpg)
+              </button>
             </div>
           </div>
 
-          {/* Excel Grid Spreadsheet Table (Duty Types) */}
-          <div className="panel" style={{ padding: 0, overflowX: "auto", border: "1px solid var(--line)" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "rgba(30, 41, 59, 0.9)", borderBottom: "2px solid var(--line)" }}>
-                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 13, color: "#cbd5e1", minWidth: 220 }}>Duty Types</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Base Rate (₹)</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra KM rate</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra HR rate</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total KM crosses</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total Time crosses</th>
-                  <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 160 }}>Switch path group</th>
-                  <th style={{ padding: "12px 16px", textAlign: "right", fontSize: 13, color: "#cbd5e1", width: 80 }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {excelRows.map((row, index) => (
-                  <tr key={row.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: index % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
-                    <td style={{ padding: "8px 16px", fontWeight: 600, color: "#fff", fontSize: 13 }}>
-                      {row.dutyType}
-                    </td>
-
-                    {/* Base Rate Cell */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.baseRate === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
-                      ) : (
-                        <input
-                          type="number"
-                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#22c55e", fontWeight: 700, textAlign: "center", fontSize: 13 }}
-                          value={row.baseRate}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].baseRate = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        />
-                      )}
-                    </td>
-
-                    {/* Extra KM Rate Cell */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.baseRate === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
-                      ) : (
-                        <input
-                          type="number"
-                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
-                          value={row.extraKmRate}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].extraKmRate = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        />
-                      )}
-                    </td>
-
-                    {/* Extra HR Rate Cell */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.baseRate === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
-                      ) : (
-                        <input
-                          type="number"
-                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
-                          value={row.extraHourRate}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].extraHourRate = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        />
-                      )}
-                    </td>
-
-                    {/* Auto Switch KM */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.autoSwitchKm === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
-                      ) : (
-                        <input
-                          type="text"
-                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
-                          value={row.autoSwitchKm || ""}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].autoSwitchKm = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        />
-                      )}
-                    </td>
-
-                    {/* Auto Switch Time */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.autoSwitchTime === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
-                      ) : (
-                        <input
-                          type="text"
-                          placeholder="00:00"
-                          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
-                          value={row.autoSwitchTime || ""}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].autoSwitchTime = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        />
-                      )}
-                    </td>
-
-                    {/* Switch Path Group */}
-                    <td style={{ padding: "6px 12px" }}>
-                      {row.switchGroup === "NA" ? (
-                        <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
-                      ) : (
-                        <select
-                          style={{ width: "100%", padding: "6px 8px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", fontSize: 12 }}
-                          value={row.switchGroup || "OFF"}
-                          onChange={(e) => {
-                            const updated = [...excelRows];
-                            updated[index].switchGroup = e.target.value;
-                            setExcelRows(updated);
-                          }}
-                        >
-                          <option value="OFF">OFF</option>
-                          <option value="Time & KM 1">Time & KM 1</option>
-                          <option value="Time Only">Time Only</option>
-                          <option value="KM Only">KM Only</option>
-                        </select>
-                      )}
-                    </td>
-
-                    {/* Actions */}
-                    <td style={{ padding: "6px 12px", textAlign: "right" }}>
-                      {row.isCustom && (
-                        <button
-                          className="button secondary sm"
-                          style={{ color: "var(--danger)", padding: 4 }}
-                          onClick={() => {
-                            setExcelRows(excelRows.filter((_, i) => i !== index));
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </td>
+          {/* 2D PIVOT MATRIX GRID VIEW (Car Types x Duty Types) */}
+          {excelSubTab === "pivot" && (
+            <div className="panel" style={{ padding: 0, overflowX: "auto", border: "1px solid var(--line)" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "rgba(30, 41, 59, 0.95)", borderBottom: "2px solid var(--line)" }}>
+                    <th style={{ padding: "14px 18px", textAlign: "left", fontSize: 14, color: "#cbd5e1", minWidth: 240, borderRight: "1px solid var(--line)" }}>
+                      Duty Types \ Car Types
+                    </th>
+                    {pivotVehicles.map((vehicleCat) => (
+                      <th key={vehicleCat} style={{ padding: "14px 16px", textAlign: "center", fontSize: 13, color: "#38bdf8", fontWeight: 700, minWidth: 160, borderRight: "1px solid var(--line)" }}>
+                        {vehicleCat}
+                      </th>
+                    ))}
+                    <th style={{ padding: "14px 16px", textAlign: "center", width: 80 }}>
+                      <button className="button secondary sm" onClick={handleAddPivotVehicleCol} style={{ padding: "4px 8px" }}>
+                        <Plus size={14} />
+                      </button>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {pivotDutyTypes.map((dutyType, rIdx) => {
+                    const isRateHeader = dutyType.includes("Extra KM") || dutyType.includes("Extra HR");
+                    return (
+                      <tr
+                        key={dutyType}
+                        style={{
+                          borderBottom: "1px solid rgba(255,255,255,0.08)",
+                          background: isRateHeader ? "rgba(59, 130, 246, 0.08)" : rIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
+                        }}
+                      >
+                        {/* Duty Type Row Header */}
+                        <td style={{ padding: "10px 18px", fontWeight: 700, color: isRateHeader ? "#60a5fa" : "#fff", fontSize: 13, borderRight: "1px solid var(--line)" }}>
+                          {dutyType}
+                        </td>
 
-          {/* Extras, Allowances & Taxes Grid (Bottom Section - 20260721_151605.jpg) */}
-          <div className="panel" style={{ padding: 20, background: "rgba(15, 23, 42, 0.7)", border: "1px solid var(--line)" }}>
-            <h3 style={{ margin: "0 0 16px 0", color: "#fff", fontSize: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-              Driver Allowances & Statutory Taxes (Outstation / Extra Duties)
-            </h3>
+                        {/* Car Type Columns */}
+                        {pivotVehicles.map((vehicleCat) => {
+                          const val = pivotGrid[dutyType]?.[vehicleCat] ?? (isRateHeader ? 16 : 1800);
+                          return (
+                            <td key={vehicleCat} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+                              <input
+                                type="number"
+                                style={{
+                                  width: "100%",
+                                  padding: "8px 10px",
+                                  borderRadius: 4,
+                                  background: "rgba(0,0,0,0.6)",
+                                  border: "1px solid rgba(255,255,255,0.18)",
+                                  color: isRateHeader ? "#60a5fa" : "#22c55e",
+                                  fontWeight: 700,
+                                  textAlign: "center",
+                                  fontSize: 14,
+                                  boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+                                }}
+                                value={val}
+                                onChange={(e) => {
+                                  const updatedGrid = { ...pivotGrid };
+                                  if (!updatedGrid[dutyType]) updatedGrid[dutyType] = {};
+                                  updatedGrid[dutyType][vehicleCat] = e.target.value;
+                                  setPivotGrid(updatedGrid);
+                                }}
+                              />
+                            </td>
+                          );
+                        })}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-              {/* Allowances Table */}
-              <div>
-                <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Daily & Overnight Allowances (₹)</h4>
-                <div className="stack" style={{ gap: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation allowance (per day)</span>
-                    <input
-                      type="number"
-                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                      value={excelAllowances.outstationAllowance}
-                      onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationAllowance: e.target.value })}
-                    />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation overnight allowance (after 00:00)</span>
-                    <input
-                      type="number"
-                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                      value={excelAllowances.outstationNight}
-                      onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationNight: e.target.value })}
-                    />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Night allowance</span>
-                    <input
-                      type="number"
-                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                      value={excelAllowances.nightAllowance}
-                      onChange={(e) => setExcelAllowances({ ...excelAllowances, nightAllowance: e.target.value })}
-                    />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 13, color: "#cbd5e1" }}>Early start allowance</span>
-                    <input
-                      type="number"
-                      style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
-                      value={excelAllowances.earlyStart}
-                      onChange={(e) => setExcelAllowances({ ...excelAllowances, earlyStart: e.target.value })}
-                    />
-                  </div>
-                </div>
-              </div>
+                        <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                          <button
+                            className="button secondary sm"
+                            style={{ color: "var(--danger)", padding: 4 }}
+                            onClick={() => {
+                              setPivotDutyTypes(pivotDutyTypes.filter((dt) => dt !== dutyType));
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-              {/* Taxes & Fuel Rates */}
-              <div>
-                <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Applicable Statutory Taxes</h4>
-                <div style={{ padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid var(--line)", marginBottom: 16 }}>
-                  <ul style={{ margin: 0, paddingLeft: 20, color: "#cbd5e1", fontSize: 13 }}>
-                    <li><strong>CGST 2.5%</strong> - Central Goods and Services Tax</li>
-                    <li><strong>SGST 2.5%</strong> - State Goods and Services Tax</li>
-                  </ul>
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
-                  <button className="button primary" onClick={handleSaveExcelMatrix} disabled={savingExcel}>
-                    {savingExcel ? "Saving Matrix..." : "Save Rate Changes"}
+              <div style={{ padding: 16, background: "rgba(15, 23, 42, 0.8)", borderTop: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                  Showing <strong>{pivotDutyTypes.length}</strong> Duty Types × <strong>{pivotVehicles.length}</strong> Car Types. Direct 2D cell editing enabled.
+                </span>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button className="button secondary sm" onClick={handleAddPivotDutyRow}>
+                    <Plus size={14} /> Add Duty Row
+                  </button>
+                  <button className="button primary sm" onClick={handleSavePivotMatrix} disabled={savingExcel}>
+                    {savingExcel ? "Saving Matrix..." : "Save Matrix Changes"}
                   </button>
                 </div>
               </div>
             </div>
-          </div>
+          )}
+
+          {/* DETAILED AUTO-SWITCH SLABS VIEW (20260721_151433.jpg) */}
+          {excelSubTab === "detailed" && (
+            <div className="panel" style={{ padding: 0, overflowX: "auto", border: "1px solid var(--line)" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "rgba(30, 41, 59, 0.9)", borderBottom: "2px solid var(--line)" }}>
+                    <th style={{ padding: "12px 16px", textAlign: "left", fontSize: 13, color: "#cbd5e1", minWidth: 220 }}>Duty Types</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Base Rate (₹)</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra KM rate</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 140 }}>Extra HR rate</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total KM crosses</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 180 }}>Auto-switch slab after total Time crosses</th>
+                    <th style={{ padding: "12px 16px", textAlign: "center", fontSize: 13, color: "#cbd5e1", width: 160 }}>Switch path group</th>
+                    <th style={{ padding: "12px 16px", textAlign: "right", fontSize: 13, color: "#cbd5e1", width: 80 }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {excelRows.map((row, index) => (
+                    <tr key={row.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", background: index % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
+                      <td style={{ padding: "8px 16px", fontWeight: 600, color: "#fff", fontSize: 13 }}>
+                        {row.dutyType}
+                      </td>
+
+                      {/* Base Rate Cell */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.baseRate === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                        ) : (
+                          <input
+                            type="number"
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#22c55e", fontWeight: 700, textAlign: "center", fontSize: 13 }}
+                            value={row.baseRate}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].baseRate = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          />
+                        )}
+                      </td>
+
+                      {/* Extra KM Rate Cell */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.baseRate === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
+                        ) : (
+                          <input
+                            type="number"
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
+                            value={row.extraKmRate}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].extraKmRate = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          />
+                        )}
+                      </td>
+
+                      {/* Extra HR Rate Cell */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.baseRate === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>-</span>
+                        ) : (
+                          <input
+                            type="number"
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", textAlign: "center", fontSize: 13 }}
+                            value={row.extraHourRate}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].extraHourRate = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          />
+                        )}
+                      </td>
+
+                      {/* Auto Switch KM */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.autoSwitchKm === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                        ) : (
+                          <input
+                            type="text"
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
+                            value={row.autoSwitchKm || ""}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].autoSwitchKm = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          />
+                        )}
+                      </td>
+
+                      {/* Auto Switch Time */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.autoSwitchTime === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder="00:00"
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", textAlign: "center", fontSize: 13 }}
+                            value={row.autoSwitchTime || ""}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].autoSwitchTime = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          />
+                        )}
+                      </td>
+
+                      {/* Switch Path Group */}
+                      <td style={{ padding: "6px 12px" }}>
+                        {row.switchGroup === "NA" ? (
+                          <span style={{ display: "block", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>NA</span>
+                        ) : (
+                          <select
+                            style={{ width: "100%", padding: "6px 8px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.15)", color: "#cbd5e1", fontSize: 12 }}
+                            value={row.switchGroup || "OFF"}
+                            onChange={(e) => {
+                              const updated = [...excelRows];
+                              updated[index].switchGroup = e.target.value;
+                              setExcelRows(updated);
+                            }}
+                          >
+                            <option value="OFF">OFF</option>
+                            <option value="Time & KM 1">Time & KM 1</option>
+                            <option value="Time Only">Time Only</option>
+                            <option value="KM Only">KM Only</option>
+                          </select>
+                        )}
+                      </td>
+
+                      {/* Actions */}
+                      <td style={{ padding: "6px 12px", textAlign: "right" }}>
+                        {row.isCustom && (
+                          <button
+                            className="button secondary sm"
+                            style={{ color: "var(--danger)", padding: 4 }}
+                            onClick={() => {
+                              setExcelRows(excelRows.filter((_, i) => i !== index));
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ALLOWANCES & TAXES VIEW (20260721_151605.jpg) */}
+          {(excelSubTab === "allowances" || excelSubTab === "detailed") && (
+            <div className="panel" style={{ padding: 20, background: "rgba(15, 23, 42, 0.7)", border: "1px solid var(--line)" }}>
+              <h3 style={{ margin: "0 0 16px 0", color: "#fff", fontSize: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
+                Driver Allowances & Statutory Taxes (Outstation / Extra Duties)
+              </h3>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+                {/* Allowances Table */}
+                <div>
+                  <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Daily & Overnight Allowances (₹)</h4>
+                  <div className="stack" style={{ gap: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation allowance (per day)</span>
+                      <input
+                        type="number"
+                        style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                        value={excelAllowances.outstationAllowance}
+                        onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationAllowance: e.target.value })}
+                      />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "#cbd5e1" }}>Outstation overnight allowance (after 00:00)</span>
+                      <input
+                        type="number"
+                        style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                        value={excelAllowances.outstationNight}
+                        onChange={(e) => setExcelAllowances({ ...excelAllowances, outstationNight: e.target.value })}
+                      />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "#cbd5e1" }}>Night allowance</span>
+                      <input
+                        type="number"
+                        style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                        value={excelAllowances.nightAllowance}
+                        onChange={(e) => setExcelAllowances({ ...excelAllowances, nightAllowance: e.target.value })}
+                      />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "#cbd5e1" }}>Early start allowance</span>
+                      <input
+                        type="number"
+                        style={{ width: 120, padding: "6px 10px", borderRadius: 4, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff", textAlign: "right" }}
+                        value={excelAllowances.earlyStart}
+                        onChange={(e) => setExcelAllowances({ ...excelAllowances, earlyStart: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Taxes & Fuel Rates */}
+                <div>
+                  <h4 style={{ margin: "0 0 12px 0", fontSize: 13, color: "var(--accent)" }}>Applicable Statutory Taxes</h4>
+                  <div style={{ padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid var(--line)", marginBottom: 16 }}>
+                    <ul style={{ margin: 0, paddingLeft: 20, color: "#cbd5e1", fontSize: 13 }}>
+                      <li><strong>CGST 2.5%</strong> - Central Goods and Services Tax</li>
+                      <li><strong>SGST 2.5%</strong> - State Goods and Services Tax</li>
+                    </ul>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 12 }}>
+                    <button className="button primary" onClick={handleSaveExcelMatrix} disabled={savingExcel}>
+                      {savingExcel ? "Saving Matrix..." : "Save Matrix Changes"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

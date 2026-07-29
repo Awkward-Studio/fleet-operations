@@ -209,6 +209,19 @@ export default function ContractManager() {
     setPivotGrid(updatedGrid);
   };
 
+  const handleAddPivotVehicleCol = () => {
+    const newColName = prompt("Enter Custom Car / Vehicle Category Name (e.g. Electric Sedan or Luxury SUV):");
+    if (!newColName || !newColName.trim()) return;
+    const name = newColName.trim();
+    setPivotVehicles([...pivotVehicles, name]);
+    const updatedGrid = { ...pivotGrid };
+    pivotDutyTypes.forEach((dt) => {
+      if (!updatedGrid[dt]) updatedGrid[dt] = {};
+      updatedGrid[dt][name] = dt.includes("Extra KM") ? 18 : dt.includes("Extra HR") ? 150 : 2000;
+    });
+    setPivotGrid(updatedGrid);
+  };
+
   const handleSavePivotMatrix = async () => {
     try {
       setSavingExcel(true);

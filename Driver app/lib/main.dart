@@ -349,10 +349,29 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _serverUrl,
                       decoration: const InputDecoration(
                         labelText: 'Backend Server URL / IP',
-                        hintText: 'e.g. http://omihome:8000 or http://192.168.1.34:8000',
+                        hintText: 'e.g. http://10.0.2.2:8000 or http://192.168.1.34:8000',
                         prefixIcon: Icon(Icons.link_outlined),
                       ),
                       style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        ActionChip(
+                          label: const Text('10.0.2.2 (Emulator)', style: TextStyle(fontSize: 11)),
+                          onPressed: () => setState(() => _serverUrl.text = 'http://10.0.2.2:8000'),
+                        ),
+                        ActionChip(
+                          label: const Text('192.168.1.34 (LAN)', style: TextStyle(fontSize: 11)),
+                          onPressed: () => setState(() => _serverUrl.text = 'http://192.168.1.34:8000'),
+                        ),
+                        ActionChip(
+                          label: const Text('omihome (Tailscale)', style: TextStyle(fontSize: 11)),
+                          onPressed: () => setState(() => _serverUrl.text = 'http://omihome:8000'),
+                        ),
+                      ],
                     ),
                   ],
                 ],

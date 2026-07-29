@@ -52,12 +52,32 @@ class ApiClient {
     return Uri.parse('$base/api$path');
   }
 
+  Future<http.Response> _safeNetworkCall(Future<http.Response> Function() call) async {
+    try {
+      return await call();
+    } on SocketException catch (e) {
+      final base = await ServerUrlStore.baseUrl;
+      throw Exception('Cannot connect to server at $base. Check host IP or server connection (${e.message}).');
+    } on http.ClientException catch (e) {
+      final base = await ServerUrlStore.baseUrl;
+      throw Exception('Network error connecting to $base (${e.message}).');
+    } catch (e) {
+      if (e.toString().contains('SocketException') || e.toString().contains('ClientException') || e.toString().contains('errno')) {
+        final base = await ServerUrlStore.baseUrl;
+        throw Exception('Cannot connect to server at $base. Please check server IP or URL.');
+      }
+      rethrow;
+    }
+  }
+
   Future<void> login(String username, String password) async {
     final uri = await _uri('/auth/login/');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'password': password}),
+    final response = await _safeNetworkCall(
+      () => http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password}),
+      ),
     );
 
     final data = decode(response) as Map<String, dynamic>;
@@ -151,23 +171,27 @@ class ApiClient {
   Future<http.Response> _authorizedGet(String path) async {
     final token = await TokenStore.accessToken;
     final uri = await _uri(path);
-    final response = await http.get(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
+    final response = await _safeNetworkCall(
+      () => http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      ),
     );
 
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
       final retryUri = await _uri(path);
-      return http.get(
-        retryUri,
-        headers: {
-          'Content-Type': 'application/json',
-          if (nextToken != null) 'Authorization': 'Bearer $nextToken',
-        },
+      return _safeNetworkCall(
+        () => http.get(
+          retryUri,
+          headers: {
+            'Content-Type': 'application/json',
+            if (nextToken != null) 'Authorization': 'Bearer $nextToken',
+          },
+        ),
       );
     }
 
@@ -180,25 +204,29 @@ class ApiClient {
   ) async {
     final token = await TokenStore.accessToken;
     final uri = await _uri(path);
-    final response = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode(payload),
+    final response = await _safeNetworkCall(
+      () => http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(payload),
+      ),
     );
 
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
       final retryUri = await _uri(path);
-      return http.post(
-        retryUri,
-        headers: {
-          'Content-Type': 'application/json',
-          if (nextToken != null) 'Authorization': 'Bearer $nextToken',
-        },
-        body: jsonEncode(payload),
+      return _safeNetworkCall(
+        () => http.post(
+          retryUri,
+          headers: {
+            'Content-Type': 'application/json',
+            if (nextToken != null) 'Authorization': 'Bearer $nextToken',
+          },
+          body: jsonEncode(payload),
+        ),
       );
     }
 

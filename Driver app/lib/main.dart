@@ -99,15 +99,33 @@ class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _serverUrl = TextEditingController();
   final _api = ApiClient();
   bool _loading = false;
   bool _obscurePassword = true;
+  bool _showServerConfig = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedServerUrl();
+  }
+
+  Future<void> _loadSavedServerUrl() async {
+    final url = await ServerUrlStore.baseUrl;
+    if (mounted) {
+      setState(() {
+        _serverUrl.text = url;
+      });
+    }
+  }
 
   @override
   void dispose() {
     _username.dispose();
     _password.dispose();
+    _serverUrl.dispose();
     super.dispose();
   }
 
@@ -119,6 +137,9 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
+      if (_serverUrl.text.trim().isNotEmpty) {
+        await ServerUrlStore.save(_serverUrl.text);
+      }
       await _api.login(_username.text.trim(), _password.text);
       widget.onLogin();
     } catch (error) {
@@ -292,20 +313,48 @@ class _LoginPageState extends State<LoginPage> {
               decoration: BoxDecoration(
                 color: const Color(0xffe8f3ef),
                 borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xffc2ded5)),
               ),
-              child: const Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.route, color: Color(0xff0f766e)),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Connected to fleet backend at $apiBaseUrl',
-                      style: TextStyle(
-                        color: Color(0xff24524c),
-                        fontWeight: FontWeight.w600,
-                      ),
+                  InkWell(
+                    onTap: () => setState(() => _showServerConfig = !_showServerConfig),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.dns_outlined, color: Color(0xff0f766e), size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Server URL: ${_serverUrl.text.isEmpty ? apiBaseUrl : _serverUrl.text}',
+                            style: const TextStyle(
+                              color: Color(0xff24524c),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(
+                          _showServerConfig ? Icons.expand_less : Icons.edit_outlined,
+                          color: const Color(0xff0f766e),
+                          size: 18,
+                        ),
+                      ],
                     ),
                   ),
+                  if (_showServerConfig) ...[
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _serverUrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Backend Server URL / IP',
+                        hintText: 'e.g. http://omihome:8000 or http://192.168.1.34:8000',
+                        prefixIcon: Icon(Icons.link_outlined),
+                      ),
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ],
                 ],
               ),
             ),

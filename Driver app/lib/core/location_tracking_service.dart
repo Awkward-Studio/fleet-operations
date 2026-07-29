@@ -271,8 +271,9 @@ Future<Map<String, dynamic>?> _loadCurrentTrip() async {
   if (token == null) return null;
 
   try {
+    final base = await ServerUrlStore.baseUrl;
     final response = await http.get(
-      Uri.parse('$apiBaseUrl/api/fleet/driver/my-trips/current/'),
+      Uri.parse('$base/api/fleet/driver/my-trips/current/'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -327,8 +328,9 @@ Future<bool> _postLocation(int tripId, Position position) async {
   if (token == null) return false;
 
   try {
+    final base = await ServerUrlStore.baseUrl;
     final response = await http.post(
-      Uri.parse('$apiBaseUrl/api/fleet/trips/$tripId/location/'),
+      Uri.parse('$base/api/fleet/trips/$tripId/location/'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',

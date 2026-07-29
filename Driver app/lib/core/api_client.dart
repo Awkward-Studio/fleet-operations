@@ -10,12 +10,49 @@ const String apiBaseUrl = String.fromEnvironment(
   defaultValue: 'http://10.0.2.2:8000',
 );
 
+class ServerUrlStore {
+  static const _key = 'driver_app_server_url';
+
+  static Future<String> get baseUrl async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_key);
+    if (stored != null && stored.trim().isNotEmpty) {
+      return _cleanUrl(stored);
+    }
+    return _cleanUrl(apiBaseUrl);
+  }
+
+  static Future<void> save(String rawUrl) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cleaned = _cleanUrl(rawUrl);
+    await prefs.setString(_key, cleaned);
+  }
+
+  static String _cleanUrl(String raw) {
+    var cleaned = raw.trim();
+    if (cleaned.contains('.local')) {
+      cleaned = cleaned.replaceAll('.local', '');
+    }
+    if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+      cleaned = 'http://$cleaned';
+    }
+    while (cleaned.endsWith('/')) {
+      cleaned = cleaned.substring(0, cleaned.length - 1);
+    }
+    return cleaned;
+  }
+}
+
 class ApiClient {
-  Uri _uri(String path) => Uri.parse('$apiBaseUrl/api$path');
+  Future<Uri> _uri(String path) async {
+    final base = await ServerUrlStore.baseUrl;
+    return Uri.parse('$base/api$path');
+  }
 
   Future<void> login(String username, String password) async {
+    final uri = await _uri('/auth/login/');
     final response = await http.post(
-      _uri('/auth/login/'),
+      uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'username': username, 'password': password}),
     );
@@ -108,8 +145,9 @@ class ApiClient {
 
   Future<http.Response> _authorizedGet(String path) async {
     final token = await TokenStore.accessToken;
+    final uri = await _uri(path);
     final response = await http.get(
-      _uri(path),
+      uri,
       headers: {
         'Content-Type': 'application/json',
         if (token != null) 'Authorization': 'Bearer $token',
@@ -118,8 +156,9 @@ class ApiClient {
 
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
+      final retryUri = await _uri(path);
       return http.get(
-        _uri(path),
+        retryUri,
         headers: {
           'Content-Type': 'application/json',
           if (nextToken != null) 'Authorization': 'Bearer $nextToken',
@@ -135,8 +174,9 @@ class ApiClient {
     Map<String, dynamic> payload,
   ) async {
     final token = await TokenStore.accessToken;
+    final uri = await _uri(path);
     final response = await http.post(
-      _uri(path),
+      uri,
       headers: {
         'Content-Type': 'application/json',
         if (token != null) 'Authorization': 'Bearer $token',
@@ -146,8 +186,9 @@ class ApiClient {
 
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
+      final retryUri = await _uri(path);
       return http.post(
-        _uri(path),
+        retryUri,
         headers: {
           'Content-Type': 'application/json',
           if (nextToken != null) 'Authorization': 'Bearer $nextToken',
@@ -167,7 +208,8 @@ class ApiClient {
     required String contentType,
   }) async {
     final token = await TokenStore.accessToken;
-    final request = http.MultipartRequest('POST', _uri(path))
+    final uri = await _uri(path);
+    final request = http.MultipartRequest('POST', uri)
       ..fields.addAll(fields)
       ..files.add(
         await http.MultipartFile.fromPath(
@@ -184,7 +226,8 @@ class ApiClient {
     var response = await http.Response.fromStream(streamed);
     if (response.statusCode == 401 && await _refreshToken()) {
       final nextToken = await TokenStore.accessToken;
-      final retry = http.MultipartRequest('POST', _uri(path))
+      final retryUri = await _uri(path);
+      final retry = http.MultipartRequest('POST', retryUri)
         ..fields.addAll(fields)
         ..files.add(
           await http.MultipartFile.fromPath(
@@ -207,8 +250,9 @@ class ApiClient {
     final refreshToken = await TokenStore.refreshToken;
     if (refreshToken == null) return false;
 
+    final uri = await _uri('/auth/token/refresh/');
     final response = await http.post(
-      _uri('/auth/token/refresh/'),
+      uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'refresh': refreshToken}),
     );

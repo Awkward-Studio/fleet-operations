@@ -307,6 +307,81 @@ export default function ContractManager() {
     loadExcelMatrix();
   }, [excelContractId, excelVehicleCategory, excelCity, contracts, rateBooks]);
 
+  const getSmartDefaultRate = (dt: string, vc: string): number | string => {
+    const vNorm = vc.toLowerCase();
+    const isSedan = vNorm.includes("sedan") || vNorm.includes("dzire") || vNorm.includes("etios");
+    const isSuv = vNorm.includes("suv") || vNorm.includes("ertiga");
+    const isCrysta = vNorm.includes("crysta");
+    const isLuxury = vNorm.includes("luxury") || vNorm.includes("merc") || vNorm.includes("camry");
+    const isTraveller = vNorm.includes("traveller") || vNorm.includes("tempo");
+
+    if (dt.includes("Extra KM")) {
+      if (isSedan) return 16;
+      if (isSuv) return 20;
+      if (isCrysta) return 24;
+      if (isLuxury) return 50;
+      if (isTraveller) return 60;
+      return 18;
+    }
+    if (dt.includes("Extra HR")) {
+      if (isSedan) return 125;
+      if (isSuv) return 175;
+      if (isCrysta) return 225;
+      if (isLuxury) return 400;
+      if (isTraveller) return 500;
+      return 150;
+    }
+    if (dt.includes("4 Hrs") || dt.includes("4H")) {
+      if (isSedan) return 1000;
+      if (isSuv) return 1400;
+      if (isCrysta) return 1800;
+      if (isLuxury) return 3500;
+      if (isTraveller) return 4500;
+      return 1200;
+    }
+    if (dt.includes("8 Hrs") || dt.includes("8H")) {
+      if (isSedan) return 1800;
+      if (isSuv) return 2400;
+      if (isCrysta) return 3000;
+      if (isLuxury) return 6000;
+      if (isTraveller) return 7500;
+      return 2200;
+    }
+    if (dt.includes("10 Hrs") || dt.includes("10H")) {
+      if (isSedan) return 2200;
+      if (isSuv) return 2900;
+      if (isCrysta) return 3600;
+      if (isLuxury) return 7200;
+      if (isTraveller) return 9000;
+      return 2600;
+    }
+    if (dt.includes("12")) {
+      if (isSedan) return 2600;
+      if (isSuv) return 3400;
+      if (isCrysta) return 4200;
+      if (isLuxury) return 8400;
+      if (isTraveller) return 10500;
+      return 3000;
+    }
+    if (dt.includes("Airport")) {
+      if (isSedan) return 1350;
+      if (isSuv) return 1800;
+      if (isCrysta) return 2200;
+      if (isLuxury) return 4000;
+      if (isTraveller) return 5000;
+      return 1600;
+    }
+    if (dt.includes("Outstation")) {
+      if (isSedan) return 3600;
+      if (isSuv) return 4800;
+      if (isCrysta) return 6000;
+      if (isLuxury) return 12000;
+      if (isTraveller) return 15000;
+      return 4500;
+    }
+    return 1800;
+  };
+
   const loadExcelMatrix = () => {
     const standardDutyTypes = [
       { name: "Extras", base: "NA", extraKm: "", extraHr: "", autoKm: "NA", autoTime: "NA", switch: "NA" },
@@ -324,102 +399,105 @@ export default function ContractManager() {
 
     if (excelContractId === "PUBLIC") {
       const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
-      if (publicBook && publicBook.packages) {
-        // Filter by city
-        const cityPkgs = publicBook.packages.filter(
-          (p) => !p.city || p.city.toLowerCase() === currentCityNorm || p.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
-        );
+      const cityPkgs = publicBook?.packages
+        ? publicBook.packages.filter(
+            (p) => !p.city || p.city.toLowerCase() === currentCityNorm || p.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
+          )
+        : [];
 
-        // Build 2D Pivot Grid
-        const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
-        pivotDutyTypes.forEach((dt) => {
-          newPivotGrid[dt] = {};
-          pivotVehicles.forEach((v) => {
-            const vNorm = v.split("/")[0].trim().toLowerCase();
-            const match = cityPkgs.find(
-              (p) =>
-                (p.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(p.vehicle_category.toLowerCase())) &&
-                (p.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(p.duty_type.toLowerCase()))
-            );
-            if (dt.includes("Extra KM")) {
-              newPivotGrid[dt][v] = match?.extra_km_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 16 : 20);
-            } else if (dt.includes("Extra HR")) {
-              newPivotGrid[dt][v] = match?.extra_hour_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 125 : 175);
-            } else {
-              newPivotGrid[dt][v] = match?.base_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 1800 : 2400);
-            }
-          });
+      // Build 2D Pivot Grid
+      const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
+      pivotDutyTypes.forEach((dt) => {
+        newPivotGrid[dt] = {};
+        pivotVehicles.forEach((v) => {
+          const vNorm = v.split("/")[0].trim().toLowerCase();
+          const match = cityPkgs.find(
+            (p) =>
+              (p.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(p.vehicle_category.toLowerCase())) &&
+              (p.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(p.duty_type.toLowerCase()))
+          );
+          if (dt.includes("Extra KM")) {
+            newPivotGrid[dt][v] = match?.extra_km_rate ?? getSmartDefaultRate(dt, v);
+          } else if (dt.includes("Extra HR")) {
+            newPivotGrid[dt][v] = match?.extra_hour_rate ?? getSmartDefaultRate(dt, v);
+          } else {
+            newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v);
+          }
         });
-        setPivotGrid(newPivotGrid);
+      });
+      setPivotGrid(newPivotGrid);
 
-        // Populate detailed slab rows for selected vehicle group
-        const matchingPkgs = cityPkgs.filter(
-          (p) => p.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(p.vehicle_category.toLowerCase())
-        );
-        const loadedRows = standardDutyTypes.map((dt) => {
-          const match = matchingPkgs.find((p) => p.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(p.duty_type.toLowerCase()));
-          return {
-            id: match?.id ? `pkg-${match.id}` : `dt-${dt.name}`,
-            dutyType: dt.name,
-            baseRate: match?.base_rate ?? dt.base,
-            extraKmRate: match?.extra_km_rate ?? dt.extraKm,
-            extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
-            autoSwitchKm: dt.autoKm,
-            autoSwitchTime: dt.autoTime,
-            switchGroup: dt.switch,
-          };
-        });
-        setExcelRows(loadedRows);
-      }
+      // Detailed Slabs
+      const matchingPkgs = cityPkgs.filter(
+        (p) => p.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(p.vehicle_category.toLowerCase())
+      );
+      const loadedRows = standardDutyTypes.map((dt) => {
+        const match = matchingPkgs.find((p) => p.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(p.duty_type.toLowerCase()));
+        return {
+          id: match?.id ? `pkg-${match.id}` : `dt-${dt.name}`,
+          dutyType: dt.name,
+          baseRate: match?.base_rate ?? dt.base,
+          extraKmRate: match?.extra_km_rate ?? dt.extraKm,
+          extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
+          autoSwitchKm: dt.autoKm,
+          autoSwitchTime: dt.autoTime,
+          switchGroup: dt.switch,
+        };
+      });
+      setExcelRows(loadedRows);
     } else {
       const contract = contracts.find((c) => c.id.toString() === excelContractId);
-      if (contract && contract.rates) {
-        // Filter by city
-        const cityRates = contract.rates.filter(
-          (r) => !r.city || r.city.toLowerCase() === currentCityNorm || r.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
-        );
+      const cityRates = contract?.rates
+        ? contract.rates.filter(
+            (r) => !r.city || r.city.toLowerCase() === currentCityNorm || r.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
+          )
+        : [];
 
-        // Build 2D Pivot Grid for selected Contract & City
-        const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
-        pivotDutyTypes.forEach((dt) => {
-          newPivotGrid[dt] = {};
-          pivotVehicles.forEach((v) => {
-            const vNorm = v.split("/")[0].trim().toLowerCase();
-            const match = cityRates.find(
-              (r) =>
-                (r.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(r.vehicle_category.toLowerCase())) &&
-                (r.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(r.duty_type.toLowerCase()))
-            );
+      // Build 2D Pivot Grid for selected Corporate Contract
+      const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
+      pivotDutyTypes.forEach((dt) => {
+        newPivotGrid[dt] = {};
+        pivotVehicles.forEach((v) => {
+          const vNorm = v.split("/")[0].trim().toLowerCase();
+          const match = cityRates.find(
+            (r) =>
+              (r.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(r.vehicle_category.toLowerCase())) &&
+              (r.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(r.duty_type.toLowerCase()))
+          );
+          if (match) {
             if (dt.includes("Extra KM")) {
-              newPivotGrid[dt][v] = match?.extra_km_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 16 : 20);
+              newPivotGrid[dt][v] = match.extra_km_rate || getSmartDefaultRate(dt, v);
             } else if (dt.includes("Extra HR")) {
-              newPivotGrid[dt][v] = match?.extra_hour_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 125 : 175);
+              newPivotGrid[dt][v] = match.extra_hour_rate || getSmartDefaultRate(dt, v);
             } else {
-              newPivotGrid[dt][v] = match?.base_rate ?? (vNorm.includes("sedan") || vNorm.includes("dzire") ? 1800 : 2400);
+              newPivotGrid[dt][v] = match.base_rate || getSmartDefaultRate(dt, v);
             }
-          });
+          } else {
+            // Fill with smart default so NO cell is left empty or blank!
+            newPivotGrid[dt][v] = getSmartDefaultRate(dt, v);
+          }
         });
-        setPivotGrid(newPivotGrid);
+      });
+      setPivotGrid(newPivotGrid);
 
-        // Populate detailed slab rows for selected vehicle group
-        const matchingRates = cityRates.filter(
-          (r) => r.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(r.vehicle_category.toLowerCase())
-        );
-        const loadedRows = standardDutyTypes.map((dt) => {
-          const match = matchingRates.find((r) => r.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(r.duty_type.toLowerCase()));
-          return {
-            id: match?.id ? `rate-${match.id}` : `dt-${dt.name}`,
-            dutyType: dt.name,
-            baseRate: match?.base_rate ?? dt.base,
-            extraKmRate: match?.extra_km_rate ?? dt.extraKm,
-            extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
-            autoSwitchKm: dt.autoKm,
-            autoSwitchTime: dt.autoTime,
-            switchGroup: dt.switch,
-          };
-        });
-        setExcelRows(loadedRows);
-      }
+      // Detailed Slabs
+      const matchingRates = cityRates.filter(
+        (r) => r.vehicle_category.toLowerCase().includes(excelVehicleCategory.toLowerCase()) || excelVehicleCategory.toLowerCase().includes(r.vehicle_category.toLowerCase())
+      );
+      const loadedRows = standardDutyTypes.map((dt) => {
+        const match = matchingRates.find((r) => r.duty_type.toLowerCase().includes(dt.name.toLowerCase()) || dt.name.toLowerCase().includes(r.duty_type.toLowerCase()));
+        return {
+          id: match?.id ? `rate-${match.id}` : `dt-${dt.name}`,
+          dutyType: dt.name,
+          baseRate: match?.base_rate ?? dt.base,
+          extraKmRate: match?.extra_km_rate ?? dt.extraKm,
+          extraHourRate: match?.extra_hour_rate ?? dt.extraHr,
+          autoSwitchKm: dt.autoKm,
+          autoSwitchTime: dt.autoTime,
+          switchGroup: dt.switch,
+        };
+      });
+      setExcelRows(loadedRows);
     }
   };
 

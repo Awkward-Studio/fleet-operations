@@ -79,6 +79,7 @@ export default function ContractManager() {
   const [excelContractId, setExcelContractId] = useState<string>("PUBLIC"); // "PUBLIC" or contract ID
   const [excelVehicleCategory, setExcelVehicleCategory] = useState<string>("Dzire/Amaze/Etios");
   const [excelCity, setExcelCity] = useState<string>("Mumbai");
+  const [isAxesSwapped, setIsAxesSwapped] = useState<boolean>(true); // Toggle Y-Axis / X-Axis
 
   // 2D Matrix Pivot Columns (Car Types) & Rows (Duty Types)
   const [pivotVehicles, setPivotVehicles] = useState<string[]>([
@@ -1013,45 +1014,65 @@ export default function ContractManager() {
           {/* 2D PIVOT MATRIX GRID VIEW (Car Types x Duty Types) */}
           {excelSubTab === "pivot" && (
             <div className="panel" style={{ padding: 0, overflowX: "auto", border: "1px solid var(--line)" }}>
+              <div style={{ padding: "12px 16px", background: "rgba(15, 23, 42, 0.8)", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 13, color: "#cbd5e1" }}>
+                  Active Layout: <strong style={{ color: "#38bdf8" }}>{isAxesSwapped ? "Car Types (Rows) × Duty Types (Columns)" : "Duty Types (Rows) × Car Types (Columns)"}</strong>
+                </span>
+                <button
+                  className="button secondary sm"
+                  onClick={() => setIsAxesSwapped(!isAxesSwapped)}
+                  style={{ gap: 6 }}
+                >
+                  <RefreshCw size={13} /> ⇄ Swap Axes ({isAxesSwapped ? "Show Duty Types on Y-Axis" : "Show Car Types on Y-Axis"})
+                </button>
+              </div>
+
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "rgba(30, 41, 59, 0.95)", borderBottom: "2px solid var(--line)" }}>
                     <th style={{ padding: "14px 18px", textAlign: "left", fontSize: 14, color: "#cbd5e1", minWidth: 240, borderRight: "1px solid var(--line)" }}>
-                      Duty Types \ Car Types
+                      {isAxesSwapped ? "Car Types \\ Duty Types" : "Duty Types \\ Car Types"}
                     </th>
-                    {pivotVehicles.map((vehicleCat) => (
-                      <th key={vehicleCat} style={{ padding: "14px 16px", textAlign: "center", fontSize: 13, color: "#38bdf8", fontWeight: 700, minWidth: 160, borderRight: "1px solid var(--line)" }}>
-                        {vehicleCat}
-                      </th>
-                    ))}
+                    {isAxesSwapped
+                      ? pivotDutyTypes.map((dt) => (
+                          <th key={dt} style={{ padding: "14px 16px", textAlign: "center", fontSize: 12, color: dt.includes("Extra") ? "#60a5fa" : "#38bdf8", fontWeight: 700, minWidth: 140, borderRight: "1px solid var(--line)" }}>
+                            {dt}
+                          </th>
+                        ))
+                      : pivotVehicles.map((vehicleCat) => (
+                          <th key={vehicleCat} style={{ padding: "14px 16px", textAlign: "center", fontSize: 13, color: "#38bdf8", fontWeight: 700, minWidth: 160, borderRight: "1px solid var(--line)" }}>
+                            {vehicleCat}
+                          </th>
+                        ))}
                     <th style={{ padding: "14px 16px", textAlign: "center", width: 80 }}>
-                      <button className="button secondary sm" onClick={handleAddPivotVehicleCol} style={{ padding: "4px 8px" }}>
+                      <button className="button secondary sm" onClick={isAxesSwapped ? handleAddPivotDutyRow : handleAddPivotVehicleCol} style={{ padding: "4px 8px" }}>
                         <Plus size={14} />
                       </button>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pivotDutyTypes.map((dutyType, rIdx) => {
-                    const isRateHeader = dutyType.includes("Extra KM") || dutyType.includes("Extra HR");
-                    return (
+                  {isAxesSwapped ? (
+                    // SWAPPED AXES: Car Types as Rows, Duty Types as Columns
+                    pivotVehicles.map((vehicleCat, rIdx) => (
                       <tr
-                        key={dutyType}
+                        key={vehicleCat}
                         style={{
                           borderBottom: "1px solid rgba(255,255,255,0.08)",
-                          background: isRateHeader ? "rgba(59, 130, 246, 0.08)" : rIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
+                          background: rIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
                         }}
                       >
-                        {/* Duty Type Row Header */}
-                        <td style={{ padding: "10px 18px", fontWeight: 700, color: isRateHeader ? "#60a5fa" : "#fff", fontSize: 13, borderRight: "1px solid var(--line)" }}>
-                          {dutyType}
+                        {/* Car Type Row Header */}
+                        <td style={{ padding: "10px 18px", fontWeight: 700, color: "#38bdf8", fontSize: 13, borderRight: "1px solid var(--line)" }}>
+                          🚗 {vehicleCat}
                         </td>
 
-                        {/* Car Type Columns */}
-                        {pivotVehicles.map((vehicleCat) => {
+                        {/* Duty Type Columns */}
+                        {pivotDutyTypes.map((dutyType) => {
+                          const isRateHeader = dutyType.includes("Extra KM") || dutyType.includes("Extra HR");
                           const val = pivotGrid[dutyType]?.[vehicleCat] ?? (isRateHeader ? 16 : 1800);
                           return (
-                            <td key={vehicleCat} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+                            <td key={dutyType} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
                               <input
                                 type="number"
                                 style={{
@@ -1083,15 +1104,77 @@ export default function ContractManager() {
                             className="button secondary sm"
                             style={{ color: "var(--danger)", padding: 4 }}
                             onClick={() => {
-                              setPivotDutyTypes(pivotDutyTypes.filter((dt) => dt !== dutyType));
+                              setPivotVehicles(pivotVehicles.filter((v) => v !== vehicleCat));
                             }}
                           >
                             <Trash2 size={13} />
                           </button>
                         </td>
                       </tr>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    // ORIGINAL AXES: Duty Types as Rows, Car Types as Columns
+                    pivotDutyTypes.map((dutyType, rIdx) => {
+                      const isRateHeader = dutyType.includes("Extra KM") || dutyType.includes("Extra HR");
+                      return (
+                        <tr
+                          key={dutyType}
+                          style={{
+                            borderBottom: "1px solid rgba(255,255,255,0.08)",
+                            background: isRateHeader ? "rgba(59, 130, 246, 0.08)" : rIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
+                          }}
+                        >
+                          {/* Duty Type Row Header */}
+                          <td style={{ padding: "10px 18px", fontWeight: 700, color: isRateHeader ? "#60a5fa" : "#fff", fontSize: 13, borderRight: "1px solid var(--line)" }}>
+                            {dutyType}
+                          </td>
+
+                          {/* Car Type Columns */}
+                          {pivotVehicles.map((vehicleCat) => {
+                            const val = pivotGrid[dutyType]?.[vehicleCat] ?? (isRateHeader ? 16 : 1800);
+                            return (
+                              <td key={vehicleCat} style={{ padding: "6px 10px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+                                <input
+                                  type="number"
+                                  style={{
+                                    width: "100%",
+                                    padding: "8px 10px",
+                                    borderRadius: 4,
+                                    background: "rgba(0,0,0,0.6)",
+                                    border: "1px solid rgba(255,255,255,0.18)",
+                                    color: isRateHeader ? "#60a5fa" : "#22c55e",
+                                    fontWeight: 700,
+                                    textAlign: "center",
+                                    fontSize: 14,
+                                    boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
+                                  }}
+                                  value={val}
+                                  onChange={(e) => {
+                                    const updatedGrid = { ...pivotGrid };
+                                    if (!updatedGrid[dutyType]) updatedGrid[dutyType] = {};
+                                    updatedGrid[dutyType][vehicleCat] = e.target.value;
+                                    setPivotGrid(updatedGrid);
+                                  }}
+                                />
+                              </td>
+                            );
+                          })}
+
+                          <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                            <button
+                              className="button secondary sm"
+                              style={{ color: "var(--danger)", padding: 4 }}
+                              onClick={() => {
+                                setPivotDutyTypes(pivotDutyTypes.filter((dt) => dt !== dutyType));
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
 

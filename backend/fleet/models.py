@@ -58,13 +58,16 @@ class ContractStatus(models.TextChoices):
 
 
 class DutyType(models.TextChoices):
+    LOCAL_4HR_40KM = "LOCAL_4HR_40KM", "Local (4h / 40km)"
     LOCAL_8HR_80KM = "LOCAL_8HR_80KM", "Local (8h / 80km)"
+    LOCAL_10HR_100KM = "LOCAL_10HR_100KM", "Local (10h / 100km)"
     LOCAL_12HR_120KM = "LOCAL_12HR_120KM", "Local (12h / 120km)"
     OUTSTATION = "OUTSTATION", "Outstation"
     AIRPORT_TRANSFER = "AIRPORT_TRANSFER", "Airport Transfer"
     ONE_WAY = "ONE_WAY", "One-Way"
     FULL_DAY = "FULL_DAY", "Full Day"
     CUSTOM = "CUSTOM", "Custom Package"
+
 
 
 class AllowanceType(models.TextChoices):
@@ -726,6 +729,73 @@ class Trip(models.Model):
         name = self.customer_display_name_snapshot or self.customer_name or "Trip"
         return f"{name}: {self.pickup_city} to {self.drop_city} at {self.pickup_at:%Y-%m-%d %H:%M}"
 
+    def recalculate_pricing(self):
+        from .pricing_service import calculate_unified_quote
+        from .models import CorporateContract, ContractRate
+        from decimal import Decimal
+        from django.utils import timezone
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if self.booking_type == BookingType.CORPORATE:
+            if not self.customer_id:
+                return
+            if not self.contract:
+                pickup_date = timezone.localtime(self.pickup_at).date() if self.pickup_at else timezone.localdate()
+                contracts = CorporateContract.objects.filter(
+                    customer=self.customer,
+                    status="ACTIVE",
+                    effective_start__lte=pickup_date,
+                ).filter(
+                    models.Q(effective_end__isnull=True) | models.Q(effective_end__gte=pickup_date)
+                )
+                if contracts.exists():
+                    self.contract = contracts.first()
+
+        category = self.vehicle.category if self.vehicle else self.vehicle_category_requested
+        if not category or not self.duty_type or not self.pickup_city or not self.pickup_at:
+            return
+
+        try:
+            quote = calculate_unified_quote(
+                booking_type=self.booking_type,
+                customer_id=self.customer.id if self.booking_type == BookingType.CORPORATE else None,
+                contract_id=self.contract.id if (self.booking_type == BookingType.CORPORATE and self.contract) else None,
+                pickup_datetime=self.pickup_at,
+                pickup_city=self.pickup_city,
+                drop_city=self.drop_city or "",
+                vehicle_category=category,
+                duty_type=self.duty_type,
+                planned_km=self.distance_km or 0,
+                ota_source=self.ota_source or "",
+            )
+
+            self.fare_amount = Decimal(quote["gross_amount"])
+            self.pricing_amount_status = PricingAmountStatus.QUOTED
+            self.quoted_taxable_amount = Decimal(quote["taxable_amount"])
+            self.quoted_tax_amount = Decimal(quote["tax_amount"])
+            self.quoted_total_amount = Decimal(quote["gross_amount"])
+            self.pricing_snapshot = quote
+            self.calculation_version = quote["calculation_version"]
+
+            if self.booking_type == BookingType.CORPORATE and self.contract:
+                contract_rate = ContractRate.objects.filter(
+                    contract=self.contract,
+                    city__iexact=self.pickup_city.strip().lower(),
+                    vehicle_category__iexact=category.strip().lower(),
+                    duty_type=self.duty_type,
+                ).first()
+                if not contract_rate:
+                    contract_rate = ContractRate.objects.filter(
+                        contract=self.contract,
+                        city="*",
+                        vehicle_category__iexact=category.strip().lower(),
+                        duty_type=self.duty_type,
+                    ).first()
+                self.contract_rate = contract_rate
+        except Exception as e:
+            logger.error(f"Error recalculating pricing for trip: {e}")
+
     def save(self, *args, **kwargs):
         if self.customer_id:
             self.bill_to_type = BillToType.CORPORATE
@@ -747,7 +817,31 @@ class Trip(models.Model):
             self.bill_to_phone_snapshot = (
                 self.bill_to_phone_snapshot or self.customer_phone
             )
+        
+        # Check if we need to calculate/recalculate pricing
+        is_new = self.pk is None
+        vehicle_changed = False
+        duty_type_changed = False
+        pickup_city_changed = False
+        pickup_at_changed = False
+        distance_km_changed = False
+        
+        if not is_new:
+            try:
+                orig = Trip.objects.get(pk=self.pk)
+                vehicle_changed = orig.vehicle_id != self.vehicle_id
+                duty_type_changed = orig.duty_type != self.duty_type
+                pickup_city_changed = orig.pickup_city != self.pickup_city
+                pickup_at_changed = orig.pickup_at != self.pickup_at
+                distance_km_changed = orig.distance_km != self.distance_km
+            except Trip.DoesNotExist:
+                pass
+                
+        if is_new or vehicle_changed or duty_type_changed or pickup_city_changed or pickup_at_changed or distance_km_changed:
+            self.recalculate_pricing()
+
         super().save(*args, **kwargs)
+
 
     def clean(self):
         super().clean()

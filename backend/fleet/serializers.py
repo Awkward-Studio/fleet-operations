@@ -163,6 +163,72 @@ class ContractAllowanceSerializer(serializers.ModelSerializer):
         return value
 
 
+def sync_contract_to_rate_book(contract):
+    from .models import RateBook, RateBookStatus, RateBookType, RatePackage
+    from django.utils import timezone
+    from decimal import Decimal
+
+    book_code = f"RB-{contract.customer.code}"
+    
+    status_map = {
+        "DRAFT": RateBookStatus.DRAFT,
+        "ACTIVE": RateBookStatus.ACTIVE,
+        "EXPIRED": RateBookStatus.RETIRED,
+        "TERMINATED": RateBookStatus.RETIRED,
+        "ARCHIVED": RateBookStatus.RETIRED,
+    }
+    book_status = status_map.get(contract.status, RateBookStatus.DRAFT)
+
+    rate_book, created = RateBook.objects.update_or_create(
+        contract=contract,
+        defaults={
+            "code": book_code,
+            "name": f"Rate Book for {contract.title}",
+            "version": 1,
+            "book_type": RateBookType.CORPORATE,
+            "status": book_status,
+            "effective_start": contract.effective_start,
+            "effective_end": contract.effective_end,
+            "approved_at": timezone.now() if book_status == RateBookStatus.ACTIVE else None,
+        }
+    )
+
+    # Delete existing packages for this rate book
+    rate_book.packages.all().delete()
+
+    # Resolve allowances to populate package-level allowance columns
+    driver_allowance = Decimal("0.00")
+    night_charge = Decimal("0.00")
+    for allowance in contract.allowances.all():
+        if allowance.allowance_type in ["OVERNIGHT_DRIVER_ALLOWANCE", "OUTSTATION_PER_DAY"]:
+            driver_allowance = allowance.amount
+        elif allowance.allowance_type in ["NIGHT_ALLOWANCE"]:
+            night_charge = allowance.amount
+
+    # Create RatePackages for each ContractRate under the contract
+    for rate in contract.rates.all():
+        pkg_code = f"PKG-{contract.customer.code}-{rate.city.upper()}-{rate.vehicle_category.upper()}-{rate.duty_type}"
+        RatePackage.objects.create(
+            rate_book=rate_book,
+            code=pkg_code,
+            name=f"{rate.city.title()} - {rate.vehicle_category.title()} ({rate.duty_type})",
+            city=rate.city,
+            vehicle_category=rate.vehicle_category,
+            duty_type=rate.duty_type,
+            included_hours=Decimal(str(rate.included_hours)),
+            included_km=Decimal(str(rate.included_km)),
+            base_rate=rate.base_rate,
+            extra_hour_rate=rate.extra_hour_rate,
+            extra_km_rate=rate.extra_km_rate,
+            daily_minimum_km=Decimal(str(rate.outstation_daily_min_km or 0)),
+            cgst_rate=contract.cgst_rate,
+            sgst_rate=contract.sgst_rate,
+            metering_policy=contract.metering_policy,
+            driver_allowance_per_day=driver_allowance,
+            night_charge=night_charge,
+        )
+
+
 class CorporateContractSerializer(serializers.ModelSerializer):
     rates = ContractRateSerializer(many=True, required=False)
     allowances = ContractAllowanceSerializer(many=True, required=False)
@@ -242,6 +308,9 @@ class CorporateContractSerializer(serializers.ModelSerializer):
                 ContractRate.objects.create(contract=contract, **rate_item)
             for allowance_item in allowances_data:
                 ContractAllowance.objects.create(contract=contract, **allowance_item)
+            
+            # Sync to rate book
+            sync_contract_to_rate_book(contract)
         return contract
 
     def update(self, instance, validated_data):
@@ -264,7 +333,11 @@ class CorporateContractSerializer(serializers.ModelSerializer):
                 for allowance_item in allowances_data:
                     ContractAllowance.objects.create(contract=instance, **allowance_item)
 
+            # Sync to rate book
+            sync_contract_to_rate_book(instance)
+
         return instance
+
 class DriverSerializer(serializers.ModelSerializer):
     user_username = serializers.ReadOnlyField(source="user.username")
     user_email = serializers.ReadOnlyField(source="user.email")
@@ -448,6 +521,22 @@ class TripSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
     )
+    contract = CorporateContractSerializer(read_only=True)
+    contract_id = serializers.PrimaryKeyRelatedField(
+        queryset=CorporateContract.objects.all(),
+        source="contract",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
+    contract_rate = ContractRateSerializer(read_only=True)
+    contract_rate_id = serializers.PrimaryKeyRelatedField(
+        queryset=ContractRate.objects.all(),
+        source="contract_rate",
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = Trip
@@ -458,8 +547,11 @@ class TripSerializer(serializers.ModelSerializer):
             "customer_id",
             "customer_details",
             "contract",
+            "contract_id",
             "contract_rate",
+            "contract_rate_id",
             "duty_type",
+
             "vehicle_category_requested",
             "customer_name",
             "customer_phone",
@@ -575,8 +667,6 @@ class TripSerializer(serializers.ModelSerializer):
             "pricing_snapshot",
             "rate_package",
             "calculation_version",
-            "contract",
-            "contract_rate",
             "pricing_amount_status",
             "quoted_taxable_amount",
             "quoted_tax_amount",
@@ -585,6 +675,7 @@ class TripSerializer(serializers.ModelSerializer):
             "final_tax_amount",
             "final_total_amount",
         ]
+
 
     def to_internal_value(self, data):
         if isinstance(data, dict):
@@ -605,10 +696,26 @@ class TripSerializer(serializers.ModelSerializer):
 
         booking_type = attrs.get("booking_type", getattr(self.instance, "booking_type", "ADHOC"))
 
+        contract = attrs.get("contract", getattr(self.instance, "contract", None))
+        customer = None
         if booking_type == "CORPORATE":
             customer = attrs.get("customer", getattr(self.instance, "customer", None))
             if not customer:
                 raise serializers.ValidationError({"customer": "Corporate trip requires a valid customer."})
+            
+            # Resolve active contract if not provided
+            if not contract:
+                pickup_date = timezone.localtime(pickup_at).date() if pickup_at else timezone.localdate()
+                contracts = CorporateContract.objects.filter(
+                    customer=customer,
+                    status="ACTIVE",
+                    effective_start__lte=pickup_date,
+                ).filter(
+                    models.Q(effective_end__isnull=True) | models.Q(effective_end__gte=pickup_date)
+                )
+                if contracts.exists():
+                    contract = contracts.first()
+                    attrs["contract"] = contract
         else:
             cust_name = attrs.get("customer_name", getattr(self.instance, "customer_name", ""))
             attrs["customer_display_name_snapshot"] = cust_name
@@ -636,11 +743,18 @@ class TripSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"duty_type": "Every trip requires a pricing package type."})
         if not category:
             raise serializers.ValidationError({"vehicle_category_requested": "Every trip requires a vehicle category."})
+
+        # Inherit category from vehicle if assigned
+        vehicle = attrs.get("vehicle", getattr(self.instance, "vehicle", None))
+        if vehicle:
+            category = vehicle.category
+
         from .pricing_service import PricingError, calculate_unified_quote
         try:
             quote = calculate_unified_quote(
                 booking_type=booking_type,
                 customer_id=customer.id if booking_type == "CORPORATE" else None,
+                contract_id=contract.id if (booking_type == "CORPORATE" and contract) else None,
                 pickup_datetime=pickup_at,
                 pickup_city=attrs.get("pickup_city", getattr(self.instance, "pickup_city", "")),
                 drop_city=attrs.get("drop_city", getattr(self.instance, "drop_city", "")),
@@ -659,6 +773,7 @@ class TripSerializer(serializers.ModelSerializer):
         attrs["pricing_snapshot"] = quote
         attrs["rate_package_id"] = quote["package"]["id"]
         attrs["calculation_version"] = quote["calculation_version"]
+
         if booking_type == "CORPORATE":
             attrs["customer_display_name_snapshot"] = customer.display_name
             attrs["bill_to_type"] = BillToType.CORPORATE
@@ -668,6 +783,24 @@ class TripSerializer(serializers.ModelSerializer):
             attrs["bill_to_gstin_snapshot"] = customer.gstin
             attrs["bill_to_email_snapshot"] = customer.billing_email
             attrs["bill_to_phone_snapshot"] = customer.billing_phone
+
+            if contract:
+                contract_rate = ContractRate.objects.filter(
+                    contract=contract,
+                    city__iexact=attrs.get("pickup_city", getattr(self.instance, "pickup_city", "")).strip().lower(),
+                    vehicle_category__iexact=category.strip().lower(),
+                    duty_type=duty_type,
+                ).first()
+                if not contract_rate:
+                    contract_rate = ContractRate.objects.filter(
+                        contract=contract,
+                        city="*",
+                        vehicle_category__iexact=category.strip().lower(),
+                        duty_type=duty_type,
+                    ).first()
+                if contract_rate:
+                    attrs["contract_rate"] = contract_rate
+
 
         # Validate driver and vehicle assignments
         driver = attrs.get("driver")

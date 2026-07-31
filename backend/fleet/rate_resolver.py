@@ -33,6 +33,8 @@ class RateResolution:
 def _booking_date(value):
     if isinstance(value, str):
         try:
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
             value = datetime.datetime.fromisoformat(value)
         except ValueError as exc:
             raise RateResolutionError("Invalid pickup_datetime format.") from exc

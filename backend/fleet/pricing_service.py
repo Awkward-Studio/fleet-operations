@@ -205,6 +205,8 @@ def calculate_quote(
 ):
     if isinstance(pickup_datetime, str):
         try:
+            if pickup_datetime.endswith("Z"):
+                pickup_datetime = pickup_datetime[:-1] + "+00:00"
             pickup_datetime = datetime.datetime.fromisoformat(pickup_datetime)
         except ValueError:
             raise PricingError("Invalid pickup_datetime format.")

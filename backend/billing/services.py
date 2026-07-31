@@ -495,7 +495,10 @@ class CloseoutService:
             metering_policy=CloseoutService._pricing_metering_policy(trip),
             blockers=blockers,
         )
-        return CloseoutService.derive_actual_quantities(closeout)
+        closeout = CloseoutService.derive_actual_quantities(closeout)
+        if trip.pricing_snapshot and "rate_terms" in trip.pricing_snapshot:
+            closeout = CloseoutService.rerate_from_original_snapshot(closeout.id)
+        return closeout
 
 
 class InvoiceService:

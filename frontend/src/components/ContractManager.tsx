@@ -156,6 +156,26 @@ export default function ContractManager() {
     return base;
   };
 
+  const mapGridDutyTypeToBackend = (dt: string): string => {
+    if (dt.includes("4 Hrs")) return "LOCAL_4HR_40KM";
+    if (dt.includes("8 Hrs")) return "LOCAL_8HR_80KM";
+    if (dt.includes("10 Hrs")) return "LOCAL_10HR_100KM";
+    if (dt.includes("12 Hrs")) return "LOCAL_12HR_120KM";
+    if (dt.includes("Airport")) return "AIRPORT_TRANSFER";
+    if (dt.includes("Outstation")) return "OUTSTATION";
+    return "CUSTOM";
+  };
+
+  const getDutyTypeDetails = (dt: string): { hours: number; km: number } => {
+    if (dt.includes("4 Hrs")) return { hours: 4, km: 40 };
+    if (dt.includes("8 Hrs")) return { hours: 8, km: 80 };
+    if (dt.includes("10 Hrs")) return { hours: 10, km: 100 };
+    if (dt.includes("12 Hrs")) return { hours: 12, km: 120 };
+    if (dt.includes("Airport")) return { hours: 4, km: 40 };
+    if (dt.includes("Outstation")) return { hours: 24, km: 300 };
+    return { hours: 0, km: 0 };
+  };
+
   const loadExcelMatrix = () => {
     const scopeKey = `${excelContractId}_${excelCity}`;
     const currentCityNorm = excelCity.trim().toLowerCase();
@@ -169,26 +189,27 @@ export default function ContractManager() {
     if (excelContractId === "PUBLIC") {
       const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
       const cityPkgs = publicBook?.packages
-        ? publicBook.packages.filter(
-            (p) => !p.city || p.city.toLowerCase() === currentCityNorm || p.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
-          )
-        : [];
+          ? publicBook.packages.filter(
+              (p) => !p.city || p.city.toLowerCase() === currentCityNorm || p.city.toLowerCase() === "all cities" || currentCityNorm === "all cities"
+            )
+          : [];
 
       const newPivotGrid: { [dt: string]: { [vc: string]: number | string } } = {};
       pivotDutyTypes.forEach((dt) => {
         newPivotGrid[dt] = {};
         pivotVehicles.forEach((v) => {
           const vNorm = v.split("/")[0].trim().toLowerCase();
-          const match = cityPkgs.find(
-            (p) =>
-              (p.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(p.vehicle_category.toLowerCase())) &&
-              (p.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(p.duty_type.toLowerCase()))
-          );
           if (dt.includes("Extra KM")) {
+            const match = cityPkgs.find((p) => p.vehicle_category.toLowerCase() === vNorm);
             newPivotGrid[dt][v] = match?.extra_km_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
           } else if (dt.includes("Extra HR")) {
+            const match = cityPkgs.find((p) => p.vehicle_category.toLowerCase() === vNorm);
             newPivotGrid[dt][v] = match?.extra_hour_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
           } else {
+            const code = mapGridDutyTypeToBackend(dt);
+            const match = cityPkgs.find(
+              (p) => p.vehicle_category.toLowerCase() === vNorm && p.duty_type === code
+            );
             newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v, "PUBLIC");
           }
         });
@@ -207,21 +228,18 @@ export default function ContractManager() {
         newPivotGrid[dt] = {};
         pivotVehicles.forEach((v) => {
           const vNorm = v.split("/")[0].trim().toLowerCase();
-          const match = cityRates.find(
-            (r) =>
-              (r.vehicle_category.toLowerCase().includes(vNorm) || vNorm.includes(r.vehicle_category.toLowerCase())) &&
-              (r.duty_type.toLowerCase().includes(dt.toLowerCase()) || dt.toLowerCase().includes(r.duty_type.toLowerCase()))
-          );
-          if (match) {
-            if (dt.includes("Extra KM")) {
-              newPivotGrid[dt][v] = match.extra_km_rate || getSmartDefaultRate(dt, v, excelContractId);
-            } else if (dt.includes("Extra HR")) {
-              newPivotGrid[dt][v] = match.extra_hour_rate || getSmartDefaultRate(dt, v, excelContractId);
-            } else {
-              newPivotGrid[dt][v] = match.base_rate || getSmartDefaultRate(dt, v, excelContractId);
-            }
+          if (dt.includes("Extra KM")) {
+            const match = cityRates.find((r) => r.vehicle_category.toLowerCase() === vNorm);
+            newPivotGrid[dt][v] = match?.extra_km_rate ?? getSmartDefaultRate(dt, v, excelContractId);
+          } else if (dt.includes("Extra HR")) {
+            const match = cityRates.find((r) => r.vehicle_category.toLowerCase() === vNorm);
+            newPivotGrid[dt][v] = match?.extra_hour_rate ?? getSmartDefaultRate(dt, v, excelContractId);
           } else {
-            newPivotGrid[dt][v] = getSmartDefaultRate(dt, v, excelContractId);
+            const code = mapGridDutyTypeToBackend(dt);
+            const match = cityRates.find(
+              (r) => r.vehicle_category.toLowerCase() === vNorm && r.duty_type === code
+            );
+            newPivotGrid[dt][v] = match?.base_rate ?? getSmartDefaultRate(dt, v, excelContractId);
           }
         });
       });
@@ -242,6 +260,7 @@ export default function ContractManager() {
       }
     }
   };
+
 
   const handleCellChange = (dutyType: string, vehicleCat: string, val: string) => {
     const updatedGrid = { ...pivotGrid };
@@ -290,22 +309,71 @@ export default function ContractManager() {
       setSavingExcel(true);
       setError(null);
       if (excelContractId === "PUBLIC") {
-        setSuccess("Public default 2D rate matrix updated successfully!");
+        const publicBook = rateBooks.find((b) => b.book_type === "PUBLIC");
+        if (publicBook) {
+          const { updateRatePackage, createRatePackage } = await import("@/lib/api");
+          // For each vehicle category
+          for (const v of pivotVehicles) {
+            const vNorm = v.split("/")[0].trim().toLowerCase();
+            const extraKmVal = Number(pivotGrid["Extra KM Rate (₹/km)"]?.[v]) || 0;
+            const extraHrVal = Number(pivotGrid["Extra HR Rate (₹/hr)"]?.[v]) || 0;
+
+            for (const dt of pivotDutyTypes) {
+              if (dt.includes("Extra KM") || dt.includes("Extra HR")) continue;
+              const val = pivotGrid[dt]?.[v];
+              if (val !== undefined && val !== "") {
+                const code = mapGridDutyTypeToBackend(dt);
+                const pkg = publicBook.packages?.find(
+                  (p) => p.vehicle_category.toLowerCase() === vNorm && p.duty_type === code
+                );
+                const details = getDutyTypeDetails(dt);
+                const payload = {
+                  rate_book: publicBook.id,
+                  vehicle_category: vNorm,
+                  duty_type: code,
+                  base_rate: val,
+                  extra_hour_rate: extraHrVal,
+                  extra_km_rate: extraKmVal,
+                  included_hours: details.hours,
+                  included_km: details.km,
+                  name: `${excelCity.charAt(0).toUpperCase() + excelCity.slice(1)} - ${v} (${code})`,
+                  city: excelCity.trim().toLowerCase(),
+                };
+                if (pkg && pkg.id) {
+                  await updateRatePackage(pkg.id, payload);
+                } else {
+                  await createRatePackage(payload);
+                }
+              }
+            }
+          }
+          setSuccess("Public default 2D rate matrix updated successfully!");
+        }
       } else {
         const contract = contracts.find((c) => c.id.toString() === excelContractId);
         if (contract) {
           const updatedRates: any[] = [];
-          pivotDutyTypes.forEach((dt) => {
-            pivotVehicles.forEach((v) => {
+          pivotVehicles.forEach((v) => {
+            const vNorm = v.split("/")[0].trim().toLowerCase();
+            const extraKmVal = Number(pivotGrid["Extra KM Rate (₹/km)"]?.[v]) || 0;
+            const extraHrVal = Number(pivotGrid["Extra HR Rate (₹/hr)"]?.[v]) || 0;
+
+            pivotDutyTypes.forEach((dt) => {
+              if (dt.includes("Extra KM") || dt.includes("Extra HR")) return;
               const val = pivotGrid[dt]?.[v];
               if (val !== undefined && val !== "") {
+                const code = mapGridDutyTypeToBackend(dt);
+                const details = getDutyTypeDetails(dt);
                 updatedRates.push({
-                  city: excelCity,
-                  vehicle_category: v.split("/")[0].trim().toLowerCase(),
-                  duty_type: dt,
+                  city: excelCity.trim().toLowerCase(),
+                  vehicle_category: vNorm,
+                  duty_type: code,
                   base_rate: val,
-                  extra_hour_rate: 150,
-                  extra_km_rate: 18,
+                  extra_hour_rate: extraHrVal,
+                  extra_km_rate: extraKmVal,
+                  included_hours: details.hours,
+                  included_km: details.km,
+                  outstation_daily_min_km: dt.includes("Outstation") ? 300 : undefined,
                 });
               }
             });
@@ -322,6 +390,7 @@ export default function ContractManager() {
       setSavingExcel(false);
     }
   };
+
 
   const handleSaveContractModal = async (e: React.FormEvent) => {
     e.preventDefault();

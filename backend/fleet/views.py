@@ -765,10 +765,13 @@ def quote_api(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    contract_id = data.get("contract") or data.get("contract_id")
+
     try:
         quote = calculate_unified_quote(
             booking_type=booking_type,
             customer_id=customer_id,
+            contract_id=contract_id,
             pickup_datetime=pickup_datetime,
             pickup_city=pickup_city,
             drop_city=data.get("drop_city", ""),
@@ -783,6 +786,7 @@ def quote_api(request):
             ota_source=data.get("ota_source", ""),
         )
         return Response(quote, status=status.HTTP_200_OK)
+
     except PricingError as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

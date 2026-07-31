@@ -42,10 +42,16 @@ class Command(BaseCommand):
                 "name": "Imported legacy rental catalogue",
                 "version": 1,
                 "book_type": RateBookType.PUBLIC,
-                "status": RateBookStatus.DRAFT,
+                "status": RateBookStatus.ACTIVE if apply_changes else RateBookStatus.DRAFT,
                 "effective_start": timezone.localdate(),
+                "approved_at": timezone.now() if apply_changes else None,
             },
         )
+        if apply_changes and book.status != RateBookStatus.ACTIVE:
+            book.status = RateBookStatus.ACTIVE
+            book.approved_at = timezone.now()
+            book.save()
+
         created = 0
         updated = 0
         rules = RentalPricingRule.objects.select_related("package", "company").order_by("id")
@@ -83,18 +89,35 @@ class Command(BaseCommand):
             f"packages_updated={updated} legacy_trip_exceptions={len(exceptions)}"
         )
 
+    def _get_duty_type(self, package):
+        if package.package_type == PackageType.LOCAL:
+            if package.included_hours == 12 or "12" in package.name:
+                return DutyType.LOCAL_12HR_120KM
+            return DutyType.LOCAL_8HR_80KM
+        elif package.package_type == PackageType.AIRPORT:
+            return DutyType.AIRPORT_TRANSFER
+        elif package.package_type == PackageType.OUTSTATION:
+            return DutyType.OUTSTATION
+        return DutyType.CUSTOM
+
     def _upsert_rule(self, book, rule):
         company_code = f"COMPANY-{rule.company_id}" if rule.company_id else "PUBLIC"
-        source_id = f"rule:{rule.id}"
+        city = rule.city.strip().lower()
+        duty_type = self._get_duty_type(rule.package)
+
         return RatePackage.objects.update_or_create(
-            source_system="rentals",
-            source_id=source_id,
+            rate_book=book,
+            city=city,
+            zone="",
+            route_from="",
+            route_to="",
+            vehicle_category="",
+            duty_type=duty_type,
             defaults={
-                "rate_book": book,
+                "source_system": "rentals",
+                "source_id": f"rule:{rule.id}",
                 "code": f"RENTAL-{rule.package_id}-{company_code}-{rule.id}",
                 "name": f"{rule.package.name} ({company_code})",
-                "city": rule.city.strip().lower(),
-                "duty_type": PACKAGE_DUTY[rule.package.package_type],
                 "included_hours": rule.package.included_hours,
                 "included_km": rule.package.included_km,
                 "base_rate": rule.base_price,
@@ -105,14 +128,21 @@ class Command(BaseCommand):
         )
 
     def _upsert_package_default(self, book, package):
+        duty_type = self._get_duty_type(package)
+
         return RatePackage.objects.update_or_create(
-            source_system="rentals",
-            source_id=f"package:{package.id}",
+            rate_book=book,
+            city="",
+            zone="",
+            route_from="",
+            route_to="",
+            vehicle_category="",
+            duty_type=duty_type,
             defaults={
-                "rate_book": book,
+                "source_system": "rentals",
+                "source_id": f"package:{package.id}",
                 "code": f"RENTAL-{package.id}-DEFAULT",
                 "name": package.name,
-                "duty_type": PACKAGE_DUTY[package.package_type],
                 "included_hours": package.included_hours,
                 "included_km": package.included_km,
                 "base_rate": package.default_base_price,

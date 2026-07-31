@@ -78,11 +78,16 @@ import {
   transitionTrip,
   UploadedAsset,
   CorporateCustomer,
+  CorporateContract,
+  RateBook,
   PricingQuote,
   getCustomers,
-  getPricingQuote
+  getPricingQuote,
+  getContracts,
+  getRateBooks
 } from "@/lib/api";
 import { DocumentUpload } from "@/components/DocumentUpload";
+
 
 type Role = "admin" | "dispatcher" | "accountant";
 export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals" | "admin-panel";
@@ -2396,7 +2401,7 @@ function TripForm({
         const snappedMins = Math.round(mins / 15) * 15;
         dropDateObj.setMinutes(snappedMins);
         
-        const yyyy = dropDateObj.getFullYear();
+        const yyyy = String(dropDateObj.getFullYear()).padStart(4, '0');
         const mm = String(dropDateObj.getMonth() + 1).padStart(2, '0');
         const dd = String(dropDateObj.getDate()).padStart(2, '0');
         
@@ -2430,8 +2435,10 @@ function TripForm({
   const [bookingType, setBookingType] = useState<string>("ADHOC");
   const [customersList, setCustomersList] = useState<CorporateCustomer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
-  const [dutyType, setDutyType] = useState<string>("LOCAL_8HR_80KM");
-  const [vehicleCategory, setVehicleCategory] = useState<string>("sedan");
+  const [contractsList, setContractsList] = useState<CorporateContract[]>([]);
+  const [publicRateBook, setPublicRateBook] = useState<RateBook | null>(null);
+  const [dutyType, setDutyType] = useState<string>("");
+  const [vehicleCategory, setVehicleCategory] = useState<string>("");
   const [otaSource, setOtaSource] = useState<string>("MMT");
   const [quote, setQuote] = useState<PricingQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState<boolean>(false);
@@ -2442,11 +2449,108 @@ function TripForm({
       setCustomersList(data);
       if (data.length > 0) setSelectedCustomerId(data[0].id);
     }).catch((err) => console.error("Error loading customers for trip form:", err));
+
+    getContracts({ status: "ACTIVE" }).then((data) => {
+      setContractsList(data);
+    }).catch((err) => console.error("Error loading active contracts:", err));
+
+    getRateBooks({ book_type: "PUBLIC", status: "ACTIVE" }).then((books) => {
+      if (books.length > 0) {
+        setPublicRateBook(books[0]);
+      }
+    }).catch((err) => console.error("Error loading public rate books:", err));
   }, []);
+
+  const activeContract = useMemo(() => {
+    if (!selectedCustomerId || bookingType !== "CORPORATE") return null;
+    return contractsList.find((c) => c.customer === selectedCustomerId && c.status === "ACTIVE") || null;
+  }, [selectedCustomerId, bookingType, contractsList]);
+
+  const availablePackages = useMemo(() => {
+    if (bookingType === "CORPORATE") {
+      if (!activeContract?.rates) return [];
+      return Array.from(new Set(activeContract.rates.map((r) => r.duty_type)));
+    } else {
+      if (!publicRateBook?.packages) return [];
+      return Array.from(new Set(publicRateBook.packages.map((p) => p.duty_type)));
+    }
+  }, [bookingType, activeContract, publicRateBook]);
+
+  const availableCategories = useMemo(() => {
+    if (bookingType === "CORPORATE") {
+      if (!activeContract?.rates) return [];
+      return Array.from(new Set(activeContract.rates.map((r) => r.vehicle_category.toLowerCase())));
+    } else {
+      if (!publicRateBook?.packages) return [];
+      return Array.from(new Set(publicRateBook.packages.map((p) => p.vehicle_category.toLowerCase())));
+    }
+  }, [bookingType, activeContract, publicRateBook]);
+
+  useEffect(() => {
+    if (availablePackages.length > 0) {
+      if (!availablePackages.includes(dutyType)) {
+        setDutyType(availablePackages[0]);
+      }
+    } else {
+      setDutyType("");
+    }
+  }, [availablePackages, dutyType]);
+
+  useEffect(() => {
+    if (availableCategories.length > 0) {
+      if (!availableCategories.includes(vehicleCategory)) {
+        setVehicleCategory(availableCategories[0]);
+      }
+    } else {
+      setVehicleCategory("");
+    }
+  }, [availableCategories, vehicleCategory]);
+
+  const matchedRate = useMemo(() => {
+    if (bookingType !== "CORPORATE" || !activeContract?.rates || !dutyType || !vehicleCategory) return null;
+    const normCity = pickupCity.trim().toLowerCase();
+    const normCat = vehicleCategory.trim().toLowerCase();
+    let match = activeContract.rates.find(
+      (r) => r.duty_type === dutyType && r.vehicle_category.toLowerCase() === normCat && r.city.toLowerCase() === normCity
+    );
+    if (!match) {
+      match = activeContract.rates.find(
+        (r) => r.duty_type === dutyType && r.vehicle_category.toLowerCase() === normCat && (r.city === "*" || r.city.toLowerCase() === "all cities")
+      );
+    }
+    return match || null;
+  }, [bookingType, activeContract, dutyType, vehicleCategory, pickupCity]);
+
+  const matchedPublicPackage = useMemo(() => {
+    if (bookingType === "CORPORATE" || !publicRateBook?.packages || !dutyType || !vehicleCategory) return null;
+    const normCity = pickupCity.trim().toLowerCase();
+    const normCat = vehicleCategory.trim().toLowerCase();
+    let match = publicRateBook.packages.find(
+      (p) => p.duty_type === dutyType && p.vehicle_category.toLowerCase() === normCat && p.city?.toLowerCase() === normCity
+    );
+    if (!match) {
+      match = publicRateBook.packages.find(
+        (p) => p.duty_type === dutyType && p.vehicle_category.toLowerCase() === normCat
+      );
+    }
+    return match || null;
+  }, [bookingType, publicRateBook, dutyType, vehicleCategory, pickupCity]);
+
+  const formatDutyTypeLabel = (dt: string) => {
+    if (dt === "LOCAL_4HR_40KM") return "Local (4h / 40km)";
+    if (dt === "LOCAL_8HR_80KM") return "Local (8h / 80km)";
+    if (dt === "LOCAL_10HR_100KM") return "Local (10h / 100km)";
+    if (dt === "LOCAL_12HR_120KM") return "Local (12h / 120km)";
+    if (dt === "OUTSTATION") return "Outstation";
+    if (dt === "AIRPORT_TRANSFER") return "Airport Transfer";
+    if (dt === "ONE_WAY") return "One Way";
+    if (dt === "FULL_DAY") return "Full Day";
+    return dt.replace(/_/g, " ");
+  };
 
   // Every booking channel is priced by the same server-side package engine.
   useEffect(() => {
-    if ((bookingType === "CORPORATE" && !selectedCustomerId) || !pickupCity || !pickupDate || !pickupTime) {
+    if ((bookingType === "CORPORATE" && !selectedCustomerId) || !pickupCity || !pickupDate || !pickupTime || !dutyType || !vehicleCategory) {
       setQuote(null);
       setQuoteError(null);
       return;
@@ -2459,7 +2563,8 @@ function TripForm({
         const pickupDt = `${pickupDate}T${pickupTime}:00Z`;
         const res = await getPricingQuote({
           booking_type: bookingType,
-          customer: selectedCustomerId || undefined,
+          customer: bookingType === "CORPORATE" ? selectedCustomerId || undefined : undefined,
+          contract: bookingType === "CORPORATE" && activeContract ? activeContract.id : undefined,
           pickup_datetime: pickupDt,
           pickup_city: pickupCity,
           drop_city: dropCity,
@@ -2467,7 +2572,7 @@ function TripForm({
           duty_type: dutyType,
           planned_km: distanceKm || 0,
           ota_source: bookingType === "OTA" ? otaSource : undefined,
-        });
+        } as any);
         setQuote(res);
       } catch (err: any) {
         setQuote(null);
@@ -2479,7 +2584,7 @@ function TripForm({
 
     const timer = setTimeout(fetchQuote, 400);
     return () => clearTimeout(timer);
-  }, [bookingType, selectedCustomerId, pickupCity, dropCity, pickupDate, pickupTime, dutyType, vehicleCategory, distanceKm, otaSource]);
+  }, [bookingType, selectedCustomerId, activeContract, pickupCity, dropCity, pickupDate, pickupTime, dutyType, vehicleCategory, distanceKm, otaSource]);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2507,6 +2612,12 @@ function TripForm({
         return;
       }
       payload.customer_id = selectedCustomerId;
+      if (activeContract) {
+        payload.contract_id = activeContract.id;
+      }
+      if (matchedRate) {
+        payload.contract_rate_id = matchedRate.id;
+      }
     } else {
       payload.customer_name = String(formData.get("customer_name"));
       payload.ota_source = String(formData.get("ota_source"));
@@ -2539,6 +2650,7 @@ function TripForm({
     });
   };
 
+
   return (
     <form className="stack" onSubmit={handleSubmit}>
       <div className="field">
@@ -2570,25 +2682,44 @@ function TripForm({
           <div className="form-grid" style={{ gap: 12 }}>
             <div className="field">
               <label>DUTY TYPE *</label>
-              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)}>
-                <option value="LOCAL_8HR_80KM">LOCAL (8h / 80km)</option>
-                <option value="LOCAL_12HR_120KM">LOCAL (12h / 120km)</option>
-                <option value="OUTSTATION">OUTSTATION</option>
-                <option value="AIRPORT_TRANSFER">AIRPORT TRANSFER</option>
-                <option value="ONE_WAY">ONE WAY</option>
-                <option value="FULL_DAY">FULL DAY</option>
+              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)} required>
+                {availablePackages.map((dt) => (
+                  <option key={dt} value={dt}>
+                    {formatDutyTypeLabel(dt)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="field">
               <label>REQUESTED CATEGORY *</label>
-              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)}>
-                <option value="sedan">Sedan</option>
-                <option value="suv">SUV</option>
-                <option value="luxury">Luxury</option>
-                <option value="hatchback">Hatchback</option>
+              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)} required>
+                {availableCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
+
+          {activeContract && (
+            <div style={{ padding: 12, background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: 8, fontSize: 13, color: "var(--text-normal)", marginTop: -4 }}>
+              <div style={{ fontWeight: 600, color: "#10b981", marginBottom: 4 }}>
+                📄 Active Contract: {activeContract.title} ({activeContract.version_name})
+              </div>
+              {matchedRate ? (
+                <div>
+                  <strong>Base Fare:</strong> ₹{matchedRate.base_rate} for {matchedRate.included_hours} Hrs / {matchedRate.included_km} KMs
+                  <br />
+                  <strong>Extra KM:</strong> ₹{matchedRate.extra_km_rate}/km | <strong>Extra Hr:</strong> ₹{matchedRate.extra_hour_rate}/hr
+                </div>
+              ) : (
+                <div style={{ color: "var(--muted)", fontStyle: "italic" }}>
+                  No contract rate configured for Category: {vehicleCategory} and Duty: {formatDutyTypeLabel(dutyType)} in {pickupCity || "this city"}.
+                </div>
+              )}
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -2607,27 +2738,41 @@ function TripForm({
           <div className="form-grid" style={{ gap: 12 }}>
             <div className="field">
               <label>PACKAGE TYPE *</label>
-              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)}>
-                <option value="LOCAL_8HR_80KM">LOCAL (8h / 80km)</option>
-                <option value="LOCAL_12HR_120KM">LOCAL (12h / 120km)</option>
-                <option value="OUTSTATION">OUTSTATION</option>
-                <option value="AIRPORT_TRANSFER">AIRPORT TRANSFER</option>
-                <option value="ONE_WAY">ONE WAY</option>
-                <option value="FULL_DAY">FULL DAY</option>
+              <select value={dutyType} onChange={(e) => setDutyType(e.target.value)} required>
+                {availablePackages.map((dt) => (
+                  <option key={dt} value={dt}>
+                    {formatDutyTypeLabel(dt)}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="field">
               <label>REQUESTED CATEGORY *</label>
-              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)}>
-                <option value="sedan">Sedan</option>
-                <option value="suv">SUV</option>
-                <option value="luxury">Luxury</option>
-                <option value="hatchback">Hatchback</option>
+              <select value={vehicleCategory} onChange={(e) => setVehicleCategory(e.target.value)} required>
+                {availableCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
+
+          {matchedPublicPackage && (
+            <div style={{ padding: 12, background: "rgba(59, 130, 246, 0.1)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: 8, fontSize: 13, color: "var(--text-normal)", marginTop: -4 }}>
+              <div style={{ fontWeight: 600, color: "#3b82f6", marginBottom: 4 }}>
+                🌐 Public Rate Card: {publicRateBook?.name}
+              </div>
+              <div>
+                <strong>Base Fare:</strong> ₹{matchedPublicPackage.base_rate} for {matchedPublicPackage.included_hours} Hrs / {matchedPublicPackage.included_km} KMs
+                <br />
+                <strong>Extra KM:</strong> ₹{matchedPublicPackage.extra_km_rate}/km | <strong>Extra Hr:</strong> ₹{matchedPublicPackage.extra_hour_rate}/hr
+              </div>
+            </div>
+          )}
         </>
       )}
+
 
       <MapComponent 
         key={mapKey}

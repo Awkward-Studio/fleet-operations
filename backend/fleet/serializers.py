@@ -744,10 +744,14 @@ class TripSerializer(serializers.ModelSerializer):
         if not category:
             raise serializers.ValidationError({"vehicle_category_requested": "Every trip requires a vehicle category."})
 
-        # Inherit category from vehicle if assigned
+        # Determine pricing category:
+        # - vehicle_category_requested is always the primary source (it maps to rate package names like 'dzire', 'ertiga')
+        # - vehicle.category is a broad fleet-management label (like 'Sedan', 'MPV') used only as last resort
         vehicle = attrs.get("vehicle", getattr(self.instance, "vehicle", None))
-        if vehicle:
-            category = vehicle.category
+        pricing_category = category  # already resolved from vehicle_category_requested
+        if vehicle and not pricing_category:
+            # Only use vehicle.category as a fallback when vehicle_category_requested is empty
+            pricing_category = vehicle.category
 
         from .pricing_service import PricingError, calculate_unified_quote
         try:
@@ -758,7 +762,7 @@ class TripSerializer(serializers.ModelSerializer):
                 pickup_datetime=pickup_at,
                 pickup_city=attrs.get("pickup_city", getattr(self.instance, "pickup_city", "")),
                 drop_city=attrs.get("drop_city", getattr(self.instance, "drop_city", "")),
-                vehicle_category=category,
+                vehicle_category=pricing_category,
                 duty_type=duty_type,
                 planned_km=attrs.get("distance_km", getattr(self.instance, "distance_km", 0)) or 0,
                 ota_source=attrs.get("ota_source", getattr(self.instance, "ota_source", "")),

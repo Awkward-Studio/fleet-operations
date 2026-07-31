@@ -752,7 +752,10 @@ class Trip(models.Model):
                 if contracts.exists():
                     self.contract = contracts.first()
 
-        category = self.vehicle.category if self.vehicle else self.vehicle_category_requested
+        # Use vehicle_category_requested as the primary pricing key (maps to rate package names like 'dzire').
+        # vehicle.category is a broad fleet-management label ('Sedan', 'MPV') used only as a last resort.
+        category = self.vehicle_category_requested or (self.vehicle.category if self.vehicle else "")
+
         if not category or not self.duty_type or not self.pickup_city or not self.pickup_at:
             return
 

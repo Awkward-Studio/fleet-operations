@@ -901,7 +901,7 @@ export default function ContractManager() {
             </div>
 
             <form onSubmit={handleSaveContractModal} className="stack" style={{ gap: 16 }}>
-              <div>
+              <div>No active rate package for booking_typ
                 <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Contract Title</label>
                 <input
                   type="text"

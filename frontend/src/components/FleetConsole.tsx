@@ -2472,7 +2472,15 @@ function TripForm({
       return Array.from(new Set(activeContract.rates.map((r) => r.duty_type)));
     } else {
       if (!publicRateBook?.packages) return [];
-      return Array.from(new Set(publicRateBook.packages.map((p) => p.duty_type)));
+      // Only include packages that have a concrete vehicle_category (exclude wildcard/empty-category packages
+      // which are rate-resolver fallbacks, not user-facing options)
+      const specificPackages = publicRateBook.packages.filter((p) => p.vehicle_category && p.vehicle_category.trim() !== "");
+      const dutyTypes = Array.from(new Set(specificPackages.map((p) => p.duty_type)));
+      // If no specific packages exist, fall back to all packages so the form isn't empty
+      if (dutyTypes.length === 0) {
+        return Array.from(new Set(publicRateBook.packages.map((p) => p.duty_type)));
+      }
+      return dutyTypes;
     }
   }, [bookingType, activeContract, publicRateBook]);
 
@@ -2482,7 +2490,11 @@ function TripForm({
       return Array.from(new Set(activeContract.rates.map((r) => r.vehicle_category.toLowerCase())));
     } else {
       if (!publicRateBook?.packages) return [];
-      return Array.from(new Set(publicRateBook.packages.map((p) => p.vehicle_category.toLowerCase())));
+      // Exclude wildcard packages (vehicle_category='') — they are backend fallbacks, not user selections
+      const specificPackages = publicRateBook.packages.filter((p) => p.vehicle_category && p.vehicle_category.trim() !== "");
+      const categories = Array.from(new Set(specificPackages.map((p) => p.vehicle_category.toLowerCase())));
+      // If no specific packages exist, fall back to all non-empty categories
+      return categories;
     }
   }, [bookingType, activeContract, publicRateBook]);
 
@@ -2819,7 +2831,7 @@ function TripForm({
         <TimePickerField label="DROP TIME" name="drop_time" value={dropTime} onChange={setDropTime} />
       </div>
 
-      (
+      
         <div style={{ padding: 16, background: "rgba(15, 23, 42, 0.6)", border: "1px solid var(--line)", borderRadius: 12, fontSize: 13 }}>
           <div style={{ fontWeight: 700, color: "#fff", marginBottom: 8 }}>Authoritative Package Quote</div>
           {quoteLoading ? (
@@ -2864,7 +2876,7 @@ function TripForm({
             <div style={{ color: "var(--muted)" }}>Enter pickup city, date, and time to generate quote.</div>
           )}
         </div>
-      )
+      
 
       <div className="form-grid" style={{ gap: 12, marginTop: 12 }}>
         <div className="field">

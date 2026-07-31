@@ -82,10 +82,6 @@ export default function ContractManager() {
     overtimeHr: 125,
   });
 
-  // CGST and SGST Rates State
-  const [cgstRate, setCgstRate] = useState<number>(2.5);
-  const [sgstRate, setSgstRate] = useState<number>(2.5);
-
   const [savingExcel, setSavingExcel] = useState<boolean>(false);
 
   // Modal State
@@ -219,8 +215,6 @@ export default function ContractManager() {
         });
       });
       setPivotGrid(newPivotGrid);
-      setCgstRate(2.5);
-      setSgstRate(2.5);
     } else {
       const contract = contracts.find((c) => c.id.toString() === excelContractId);
       const cityRates = contract?.rates
@@ -251,37 +245,18 @@ export default function ContractManager() {
       });
       setPivotGrid(newPivotGrid);
 
-      if (contract) {
-        setCgstRate(Number(contract.cgst_rate ?? 2.5));
-        setSgstRate(Number(contract.sgst_rate ?? 2.5));
-
-        // Load contract specific allowances if defined
-        if (contract.allowances && contract.allowances.length > 0) {
-          const outstation = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("OUTSTATION_PER_DAY"))?.amount ?? 300;
-          const outstationNight = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("OVERNIGHT_DRIVER_ALLOWANCE"))?.amount ?? 300;
-          const night = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("NIGHT_ALLOWANCE"))?.amount ?? 250;
-          const early = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("EARLY_START_ALLOWANCE"))?.amount ?? 150;
-          const sunday = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("SUNDAY_ALLOWANCE"))?.amount ?? 200;
-          const overtime = contract.allowances.find((a) => a.allowance_type.toUpperCase().includes("OVERTIME_PER_HOUR"))?.amount ?? 125;
-          
-          setExcelAllowances({
-            outstationAllowance: Number(outstation),
-            outstationNight: Number(outstationNight),
-            nightAllowance: Number(night),
-            earlyStart: Number(early),
-            sundayAllowance: Number(sunday),
-            overtimeHr: Number(overtime),
-          });
-        } else {
-          setExcelAllowances({
-            outstationAllowance: 300,
-            outstationNight: 300,
-            nightAllowance: 250,
-            earlyStart: 150,
-            sundayAllowance: 200,
-            overtimeHr: 125,
-          });
-        }
+      // Load contract specific allowances if defined
+      if (contract?.allowances && contract.allowances.length > 0) {
+        const outstation = contract.allowances.find((a) => a.allowance_type.includes("outstation"))?.amount ?? 300;
+        const night = contract.allowances.find((a) => a.allowance_type.includes("night"))?.amount ?? 250;
+        setExcelAllowances({
+          outstationAllowance: Number(outstation),
+          outstationNight: Number(night),
+          nightAllowance: Number(night),
+          earlyStart: 150,
+          sundayAllowance: 200,
+          overtimeHr: 125,
+        });
       }
     }
   };
@@ -354,7 +329,6 @@ export default function ContractManager() {
                 const details = getDutyTypeDetails(dt);
                 const payload = {
                   rate_book: publicBook.id,
-                  code: `PKG-PUBLIC-${excelCity.toUpperCase()}-${vNorm.toUpperCase()}-${code}`,
                   vehicle_category: vNorm,
                   duty_type: code,
                   base_rate: val,
@@ -364,8 +338,6 @@ export default function ContractManager() {
                   included_km: details.km,
                   name: `${excelCity.charAt(0).toUpperCase() + excelCity.slice(1)} - ${v} (${code})`,
                   city: excelCity.trim().toLowerCase(),
-                  cgst_rate: cgstRate,
-                  sgst_rate: sgstRate,
                 };
                 if (pkg && pkg.id) {
                   await updateRatePackage(pkg.id, payload);
@@ -407,22 +379,8 @@ export default function ContractManager() {
             });
           });
 
-          const updatedAllowances = [
-            { allowance_type: "OUTSTATION_PER_DAY", amount: excelAllowances.outstationAllowance },
-            { allowance_type: "OVERNIGHT_DRIVER_ALLOWANCE", amount: excelAllowances.outstationNight },
-            { allowance_type: "NIGHT_ALLOWANCE", amount: excelAllowances.nightAllowance },
-            { allowance_type: "EARLY_START_ALLOWANCE", amount: excelAllowances.earlyStart },
-            { allowance_type: "SUNDAY_ALLOWANCE", amount: excelAllowances.sundayAllowance },
-            { allowance_type: "OVERTIME_PER_HOUR", amount: excelAllowances.overtimeHr },
-          ];
-
-          await updateContract(contract.id, {
-            rates: updatedRates,
-            allowances: updatedAllowances,
-            cgst_rate: cgstRate,
-            sgst_rate: sgstRate,
-          });
-          setSuccess(`Contract '${contract.title}' rate card, allowances, and taxes updated successfully for ${excelCity}!`);
+          await updateContract(contract.id, { rates: updatedRates });
+          setSuccess(`Contract '${contract.title}' rate card updated successfully for ${excelCity}!`);
         }
       }
       fetchInitialData();
@@ -903,91 +861,15 @@ export default function ContractManager() {
         {/* BOTTOM TAXES & SAVE STRIP */}
         <div style={{ padding: "14px 18px", borderRadius: 8, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-
+            <ShieldCheck size={20} style={{ color: "#38bdf8" }} />
             <div>
-            
+              <span style={{ fontSize: 13, color: "#fff", fontWeight: 700, display: "block" }}>Statutory GST Billing Breakdown</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>CGST 2.5% + SGST 2.5% (Total 5% GST Applicable on Invoice Gross Amount)</span>
             </div>
           </div>
 
           <button className="button primary" onClick={handleSavePivotMatrix} disabled={savingExcel} style={{ gap: 8 }}>
             <Save size={16} /> {savingExcel ? "Saving Matrix..." : "Save Rate & Allowance Changes"}
-          </button>
-        </div>
-      </div>
-
-      {/* GST and TAXES SECTION */}
-      <div className="panel" style={{ padding: 22, background: "rgba(15, 23, 42, 0.75)", border: "1px solid var(--line)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Percent size={18} style={{ color: "var(--accent)" }} />
-            <h3 style={{ margin: 0, color: "#fff", fontSize: 16, fontWeight: 700 }}>
-              GST and TAXES
-            </h3>
-          </div>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>
-            Tax configurations for: <strong style={{ color: "#38bdf8" }}>{excelContractId === "PUBLIC" ? "Public Default" : currentContract?.title || `Contract #${excelContractId}`}</strong>
-          </span>
-        </div>
-
-        {/* GST Rate Inputs */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 20 }}>
-          {/* CGST Input */}
-          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
-              🏛️ Central GST (CGST) Rate (%)
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={0.01}
-              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#38bdf8", fontWeight: 700, fontSize: 15 }}
-              value={cgstRate}
-              onChange={(e) => setCgstRate(Number(e.target.value))}
-            />
-          </div>
-
-          {/* SGST Input */}
-          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <label style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 600, display: "block", marginBottom: 6 }}>
-              🏛️ State GST (SGST) Rate (%)
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={0.01}
-              style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.6)", border: "1px solid var(--line)", color: "#38bdf8", fontWeight: 700, fontSize: 15 }}
-              value={sgstRate}
-              onChange={(e) => setSgstRate(Number(e.target.value))}
-            />
-          </div>
-
-          {/* Combined GST Display */}
-          <div style={{ padding: 14, borderRadius: 8, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <label style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, display: "block", marginBottom: 6 }}>
-              📊 Combined Total GST Rate (%)
-            </label>
-            <span style={{ fontSize: 20, color: "#22c55e", fontWeight: 800 }}>
-              {(cgstRate + sgstRate).toFixed(2)}%
-            </span>
-          </div>
-        </div>
-
-        {/* BOTTOM SAVE STRIP */}
-        <div style={{ padding: "14px 18px", borderRadius: 8, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <ShieldCheck size={20} style={{ color: "#38bdf8" }} />
-            <div>
-              <span style={{ fontSize: 13, color: "#fff", fontWeight: 700, display: "block" }}>Statutory GST Billing Breakdown</span>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                CGST {cgstRate.toFixed(2)}% + SGST {sgstRate.toFixed(2)}% (Total {(cgstRate + sgstRate).toFixed(2)}% GST Applicable on Invoice Gross Amount)
-              </span>
-            </div>
-          </div>
-
-          <button className="button primary" onClick={handleSavePivotMatrix} disabled={savingExcel} style={{ gap: 8 }}>
-            <Save size={16} /> {savingExcel ? "Saving Matrix..." : "Save Rate, Allowance & Tax Changes"}
           </button>
         </div>
       </div>
@@ -1065,34 +947,6 @@ export default function ContractManager() {
                     style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff" }}
                     value={modalContract.effective_end || ""}
                     onChange={(e) => setModalContract({ ...modalContract, effective_end: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>CGST Rate (%)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={modalContract.cgst_rate ?? 2.50}
-                    onChange={(e) => setModalContract({ ...modalContract, cgst_rate: Number(e.target.value) })}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>SGST Rate (%)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid var(--line)", color: "#fff" }}
-                    value={modalContract.sgst_rate ?? 2.50}
-                    onChange={(e) => setModalContract({ ...modalContract, sgst_rate: Number(e.target.value) })}
                   />
                 </div>
               </div>

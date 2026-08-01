@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/odometer_ocr_service.dart';
 import '../../../core/providers.dart';
 import '../data/trip_providers.dart';
 import '../domain/trip.dart';
+import 'widgets/odometer_ocr_status.dart';
 
 class PreRideInspectionScreen extends ConsumerStatefulWidget {
   const PreRideInspectionScreen({super.key, required this.trip});
@@ -27,7 +29,10 @@ class _PreRideInspectionScreenState
   bool _cleanlinessOk = true;
   bool _fuelLevelOk = true;
   bool _tirePressureOk = true;
+  bool _ocrScanning = false;
   bool _submitting = false;
+  bool _ocrFailed = false;
+  String? _ocrMessage;
   String? _error;
 
   @override
@@ -45,8 +50,39 @@ class _PreRideInspectionScreenState
     if (image == null) return;
     setState(() {
       _odometerPhoto = image;
+      _ocrScanning = true;
+      _ocrFailed = false;
+      _ocrMessage = null;
       _error = null;
     });
+
+    try {
+      final result = await OdometerOcrService.readOdometerKm(
+        image.path,
+        minimumKm: widget.trip.vehicleOdometerKm,
+      );
+      if (!mounted || _odometerPhoto?.path != image.path) return;
+
+      setState(() {
+        _ocrScanning = false;
+        if (result.readingKm == null) {
+          _ocrFailed = true;
+          _ocrMessage = 'No odometer reading detected. Enter it manually.';
+          return;
+        }
+
+        _ocrFailed = false;
+        _odometerController.text = result.readingKm.toString();
+        _ocrMessage = 'Detected ${result.readingKm} KM. Please verify.';
+      });
+    } catch (_) {
+      if (!mounted || _odometerPhoto?.path != image.path) return;
+      setState(() {
+        _ocrScanning = false;
+        _ocrFailed = true;
+        _ocrMessage = 'OCR failed. Enter the odometer reading manually.';
+      });
+    }
   }
 
   Future<void> _submit() async {
@@ -106,6 +142,11 @@ class _PreRideInspectionScreenState
               _PhotoCaptureCard(
                 photo: _odometerPhoto,
                 onCapture: _capturePhoto,
+              ),
+              OdometerOcrStatus(
+                scanning: _ocrScanning,
+                message: _ocrMessage,
+                isError: _ocrFailed,
               ),
               const SizedBox(height: 18),
               TextFormField(

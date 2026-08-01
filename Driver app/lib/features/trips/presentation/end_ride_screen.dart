@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/location_tracking_service.dart';
+import '../../../core/odometer_ocr_service.dart';
 import '../../../core/providers.dart';
 import '../data/trip_providers.dart';
 import '../domain/trip.dart';
+import 'widgets/odometer_ocr_status.dart';
 
 class EndRideScreen extends ConsumerStatefulWidget {
   const EndRideScreen({super.key, required this.trip});
@@ -24,7 +26,10 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
   final _notesController = TextEditingController();
   final _picker = ImagePicker();
   XFile? _odometerPhoto;
+  bool _ocrScanning = false;
   bool _submitting = false;
+  bool _ocrFailed = false;
+  String? _ocrMessage;
   String? _error;
 
   int? get _startOdometerKm => widget.trip.startOdometerKm;
@@ -62,8 +67,40 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
     if (image == null) return;
     setState(() {
       _odometerPhoto = image;
+      _ocrScanning = true;
+      _ocrFailed = false;
+      _ocrMessage = null;
       _error = null;
     });
+
+    try {
+      final minimum = (_startOdometerKm ?? widget.trip.vehicleOdometerKm) + 1;
+      final result = await OdometerOcrService.readOdometerKm(
+        image.path,
+        minimumKm: minimum,
+      );
+      if (!mounted || _odometerPhoto?.path != image.path) return;
+
+      setState(() {
+        _ocrScanning = false;
+        if (result.readingKm == null) {
+          _ocrFailed = true;
+          _ocrMessage = 'No odometer reading detected. Enter it manually.';
+          return;
+        }
+
+        _ocrFailed = false;
+        _endingOdometerController.text = result.readingKm.toString();
+        _ocrMessage = 'Detected ${result.readingKm} KM. Please verify.';
+      });
+    } catch (_) {
+      if (!mounted || _odometerPhoto?.path != image.path) return;
+      setState(() {
+        _ocrScanning = false;
+        _ocrFailed = true;
+        _ocrMessage = 'OCR failed. Enter the odometer reading manually.';
+      });
+    }
   }
 
   Future<void> _submit() async {
@@ -167,6 +204,11 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
               _PhotoCaptureCard(
                 photo: _odometerPhoto,
                 onCapture: _capturePhoto,
+              ),
+              OdometerOcrStatus(
+                scanning: _ocrScanning,
+                message: _ocrMessage,
+                isError: _ocrFailed,
               ),
               const SizedBox(height: 18),
               TextFormField(

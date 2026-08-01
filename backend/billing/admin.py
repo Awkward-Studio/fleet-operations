@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import LegalEntity, FinancialYear, FiscalPeriod, DocumentSequence, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote, LedgerAccount, JournalEntry, JournalLine, PaymentReceipt, PaymentAllocation, SupplierProfile, TripExpense
+from .models import LegalEntity, FinancialYear, FiscalPeriod, DocumentSequence, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote, LedgerAccount, JournalEntry, JournalLine, PaymentReceipt, PaymentAllocation, OTACounterparty, OTABookingSnapshot, OTASettlementBatch, OTASettlementLine, OTAAuditEvent, SupplierProfile, TripExpense
 
 
 @admin.register(LegalEntity)
@@ -85,6 +85,39 @@ class PaymentReceiptAdmin(admin.ModelAdmin):
 @admin.register(PaymentAllocation)
 class PaymentAllocationAdmin(admin.ModelAdmin):
     list_display = ["receipt", "invoice", "allocated_amount", "tds_amount"]
+
+
+@admin.register(OTACounterparty)
+class OTACounterpartyAdmin(admin.ModelAdmin):
+    list_display = ["code", "name", "default_currency", "is_active"]
+    search_fields = ["code", "name"]
+    list_filter = ["is_active", "default_currency"]
+
+
+@admin.register(OTABookingSnapshot)
+class OTABookingSnapshotAdmin(admin.ModelAdmin):
+    list_display = ["counterparty", "provider_booking_id", "trip", "gross_fare", "net_expected", "settlement_status"]
+    search_fields = ["provider_booking_id", "partner_reference_number", "provider_trip_id"]
+    list_filter = ["counterparty", "settlement_status", "currency"]
+
+
+@admin.register(OTASettlementBatch)
+class OTASettlementBatchAdmin(admin.ModelAdmin):
+    list_display = ["counterparty", "batch_reference", "net_expected", "actual_payout_amount", "settlement_status", "payout_date"]
+    search_fields = ["batch_reference"]
+    list_filter = ["counterparty", "settlement_status", "currency"]
+
+
+@admin.register(OTASettlementLine)
+class OTASettlementLineAdmin(admin.ModelAdmin):
+    list_display = ["batch", "booking_snapshot", "expected_amount", "received_amount", "variance_amount", "settlement_status"]
+    list_filter = ["settlement_status", "currency"]
+
+
+@admin.register(OTAAuditEvent)
+class OTAAuditEventAdmin(admin.ModelAdmin):
+    list_display = ["action", "entity_type", "entity_id", "actor", "created_at"]
+    list_filter = ["action", "entity_type"]
 
 
 @admin.register(SupplierProfile)

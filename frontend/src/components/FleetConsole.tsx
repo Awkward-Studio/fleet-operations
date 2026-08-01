@@ -52,6 +52,7 @@ import CustomerManager from "./CustomerManager";
 import ContractManager from "./ContractManager";
 import BillingManager from "./BillingManager";
 import FuelMileageManager from "./FuelMileageManager";
+import OtaSettlementManager from "./OtaSettlementManager";
 
 const MapComponent = dynamic(() => import("./MapComponent"), { ssr: false });
 
@@ -2243,13 +2244,7 @@ function OtaView({ availability, vehicles, unassignedTrips }: { availability: Av
           </table>
         </div>
       </Panel>
-      <Panel title="Next Backend Module">
-        <div className="explain-list">
-          <p>The current scaffold prepares the data needed for bidding decisions.</p>
-          <p>The next step is an OTA opportunity model: route, pickup time, fare, commission, distance, and source.</p>
-          <p>The bidding engine should compare opportunity pickup city and time against predictive availability and compliance.</p>
-        </div>
-      </Panel>
+      <OtaSettlementManager />
     </section>
   );
 }

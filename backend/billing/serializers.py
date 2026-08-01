@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDocument, LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote
+from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDocument, LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote, OTASettlementBatch, OTASettlementLine
 from fleet.serializers import TripSerializer
 from .services import BillabilityService
 
@@ -8,6 +8,41 @@ class LegalEntitySerializer(serializers.ModelSerializer):
     class Meta:
         model = LegalEntity
         fields = "__all__"
+
+
+class OTASettlementLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OTASettlementLine
+        fields = "__all__"
+
+
+class OTASettlementBatchSerializer(serializers.ModelSerializer):
+    lines = OTASettlementLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = OTASettlementBatch
+        fields = "__all__"
+
+
+class OTASettlementImportLineSerializer(serializers.Serializer):
+    provider_booking_id = serializers.CharField(max_length=120)
+    received_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField(max_length=3, required=False, default="INR")
+
+
+class OTASettlementImportSerializer(serializers.Serializer):
+    counterparty_code = serializers.CharField(max_length=40)
+    batch_reference = serializers.CharField(max_length=120)
+    currency = serializers.CharField(max_length=3, required=False, default="INR")
+    payout_date = serializers.DateField(required=False, allow_null=True)
+    source_system = serializers.CharField(max_length=60, required=False, default="API")
+    lines = OTASettlementImportLineSerializer(many=True, required=False)
+    csv_content = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    def validate(self, attrs):
+        if not attrs.get("lines") and not attrs.get("csv_content"):
+            raise serializers.ValidationError("Provide settlement lines or csv_content.")
+        return attrs
 
 
 class TripChargeSerializer(serializers.ModelSerializer):

@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 
+from billing.models import OTABillingArrangement, OTACounterparty
 from fleet.models import DutyType, RateBook, RateBookStatus, RateBookType, RatePackage
 from fleet.pricing_service import PricingError, calculate_package_quote, calculate_unified_quote
 
@@ -93,6 +94,12 @@ class UnifiedPricingTests(TestCase):
             calculate_package_quote(self.package(), planned_km=-1)
 
     def test_ota_gross_to_net_reconciliation_and_missing_terms(self):
+        OTACounterparty.objects.create(
+            code="MMT",
+            name="MakeMyTrip",
+            billing_arrangement=OTABillingArrangement.OTA_INVOICE,
+            commission_tax_rate=Decimal("18"),
+        )
         ota_book = RateBook.objects.create(
             code="OTA-QUOTE",
             name="OTA",
@@ -123,5 +130,49 @@ class UnifiedPricingTests(TestCase):
         commercial = calculate_package_quote(ota_package)["ota_commercial"]
         self.assertEqual(commercial["gross_customer_fare"], "1000.00")
         self.assertEqual(commercial["commission_amount"], "200.00")
+        self.assertEqual(commercial["commission_tax_amount"], "36.00")
         self.assertEqual(commercial["withholding_amount"], "10.00")
-        self.assertEqual(commercial["expected_net_settlement"], "790.00")
+        self.assertEqual(commercial["expected_net_settlement"], "754.00")
+        formula = commercial["formula_explanation"]
+        self.assertEqual(
+            Decimal(formula["gross_fare"])
+            - Decimal(formula["commission_amount"])
+            - Decimal(formula["commission_tax_amount"])
+            - Decimal(formula["withholding_amount"])
+            + Decimal(formula["adjustments"]),
+            Decimal(formula["net_expected"]),
+        )
+
+    def test_unsupported_ota_billing_arrangement_enters_exception_review(self):
+        OTACounterparty.objects.create(
+            code="MMT",
+            name="MakeMyTrip",
+            billing_arrangement=OTABillingArrangement.EXCEPTION_REVIEW,
+        )
+        ota_book = RateBook.objects.create(
+            code="OTA-EXCEPTION",
+            name="OTA exception",
+            version=1,
+            book_type=RateBookType.OTA,
+            status=RateBookStatus.ACTIVE,
+            ota_source="MMT",
+            effective_start=datetime.date(2026, 1, 1),
+            approved_at=timezone.now(),
+        )
+        ota_package = RatePackage.objects.create(
+            rate_book=ota_book,
+            code="OTA-LOCAL-EXCEPTION",
+            name="OTA local exception",
+            city="mumbai",
+            vehicle_category="sedan",
+            duty_type=DutyType.LOCAL_8HR_80KM,
+            base_rate=Decimal("1000"),
+            cgst_rate=Decimal("0"),
+            sgst_rate=Decimal("0"),
+            ota_terms_configured=True,
+            ota_commission_rate=Decimal("10"),
+        )
+        commercial = calculate_package_quote(ota_package)["ota_commercial"]
+
+        self.assertEqual(commercial["billing_arrangement"], OTABillingArrangement.EXCEPTION_REVIEW)
+        self.assertEqual(commercial["exception"], "UNSUPPORTED_BILLING_ARRANGEMENT")

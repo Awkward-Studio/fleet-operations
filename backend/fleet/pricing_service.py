@@ -37,6 +37,7 @@ def calculate_package_quote(
     waiting_hours=0,
     night_charge_count=0,
     driver_allowance_days=0,
+    ota_source="",
     resolution=None,
 ):
     """Calculate an immutable-ready quote payload from any canonical package."""
@@ -80,17 +81,21 @@ def calculate_package_quote(
             raise PricingError(
                 f"OTA settlement terms are missing for package '{package.code}'."
             )
-        commission = quantize_decimal(total_amount * package.ota_commission_rate / Decimal("100"))
-        withholding = quantize_decimal(total_amount * package.ota_withholding_rate / Decimal("100"))
-        ota_commercial = {
-            "gross_customer_fare": str(total_amount),
-            "commission_rate": str(quantize_decimal(package.ota_commission_rate)),
-            "commission_amount": str(commission),
-            "withholding_rate": str(quantize_decimal(package.ota_withholding_rate)),
-            "withholding_amount": str(withholding),
-            "expected_net_settlement": str(quantize_decimal(total_amount - commission - withholding)),
-            "exception": None,
-        }
+        from billing.services import OTACommercialService
+
+        provider_config = OTACommercialService.provider_config(
+            ota_source or package.rate_book.ota_source
+        )
+        ota_commercial = OTACommercialService.calculate_expected_net(
+            gross_fare=total_amount,
+            commission_rate=package.ota_commission_rate,
+            commission_tax_rate=provider_config["commission_tax_rate"],
+            withholding_rate=package.ota_withholding_rate,
+            billing_arrangement=provider_config["billing_arrangement"],
+            currency=package.rate_book.currency,
+        )
+        ota_commercial["counterparty_code"] = provider_config["counterparty_code"]
+        ota_commercial["exception"] = ota_commercial["exception"] or provider_config["exception"]
 
     return {
         "calculation_version": UNIFIED_CALCULATION_VERSION,
@@ -188,6 +193,7 @@ def calculate_unified_quote(**inputs):
     return calculate_package_quote(
         resolution.package,
         resolution=resolution,
+        ota_source=inputs.get("ota_source", ""),
         **calculation_inputs,
     )
 

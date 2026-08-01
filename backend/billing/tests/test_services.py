@@ -7,12 +7,13 @@ from billing.models import (
     FinancialYear,
     FiscalPeriod,
     InvoiceStatus,
+    OTABillingArrangement,
     TripCloseout,
     CloseoutStatus,
     TripCharge,
     ChargeCategory,
 )
-from billing.services import InvoiceService
+from billing.services import InvoiceService, OTACommercialService
 from fleet.models import (
     BookingType,
     CorporateCustomer,
@@ -21,6 +22,62 @@ from fleet.models import (
     Trip,
     Vehicle,
 )
+
+
+class OTACommercialServiceTests(TestCase):
+    def test_expected_net_formula_matrix(self):
+        scenarios = [
+            {
+                "gross_fare": Decimal("1000.00"),
+                "commission_rate": Decimal("10.00"),
+                "commission_tax_rate": Decimal("18.00"),
+                "withholding_rate": Decimal("2.00"),
+                "adjustments": Decimal("0.00"),
+                "expected": Decimal("862.00"),
+            },
+            {
+                "gross_fare": Decimal("1000.00"),
+                "commission_amount": Decimal("125.00"),
+                "commission_tax_amount": Decimal("22.50"),
+                "withholding_amount": Decimal("0.00"),
+                "adjustments": Decimal("-50.00"),
+                "expected": Decimal("802.50"),
+            },
+            {
+                "gross_fare": Decimal("999.99"),
+                "commission_rate": Decimal("12.50"),
+                "commission_tax_rate": Decimal("18.00"),
+                "withholding_rate": Decimal("1.00"),
+                "adjustments": Decimal("10.00"),
+                "expected": Decimal("852.49"),
+            },
+        ]
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario):
+                result = OTACommercialService.calculate_expected_net(**{
+                    key: value for key, value in scenario.items() if key != "expected"
+                })
+                formula = result["formula_explanation"]
+                total = (
+                    Decimal(formula["gross_fare"])
+                    - Decimal(formula["commission_amount"])
+                    - Decimal(formula["commission_tax_amount"])
+                    - Decimal(formula["withholding_amount"])
+                    + Decimal(formula["adjustments"])
+                )
+                self.assertEqual(total, scenario["expected"])
+                self.assertEqual(Decimal(result["expected_net_settlement"]), scenario["expected"])
+                self.assertIsNone(result["exception"])
+
+    def test_unsupported_arrangement_returns_exception_review(self):
+        result = OTACommercialService.calculate_expected_net(
+            gross_fare=Decimal("1000.00"),
+            commission_rate=Decimal("10.00"),
+            billing_arrangement=OTABillingArrangement.EXCEPTION_REVIEW,
+        )
+
+        self.assertEqual(result["exception"], "UNSUPPORTED_BILLING_ARRANGEMENT")
+        self.assertEqual(result["billing_arrangement"], OTABillingArrangement.EXCEPTION_REVIEW)
 
 
 class InvoiceServiceTests(TestCase):

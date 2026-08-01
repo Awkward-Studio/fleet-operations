@@ -82,6 +82,12 @@ class HasFinancialRolePermission(permissions.BasePermission):
                 return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER]
             elif action == "destroy":
                 return role in [UserRole.FINANCE_APPROVER]
+
+        elif view_name == "OTASettlementBatchViewSet":
+            if action in ["list", "retrieve", "profitability"]:
+                return role in [UserRole.COMMERCIAL, UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER, UserRole.AUDITOR]
+            elif action == "import_batch":
+                return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER]
                 
         return False
 

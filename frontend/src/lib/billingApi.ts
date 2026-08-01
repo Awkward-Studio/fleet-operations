@@ -249,6 +249,74 @@ export type BillingInvoice = {
   }>;
 };
 
+export type OTAProfitabilityRow = {
+  trip: {
+    id: number;
+    route: string;
+    pickup_at: string | null;
+    status: string;
+    customer_name: string;
+    vehicle: string;
+    driver: string;
+  };
+  external: {
+    provider_code: string;
+    provider_name: string;
+    provider_booking_id: string;
+    partner_reference_number: string;
+    provider_trip_id: string;
+  };
+  waterfall: {
+    currency: string;
+    gross_fare: string;
+    fare_tax: string;
+    commission_amount: string;
+    commission_tax: string;
+    withholding_amount: string;
+    cancellation_amount: string;
+    net_expected: string;
+    formula: string;
+  };
+  settlement: {
+    batch_id: number | null;
+    batch_reference: string;
+    payout_date: string | null;
+    classification: string;
+    status: string;
+    expected_amount: string;
+    received_amount: string;
+    variance_amount: string;
+  };
+  profitability: {
+    revenue_basis: string;
+    fleet_revenue: string;
+    approved_expenses: string;
+    approved_closeout_charges: string;
+    approved_costs: string;
+    contribution_margin: string;
+    margin_incomplete: boolean;
+    incomplete_reasons: string[];
+  };
+  journals: {
+    booking_journal: string;
+    settlement_journal: string;
+  };
+};
+
+export type OTAProfitabilityReport = {
+  summary: {
+    trip_count: number;
+    exception_count: number;
+    incomplete_margin_count: number;
+    gross_fare: string;
+    net_expected: string;
+    received_amount: string;
+    approved_costs: string;
+    contribution_margin: string;
+  };
+  results: OTAProfitabilityRow[];
+};
+
 type ApiList<T> = T[] | { results: T[] };
 
 function unwrapList<T>(value: ApiList<T>): T[] {
@@ -432,5 +500,17 @@ export type ReconciliationDashboardData = {
 
 export function getReconciliationDashboard(): Promise<ReconciliationDashboardData> {
   return request<ReconciliationDashboardData>("/billing/invoices/reconciliation-dashboard/");
+}
+
+export function getOTAProfitabilityReport(params: {
+  counterparty?: string;
+  status?: string;
+} = {}): Promise<OTAProfitabilityReport> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) query.set(key, value);
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<OTAProfitabilityReport>(`/billing/ota-settlements/profitability/${suffix}`);
 }
 

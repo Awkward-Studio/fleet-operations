@@ -1,8 +1,12 @@
 import datetime
+import csv
+import io
+from collections import Counter
 from decimal import ROUND_CEILING
 from dataclasses import dataclass
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from .models import (
     LegalEntity,
@@ -14,6 +18,14 @@ from .models import (
     InvoiceLine,
     InvoiceTrip,
     InvoiceStatus,
+    OTABillingArrangement,
+    OTAAuditEvent,
+    OTABookingSnapshot,
+    OTACounterparty,
+    OTASettlementBatch,
+    OTASettlementLine,
+    OTASettlementLineClassification,
+    OTASettlementStatus,
     TripCloseout,
     CloseoutStatus,
 )
@@ -769,6 +781,278 @@ class InvoiceService:
 
 class PostingEngine:
     @staticmethod
+    def _posting_context(entry_date=None, legal_entity=None):
+        entry_date = entry_date or datetime.date.today()
+        fy = FinancialYear.objects.filter(
+            start_date__lte=entry_date,
+            end_date__gte=entry_date,
+            is_closed=False,
+        ).first()
+        if not fy:
+            fy = FinancialYear.objects.filter(is_closed=False).order_by("-start_date").first()
+        if not fy:
+            fy = FinancialYear.objects.create(
+                name=f"FY {entry_date.year}-{str(entry_date.year + 1)[-2:]}",
+                start_date=datetime.date(entry_date.year, 4, 1),
+                end_date=datetime.date(entry_date.year + 1, 3, 31),
+            )
+        period = FiscalPeriod.objects.filter(
+            financial_year=fy,
+            start_date__lte=entry_date,
+            end_date__gte=entry_date,
+        ).first() or fy.periods.first()
+        legal_entity = legal_entity or LegalEntity.objects.filter(is_active=True).first()
+        if not legal_entity:
+            legal_entity = LegalEntity.objects.create(legal_name="Primary Fleet Entity", is_active=True)
+        return legal_entity, fy, period
+
+    @staticmethod
+    def _account(code, name, account_type, external_mapping_code=""):
+        from .models import LedgerAccount
+
+        account, _ = LedgerAccount.objects.get_or_create(
+            code=code,
+            defaults={
+                "name": name,
+                "account_type": account_type,
+                "external_mapping_code": external_mapping_code or code,
+            },
+        )
+        return account
+
+    @staticmethod
+    def _assert_balanced(journal, entry_number):
+        total_debits = sum(line.debit_amount for line in journal.lines.all())
+        total_credits = sum(line.credit_amount for line in journal.lines.all())
+        if money(total_debits) != money(total_credits):
+            raise ValidationError(f"Journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+
+    @staticmethod
+    def _line(journal, account, debit, credit, narration, linkage):
+        from .models import JournalLine
+
+        debit = money(debit)
+        credit = money(credit)
+        if debit == Decimal("0.00") and credit == Decimal("0.00"):
+            return None
+        return JournalLine.objects.create(
+            journal_entry=journal,
+            account=account,
+            debit_amount=debit,
+            credit_amount=credit,
+            narration=narration,
+            linkage=linkage,
+        )
+
+    @staticmethod
+    def post_ota_booking_journal(snapshot) -> "JournalEntry":
+        from .models import AccountType, JournalEntry, OTASettlementStatus
+
+        with transaction.atomic():
+            snapshot = snapshot.__class__.objects.select_for_update().select_related("trip", "counterparty").get(pk=snapshot.pk)
+            entry_date = snapshot.trip.pickup_at.date() if snapshot.trip.pickup_at else datetime.date.today()
+            check_period_lock(entry_date)
+            legal_entity, fy, period = PostingEngine._posting_context(entry_date)
+
+            ota_receivable = PostingEngine._account("1110", "OTA Settlement Receivable", AccountType.ASSET, "OTA_AR_1110")
+            commission_expense = PostingEngine._account("5200", "OTA Commission Expense", AccountType.EXPENSE, "OTA_COMM_5200")
+            input_gst = PostingEngine._account("1200", "Input GST Receivable", AccountType.ASSET, "TAX_1200")
+            withholding_receivable = PostingEngine._account("1300", "TDS Receivable", AccountType.ASSET, "TDS_1300")
+            ota_adjustment = PostingEngine._account("5210", "OTA Cancellation and Fare Adjustment", AccountType.EXPENSE, "OTA_ADJ_5210")
+            revenue = PostingEngine._account("4000", "Passenger Transport Revenue", AccountType.REVENUE, "REV_4000")
+
+            entry_number = f"JV/OTA/BOOK/{snapshot.id}"
+            linkage = {
+                "trip_id": snapshot.trip_id,
+                "provider_code": snapshot.counterparty.code,
+                "provider_booking_id": snapshot.provider_booking_id,
+                "ota_booking_snapshot_id": snapshot.id,
+                "billing_arrangement": snapshot.counterparty.billing_arrangement,
+            }
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": entry_date,
+                    "source_type": "OTA_BOOKING",
+                    "source_id": str(snapshot.id),
+                    "narration": f"OTA booking commercial posting for {snapshot.counterparty.code} {snapshot.provider_booking_id}",
+                    "linkage": linkage,
+                },
+            )
+            journal.linkage = linkage
+            journal.lines.all().delete()
+
+            PostingEngine._line(journal, ota_receivable, snapshot.net_expected, 0, "Expected net receivable from OTA", linkage)
+            PostingEngine._line(journal, commission_expense, snapshot.commission_amount, 0, "OTA commission expense", linkage)
+            PostingEngine._line(journal, input_gst, snapshot.commission_tax, 0, "Input GST on OTA commission", linkage)
+            PostingEngine._line(journal, withholding_receivable, snapshot.withholding_amount, 0, "Withholding receivable", linkage)
+            PostingEngine._line(journal, ota_adjustment, snapshot.cancellation_amount, 0, "OTA cancellation adjustment", linkage)
+            PostingEngine._line(journal, revenue, 0, snapshot.gross_fare, "Gross OTA trip revenue", linkage)
+            PostingEngine._assert_balanced(journal, entry_number)
+            journal.save(update_fields=["linkage"])
+            snapshot.settlement_status = OTASettlementStatus.PENDING
+            snapshot.save(update_fields=["settlement_status", "updated_at"])
+            return journal
+
+    @staticmethod
+    def post_ota_settlement_journal(line) -> "JournalEntry":
+        from .models import (
+            AccountType,
+            JournalEntry,
+            OTASettlementLineClassification,
+            OTASettlementStatus,
+        )
+
+        with transaction.atomic():
+            line = line.__class__.objects.select_for_update().select_related(
+                "batch", "batch__counterparty", "booking_snapshot", "booking_snapshot__trip"
+            ).get(pk=line.pk)
+            entry_date = line.batch.payout_date or datetime.date.today()
+            check_period_lock(entry_date)
+            legal_entity, fy, period = PostingEngine._posting_context(entry_date)
+
+            bank = PostingEngine._account("1000", "Bank & Cash Account", AccountType.ASSET, "CASH_1000")
+            ota_receivable = PostingEngine._account("1110", "OTA Settlement Receivable", AccountType.ASSET, "OTA_AR_1110")
+            short_expense = PostingEngine._account("5220", "OTA Short Settlement Expense", AccountType.EXPENSE, "OTA_SHORT_5220")
+            excess_income = PostingEngine._account("4020", "OTA Excess Settlement Income", AccountType.REVENUE, "OTA_EXCESS_4020")
+            unmatched_cash = PostingEngine._account("2350", "Unmatched OTA Cash Clearing", AccountType.LIABILITY, "OTA_UNMATCHED_2350")
+
+            entry_number = f"JV/OTA/SETTLE/{line.id}"
+            snapshot = line.booking_snapshot
+            linkage = {
+                "settlement_batch_id": line.batch_id,
+                "settlement_batch_reference": line.batch.batch_reference,
+                "settlement_line_id": line.id,
+                "provider_code": line.batch.counterparty.code,
+                "provider_booking_id": line.provider_booking_id,
+                "ota_booking_snapshot_id": snapshot.id if snapshot else None,
+                "trip_id": snapshot.trip_id if snapshot else None,
+                "classification": line.classification,
+            }
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": entry_date,
+                    "source_type": "OTA_SETTLEMENT_LINE",
+                    "source_id": str(line.id),
+                    "narration": f"OTA settlement line posting for {line.batch.counterparty.code} {line.provider_booking_id}",
+                    "linkage": linkage,
+                },
+            )
+            journal.linkage = linkage
+            journal.lines.all().delete()
+
+            PostingEngine._line(journal, bank, line.received_amount, 0, "OTA payout received", linkage)
+            if snapshot and line.classification not in (
+                OTASettlementLineClassification.MISSING,
+                OTASettlementLineClassification.DUPLICATE,
+                OTASettlementLineClassification.CANCELLED,
+            ):
+                PostingEngine._line(journal, ota_receivable, 0, line.expected_amount, "Clear OTA expected receivable", linkage)
+                if line.variance_amount < Decimal("0.00"):
+                    PostingEngine._line(journal, short_expense, abs(line.variance_amount), 0, "OTA short settlement variance", linkage)
+                elif line.variance_amount > Decimal("0.00"):
+                    PostingEngine._line(journal, excess_income, 0, line.variance_amount, "OTA excess settlement variance", linkage)
+            else:
+                PostingEngine._line(journal, unmatched_cash, 0, line.received_amount, "Unmatched OTA cash held for review", linkage)
+
+            PostingEngine._assert_balanced(journal, entry_number)
+            journal.save(update_fields=["linkage"])
+            line.settlement_status = (
+                OTASettlementStatus.SETTLED
+                if line.classification == OTASettlementLineClassification.EXACT
+                else OTASettlementStatus.EXCEPTION
+            )
+            line.save(update_fields=["settlement_status", "updated_at"])
+            return journal
+
+    @staticmethod
+    def post_ota_settlement_batch(batch) -> list:
+        journals = []
+        for line in batch.lines.select_related(
+            "batch",
+            "batch__counterparty",
+            "booking_snapshot",
+            "booking_snapshot__trip",
+            "booking_snapshot__counterparty",
+        ).order_by("id"):
+            if line.booking_snapshot_id:
+                journals.append(PostingEngine.post_ota_booking_journal(line.booking_snapshot))
+            journals.append(PostingEngine.post_ota_settlement_journal(line))
+        return journals
+
+    @staticmethod
+    def post_ota_journal_reversal(original_journal, reason="") -> "JournalEntry":
+        from .models import JournalEntry
+
+        with transaction.atomic():
+            original_journal = JournalEntry.objects.select_for_update().prefetch_related("lines", "lines__account").get(pk=original_journal.pk)
+            today = datetime.date.today()
+            check_period_lock(today)
+            legal_entity, fy, period = PostingEngine._posting_context(today, original_journal.legal_entity)
+            entry_number = f"{original_journal.entry_number}/REV"
+            linkage = {
+                **(original_journal.linkage or {}),
+                "reverses_journal_entry_id": original_journal.id,
+                "reverses_entry_number": original_journal.entry_number,
+                "reversal_reason": reason,
+            }
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": today,
+                    "source_type": f"{original_journal.source_type}_REVERSAL",
+                    "source_id": original_journal.source_id,
+                    "narration": f"Reversal of {original_journal.entry_number}: {reason}",
+                    "linkage": linkage,
+                },
+            )
+            journal.linkage = linkage
+            journal.lines.all().delete()
+            for original_line in original_journal.lines.all():
+                PostingEngine._line(
+                    journal,
+                    original_line.account,
+                    original_line.credit_amount,
+                    original_line.debit_amount,
+                    f"Reversal: {original_line.narration}",
+                    {**(original_line.linkage or {}), "reverses_journal_line_id": original_line.id},
+                )
+            PostingEngine._assert_balanced(journal, entry_number)
+            journal.save(update_fields=["linkage"])
+            return journal
+
+    @staticmethod
+    def ota_provider_control_reconciliation(counterparty, as_of=None) -> dict:
+        from .models import JournalLine
+
+        as_of = as_of or datetime.date.today()
+        lines = JournalLine.objects.filter(
+            journal_entry__entry_date__lte=as_of,
+            journal_entry__linkage__provider_code=counterparty.code,
+            account__code__in=["1110", "2350"],
+        ).select_related("account")
+        balances = {}
+        for journal_line in lines:
+            balances.setdefault(journal_line.account.code, Decimal("0.00"))
+            balances[journal_line.account.code] += journal_line.debit_amount - journal_line.credit_amount
+        return {
+            "counterparty_code": counterparty.code,
+            "as_of": as_of.isoformat(),
+            "ota_settlement_receivable": str(money(balances.get("1110", Decimal("0.00")))),
+            "unmatched_ota_cash": str(money(balances.get("2350", Decimal("0.00")))),
+        }
+
+    @staticmethod
     def post_invoice_journal(invoice: Invoice) -> "JournalEntry":
         from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
 
@@ -1406,6 +1690,477 @@ class PaymentService:
                 PostingEngine.post_allocation_journal(allocation)
 
             return allocation
+
+
+class OTACommercialService:
+    @staticmethod
+    def quantize(value) -> Decimal:
+        return money(Decimal(str(value or "0")))
+
+    @staticmethod
+    def provider_config(ota_source: str) -> dict:
+        code = (ota_source or "").replace(" ", "").upper()
+        counterparty = (
+            OTACounterparty.objects.filter(code__iexact=code).first()
+            or OTACounterparty.objects.filter(name__iexact=ota_source or "").first()
+        )
+        if not counterparty:
+            return {
+                "counterparty_code": code or "",
+                "billing_arrangement": OTABillingArrangement.OTA_INVOICE,
+                "commission_tax_rate": Decimal("0.00"),
+                "exception": None,
+            }
+        return {
+            "counterparty_code": counterparty.code,
+            "billing_arrangement": counterparty.billing_arrangement,
+            "commission_tax_rate": Decimal(counterparty.commission_tax_rate),
+            "exception": (
+                "UNSUPPORTED_BILLING_ARRANGEMENT"
+                if counterparty.billing_arrangement == OTABillingArrangement.EXCEPTION_REVIEW
+                else None
+            ),
+        }
+
+    @staticmethod
+    def calculate_expected_net(
+        *,
+        gross_fare,
+        commission_rate=Decimal("0.00"),
+        commission_amount=None,
+        commission_tax_rate=Decimal("0.00"),
+        commission_tax_amount=None,
+        withholding_rate=Decimal("0.00"),
+        withholding_amount=None,
+        adjustments=Decimal("0.00"),
+        billing_arrangement=OTABillingArrangement.OTA_INVOICE,
+        currency="INR",
+    ) -> dict:
+        gross = OTACommercialService.quantize(gross_fare)
+        commission_rate = Decimal(str(commission_rate or "0"))
+        withholding_rate = Decimal(str(withholding_rate or "0"))
+        commission_tax_rate = Decimal(str(commission_tax_rate or "0"))
+        commission = (
+            OTACommercialService.quantize(commission_amount)
+            if commission_amount is not None
+            else OTACommercialService.quantize(gross * commission_rate / Decimal("100"))
+        )
+        commission_tax = (
+            OTACommercialService.quantize(commission_tax_amount)
+            if commission_tax_amount is not None
+            else OTACommercialService.quantize(commission * commission_tax_rate / Decimal("100"))
+        )
+        withholding = (
+            OTACommercialService.quantize(withholding_amount)
+            if withholding_amount is not None
+            else OTACommercialService.quantize(gross * withholding_rate / Decimal("100"))
+        )
+        adjustment_amount = OTACommercialService.quantize(adjustments)
+        net = OTACommercialService.quantize(
+            gross - commission - commission_tax - withholding + adjustment_amount
+        )
+        exception = None
+        if billing_arrangement == OTABillingArrangement.EXCEPTION_REVIEW:
+            exception = "UNSUPPORTED_BILLING_ARRANGEMENT"
+        explanation = {
+            "formula": "gross_fare - commission_amount - commission_tax_amount - withholding_amount + adjustments = net_expected",
+            "gross_fare": str(gross),
+            "commission_amount": str(commission),
+            "commission_tax_amount": str(commission_tax),
+            "withholding_amount": str(withholding),
+            "adjustments": str(adjustment_amount),
+            "net_expected": str(net),
+        }
+        formula_total = OTACommercialService.quantize(
+            gross - commission - commission_tax - withholding + adjustment_amount
+        )
+        if formula_total != net:
+            exception = exception or "FORMULA_RECONCILIATION_FAILED"
+        return {
+            "currency": (currency or "INR").upper(),
+            "billing_arrangement": billing_arrangement,
+            "gross_customer_fare": str(gross),
+            "commission_rate": str(OTACommercialService.quantize(commission_rate)),
+            "commission_amount": str(commission),
+            "commission_tax_rate": str(OTACommercialService.quantize(commission_tax_rate)),
+            "commission_tax_amount": str(commission_tax),
+            "withholding_rate": str(OTACommercialService.quantize(withholding_rate)),
+            "withholding_amount": str(withholding),
+            "adjustments": str(adjustment_amount),
+            "expected_net_settlement": str(net),
+            "formula_explanation": explanation,
+            "exception": exception,
+        }
+
+
+class OTASettlementImportService:
+    REQUIRED_LINE_FIELDS = ("provider_booking_id", "received_amount")
+
+    @staticmethod
+    def _amount(value) -> Decimal:
+        amount = money(Decimal(str(value or "0")))
+        if amount < Decimal("0.00"):
+            raise ValidationError("Settlement amounts cannot be negative.")
+        return amount
+
+    @staticmethod
+    def parse_csv(content: str) -> list[dict]:
+        reader = csv.DictReader(io.StringIO(content or ""))
+        lines = []
+        for row in reader:
+            lines.append({
+                "provider_booking_id": row.get("provider_booking_id") or row.get("booking_reference") or row.get("booking_id"),
+                "received_amount": row.get("received_amount") or row.get("amount") or row.get("net_amount"),
+                "currency": row.get("currency") or "INR",
+                "source": "CSV",
+                "raw": row,
+            })
+        return lines
+
+    @classmethod
+    def import_batch(
+        cls,
+        *,
+        counterparty_code: str,
+        batch_reference: str,
+        lines: list[dict] | None = None,
+        csv_content: str = "",
+        currency: str = "INR",
+        payout_date=None,
+        source_system: str = "API",
+        actor=None,
+        idempotency_key: str = "",
+    ) -> dict:
+        if not counterparty_code:
+            raise ValidationError({"counterparty_code": "Counterparty code is required."})
+        if not batch_reference:
+            raise ValidationError({"batch_reference": "Batch reference is required."})
+        import_lines = list(lines or [])
+        if csv_content:
+            import_lines.extend(cls.parse_csv(csv_content))
+        if not import_lines:
+            raise ValidationError({"lines": "At least one settlement line is required."})
+
+        normalized_currency = (currency or "INR").strip().upper()
+        refs = [
+            str(line.get("provider_booking_id") or "").strip()
+            for line in import_lines
+        ]
+        if any(not ref for ref in refs):
+            raise ValidationError({"provider_booking_id": "Every settlement line needs a provider booking reference."})
+        duplicates = {ref for ref, count in Counter(refs).items() if count > 1}
+        seen = set()
+
+        with transaction.atomic():
+            try:
+                counterparty = OTACounterparty.objects.select_for_update().get(code__iexact=counterparty_code)
+            except OTACounterparty.DoesNotExist:
+                raise ValidationError({"counterparty_code": "Unknown OTA counterparty."})
+            batch, created = OTASettlementBatch.objects.select_for_update().get_or_create(
+                counterparty=counterparty,
+                batch_reference=batch_reference,
+                defaults={
+                    "currency": normalized_currency,
+                    "payout_beneficiary_name": counterparty.payout_beneficiary_name,
+                    "payout_beneficiary_account": counterparty.payout_beneficiary_account,
+                    "payout_date": payout_date,
+                    "source_system": source_system,
+                    "monetary_sources": {"import": source_system},
+                },
+            )
+            batch.currency = normalized_currency
+            batch.payout_date = payout_date or batch.payout_date
+            batch.source_system = source_system
+            batch.lines.all().delete()
+
+            classifications = Counter()
+            totals = {
+                "gross_amount": Decimal("0.00"),
+                "commission_amount": Decimal("0.00"),
+                "withholding_amount": Decimal("0.00"),
+                "net_expected": Decimal("0.00"),
+                "actual_payout_amount": Decimal("0.00"),
+            }
+            response_lines = []
+
+            for index, raw_line in enumerate(import_lines, start=1):
+                provider_ref = str(raw_line.get("provider_booking_id") or "").strip()
+                line_currency = str(raw_line.get("currency") or normalized_currency).strip().upper()
+                if line_currency != normalized_currency:
+                    raise ValidationError({"currency": f"Line {index} currency does not match batch currency."})
+                received = cls._amount(raw_line.get("received_amount"))
+                snapshot = OTABookingSnapshot.objects.filter(
+                    counterparty=counterparty,
+                    provider_booking_id=provider_ref,
+                ).select_related("trip").first()
+
+                classification = OTASettlementLineClassification.PENDING
+                expected = Decimal("0.00")
+                line_status = OTASettlementStatus.EXCEPTION
+                booking_for_line = snapshot
+
+                if provider_ref in duplicates and provider_ref in seen:
+                    classification = OTASettlementLineClassification.DUPLICATE
+                    booking_for_line = None
+                elif snapshot is None:
+                    classification = OTASettlementLineClassification.MISSING
+                else:
+                    expected = money(snapshot.net_expected)
+                    if snapshot.settlement_status == OTASettlementStatus.CANCELLED or snapshot.trip.status.upper() == "CANCELLED":
+                        classification = OTASettlementLineClassification.CANCELLED
+                        line_status = OTASettlementStatus.EXCEPTION
+                    elif received == expected:
+                        classification = OTASettlementLineClassification.EXACT
+                        line_status = OTASettlementStatus.SETTLED
+                    elif received < expected:
+                        classification = OTASettlementLineClassification.SHORT
+                    else:
+                        classification = OTASettlementLineClassification.EXCESS
+
+                variance = money(received - expected)
+                line = OTASettlementLine.objects.create(
+                    batch=batch,
+                    booking_snapshot=booking_for_line,
+                    provider_booking_id=provider_ref,
+                    currency=normalized_currency,
+                    expected_amount=expected,
+                    received_amount=received,
+                    variance_amount=variance,
+                    classification=classification,
+                    settlement_status=line_status,
+                    monetary_sources={
+                        "expected_amount": "OTA_BOOKING_SNAPSHOT" if snapshot else "UNMATCHED_PROVIDER_REFERENCE",
+                        "received_amount": source_system,
+                        "provider_booking_id": source_system,
+                    },
+                )
+                seen.add(provider_ref)
+                classifications[classification] += 1
+                totals["actual_payout_amount"] += received
+                if snapshot and classification not in (
+                    OTASettlementLineClassification.DUPLICATE,
+                    OTASettlementLineClassification.MISSING,
+                ):
+                    totals["gross_amount"] += snapshot.gross_fare
+                    totals["commission_amount"] += snapshot.commission_amount + snapshot.commission_tax
+                    totals["withholding_amount"] += snapshot.withholding_amount
+                    totals["net_expected"] += expected
+                    if classification == OTASettlementLineClassification.EXACT:
+                        snapshot.settlement_status = OTASettlementStatus.SETTLED
+                    else:
+                        snapshot.settlement_status = OTASettlementStatus.EXCEPTION
+                    snapshot.save(update_fields=["settlement_status", "updated_at"])
+
+                response_lines.append({
+                    "id": line.id,
+                    "provider_booking_id": provider_ref,
+                    "booking_snapshot_id": snapshot.id if snapshot else None,
+                    "classification": classification,
+                    "expected_amount": str(expected),
+                    "received_amount": str(received),
+                    "variance_amount": str(variance),
+                })
+
+            batch.gross_amount = money(totals["gross_amount"])
+            batch.commission_amount = money(totals["commission_amount"])
+            batch.withholding_amount = money(totals["withholding_amount"])
+            batch.net_expected = money(totals["net_expected"])
+            batch.actual_payout_amount = money(totals["actual_payout_amount"])
+            batch.settlement_status = (
+                OTASettlementStatus.SETTLED
+                if set(classifications) == {OTASettlementLineClassification.EXACT}
+                else OTASettlementStatus.EXCEPTION
+            )
+            batch.monetary_sources = {
+                "gross_amount": "MATCHED_OTA_BOOKING_SNAPSHOTS",
+                "commission_amount": "MATCHED_OTA_BOOKING_SNAPSHOTS",
+                "withholding_amount": "MATCHED_OTA_BOOKING_SNAPSHOTS",
+                "net_expected": "MATCHED_OTA_BOOKING_SNAPSHOTS",
+                "actual_payout_amount": source_system,
+            }
+            batch.save()
+
+            OTAAuditEvent.objects.create(
+                action="SETTLEMENT_IMPORT" if created else "SETTLEMENT_IMPORT_RERUN",
+                entity_type="OTASettlementBatch",
+                entity_id=str(batch.id),
+                actor=actor if (actor and actor.is_authenticated) else None,
+                request_idempotency_key=idempotency_key,
+                snapshot={
+                    "counterparty_code": counterparty.code,
+                    "batch_reference": batch_reference,
+                    "classifications": dict(classifications),
+                    "line_count": len(response_lines),
+                },
+            )
+
+        return {
+            "batch_id": batch.id,
+            "batch_reference": batch.batch_reference,
+            "status": batch.settlement_status,
+            "currency": batch.currency,
+            "net_expected": str(batch.net_expected),
+            "actual_payout_amount": str(batch.actual_payout_amount),
+            "classification_counts": dict(classifications),
+            "lines": response_lines,
+        }
+
+
+class OTAProfitabilityReportService:
+    @staticmethod
+    def build(counterparty_code="", status="") -> dict:
+        from .models import (
+            ExpenseStatus,
+            JournalEntry,
+            OTABookingSnapshot,
+            OTASettlementLineClassification,
+            TripCharge,
+            TripExpense,
+        )
+
+        snapshots = (
+            OTABookingSnapshot.objects.select_related("trip", "trip__vehicle", "trip__driver", "counterparty")
+            .prefetch_related("settlement_lines", "settlement_lines__batch")
+            .order_by("-trip__pickup_at", "-id")
+        )
+        if counterparty_code:
+            snapshots = snapshots.filter(counterparty__code__iexact=counterparty_code)
+        if status:
+            snapshots = snapshots.filter(settlement_status=status)
+
+        rows = []
+        totals = {
+            "gross_fare": Decimal("0.00"),
+            "net_expected": Decimal("0.00"),
+            "received_amount": Decimal("0.00"),
+            "approved_costs": Decimal("0.00"),
+            "contribution_margin": Decimal("0.00"),
+        }
+        exception_count = 0
+        incomplete_count = 0
+
+        for snapshot in snapshots:
+            trip = snapshot.trip
+            settlement_line = (
+                snapshot.settlement_lines.select_related("batch")
+                .order_by("-updated_at", "-id")
+                .first()
+            )
+            approved_expenses = TripExpense.objects.filter(
+                trip=trip,
+                status__in=[ExpenseStatus.APPROVED, ExpenseStatus.SETTLED],
+            )
+            pending_expenses = TripExpense.objects.filter(trip=trip, status=ExpenseStatus.SUBMITTED).exists()
+            approved_expense_total = approved_expenses.aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+            approved_charge_total = Decimal("0.00")
+            try:
+                closeout = trip.closeout
+            except Trip.closeout.RelatedObjectDoesNotExist:
+                closeout = None
+            closeout_ready = False
+            if closeout:
+                approved_charge_total = closeout.extra_charges.filter(is_approved=True).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+                closeout_ready = bool(closeout.billing_ready)
+
+            approved_costs = money(approved_expense_total + approved_charge_total)
+            received = money(settlement_line.received_amount) if settlement_line else Decimal("0.00")
+            revenue_basis = "ACTUAL_SETTLEMENT" if settlement_line else "EXPECTED_NET"
+            fleet_revenue = received if settlement_line else money(snapshot.net_expected)
+            contribution_margin = money(fleet_revenue - approved_costs)
+            margin_incomplete = pending_expenses or not closeout_ready
+            if margin_incomplete:
+                incomplete_count += 1
+            if settlement_line and settlement_line.classification != OTASettlementLineClassification.EXACT:
+                exception_count += 1
+            elif not settlement_line:
+                exception_count += 1
+
+            booking_journal = JournalEntry.objects.filter(source_type="OTA_BOOKING", source_id=str(snapshot.id)).first()
+            settlement_journal = (
+                JournalEntry.objects.filter(source_type="OTA_SETTLEMENT_LINE", source_id=str(settlement_line.id)).first()
+                if settlement_line
+                else None
+            )
+            row = {
+                "trip": {
+                    "id": trip.id,
+                    "route": f"{trip.pickup_city} to {trip.drop_city}",
+                    "pickup_at": trip.pickup_at.isoformat() if trip.pickup_at else None,
+                    "status": trip.status,
+                    "customer_name": trip.customer_name,
+                    "vehicle": trip.vehicle.registration_number if trip.vehicle_id else "",
+                    "driver": trip.driver.name if trip.driver_id else "",
+                },
+                "external": {
+                    "provider_code": snapshot.counterparty.code,
+                    "provider_name": snapshot.counterparty.name,
+                    "provider_booking_id": snapshot.provider_booking_id,
+                    "partner_reference_number": snapshot.partner_reference_number,
+                    "provider_trip_id": snapshot.provider_trip_id,
+                },
+                "waterfall": {
+                    "currency": snapshot.currency,
+                    "gross_fare": str(snapshot.gross_fare),
+                    "fare_tax": str(snapshot.fare_tax),
+                    "commission_amount": str(snapshot.commission_amount),
+                    "commission_tax": str(snapshot.commission_tax),
+                    "withholding_amount": str(snapshot.withholding_amount),
+                    "cancellation_amount": str(snapshot.cancellation_amount),
+                    "net_expected": str(snapshot.net_expected),
+                    "formula": "gross_fare - commission_amount - commission_tax - withholding_amount - cancellation_amount = net_expected",
+                },
+                "settlement": {
+                    "batch_id": settlement_line.batch_id if settlement_line else None,
+                    "batch_reference": settlement_line.batch.batch_reference if settlement_line else "",
+                    "payout_date": settlement_line.batch.payout_date.isoformat() if settlement_line and settlement_line.batch.payout_date else None,
+                    "classification": settlement_line.classification if settlement_line else "MISSING",
+                    "status": settlement_line.settlement_status if settlement_line else snapshot.settlement_status,
+                    "expected_amount": str(settlement_line.expected_amount) if settlement_line else str(snapshot.net_expected),
+                    "received_amount": str(received),
+                    "variance_amount": str(settlement_line.variance_amount) if settlement_line else str(money(Decimal("0.00") - snapshot.net_expected)),
+                },
+                "profitability": {
+                    "revenue_basis": revenue_basis,
+                    "fleet_revenue": str(fleet_revenue),
+                    "approved_expenses": str(money(approved_expense_total)),
+                    "approved_closeout_charges": str(money(approved_charge_total)),
+                    "approved_costs": str(approved_costs),
+                    "contribution_margin": str(contribution_margin),
+                    "margin_incomplete": margin_incomplete,
+                    "incomplete_reasons": [
+                        reason
+                        for reason, enabled in (
+                            ("CLOSEOUT_NOT_BILLING_READY", not closeout_ready),
+                            ("PENDING_EXPENSE_REVIEW", pending_expenses),
+                        )
+                        if enabled
+                    ],
+                },
+                "journals": {
+                    "booking_journal": booking_journal.entry_number if booking_journal else "",
+                    "settlement_journal": settlement_journal.entry_number if settlement_journal else "",
+                },
+            }
+            rows.append(row)
+            totals["gross_fare"] += snapshot.gross_fare
+            totals["net_expected"] += snapshot.net_expected
+            totals["received_amount"] += received
+            totals["approved_costs"] += approved_costs
+            totals["contribution_margin"] += contribution_margin
+
+        return {
+            "summary": {
+                "trip_count": len(rows),
+                "exception_count": exception_count,
+                "incomplete_margin_count": incomplete_count,
+                "gross_fare": str(money(totals["gross_fare"])),
+                "net_expected": str(money(totals["net_expected"])),
+                "received_amount": str(money(totals["received_amount"])),
+                "approved_costs": str(money(totals["approved_costs"])),
+                "contribution_margin": str(money(totals["contribution_margin"])),
+            },
+            "results": rows,
+        }
 
 
 class AuditService:

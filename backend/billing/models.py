@@ -493,6 +493,7 @@ class JournalEntry(models.Model):
     source_type = models.CharField(max_length=50)  # e.g. "INVOICE", "RECEIPT", "EXPENSE"
     source_id = models.CharField(max_length=50)
     narration = models.TextField(blank=True)
+    linkage = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -505,6 +506,7 @@ class JournalLine(models.Model):
     debit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     credit_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     narration = models.CharField(max_length=250, blank=True)
+    linkage = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.account.code}: Dr ₹{self.debit_amount} | Cr ₹{self.credit_amount}"
@@ -548,6 +550,349 @@ class PaymentAllocation(models.Model):
 
     def __str__(self):
         return f"Allocated ₹{self.allocated_amount} from {self.receipt.receipt_number} to {self.invoice.invoice_number}"
+
+
+class OTASettlementStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    PARTIAL = "PARTIAL", "Partial"
+    SETTLED = "SETTLED", "Settled"
+    EXCEPTION = "EXCEPTION", "Exception"
+    CANCELLED = "CANCELLED", "Cancelled"
+    REVERSED = "REVERSED", "Reversed"
+
+
+class OTASettlementLineClassification(models.TextChoices):
+    PENDING = "PENDING", "Pending"
+    EXACT = "EXACT", "Exact"
+    SHORT = "SHORT", "Short"
+    EXCESS = "EXCESS", "Excess"
+    MISSING = "MISSING", "Missing"
+    DUPLICATE = "DUPLICATE", "Duplicate"
+    CANCELLED = "CANCELLED", "Cancelled"
+
+
+class OTABillingArrangement(models.TextChoices):
+    OTA_INVOICE = "OTA_INVOICE", "Tax invoice to OTA"
+    RIDER_INVOICE = "RIDER_INVOICE", "Tax invoice to rider"
+    SELF_BILLED = "SELF_BILLED", "Self-billed by OTA"
+    EXCEPTION_REVIEW = "EXCEPTION_REVIEW", "Exception review"
+
+
+class OTACounterparty(models.Model):
+    code = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=150)
+    provider_type = models.CharField(max_length=60, default="OTA")
+    default_currency = models.CharField(max_length=3, default="INR")
+    billing_arrangement = models.CharField(
+        max_length=32,
+        choices=OTABillingArrangement.choices,
+        default=OTABillingArrangement.OTA_INVOICE,
+    )
+    commission_tax_rate = models.DecimalField(max_digits=7, decimal_places=4, default=0)
+    payout_beneficiary_name = models.CharField(max_length=150, blank=True)
+    payout_beneficiary_account = models.CharField(max_length=80, blank=True)
+    payout_beneficiary_ifsc = models.CharField(max_length=20, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["code"]
+
+    def clean(self):
+        super().clean()
+        self.code = (self.code or "").strip().upper()
+        self.default_currency = (self.default_currency or "INR").strip().upper()
+        if self.commission_tax_rate < 0:
+            raise ValidationError({"commission_tax_rate": "Commission tax rate cannot be negative."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.code} - {self.name}"
+
+
+class OTABookingSnapshot(models.Model):
+    trip = models.OneToOneField("fleet.Trip", related_name="ota_booking_snapshot", on_delete=models.PROTECT)
+    counterparty = models.ForeignKey(OTACounterparty, related_name="booking_snapshots", on_delete=models.PROTECT)
+    provider_booking_id = models.CharField(max_length=120)
+    partner_reference_number = models.CharField(max_length=120, blank=True)
+    provider_trip_id = models.CharField(max_length=120, blank=True)
+    currency = models.CharField(max_length=3, default="INR")
+    gross_fare = models.DecimalField(max_digits=12, decimal_places=2)
+    fare_tax = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_basis = models.CharField(max_length=40, default="GROSS_FARE")
+    commission_rate = models.DecimalField(max_digits=7, decimal_places=4, default=0)
+    commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_tax = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    withholding_rate = models.DecimalField(max_digits=7, decimal_places=4, default=0)
+    withholding_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cancellation_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    net_expected = models.DecimalField(max_digits=12, decimal_places=2)
+    settlement_status = models.CharField(
+        max_length=24,
+        choices=OTASettlementStatus.choices,
+        default=OTASettlementStatus.PENDING,
+    )
+    monetary_sources = models.JSONField(default=dict, blank=True)
+    source_system = models.CharField(max_length=60, default="MANUAL")
+    source_payload_hash = models.CharField(max_length=64, blank=True)
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_ota_booking_snapshots",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reversed_ota_booking_snapshots",
+    )
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversal_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    MONETARY_FIELDS = (
+        "gross_fare",
+        "fare_tax",
+        "commission_amount",
+        "commission_tax",
+        "withholding_amount",
+        "cancellation_amount",
+        "net_expected",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["counterparty", "provider_booking_id"],
+                name="unique_ota_provider_booking",
+            ),
+            models.UniqueConstraint(
+                fields=["counterparty", "partner_reference_number"],
+                condition=~models.Q(partner_reference_number=""),
+                name="unique_ota_partner_reference",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.currency = (self.currency or "INR").strip().upper()
+        expected = (
+            self.gross_fare
+            - self.commission_amount
+            - self.commission_tax
+            - self.withholding_amount
+            - self.cancellation_amount
+        )
+        if self.net_expected != expected:
+            raise ValidationError({"net_expected": "Net expected does not reconcile to OTA commercial amounts."})
+        missing_sources = [
+            field
+            for field in self.MONETARY_FIELDS
+            if field not in (self.monetary_sources or {})
+        ]
+        if missing_sources:
+            raise ValidationError({"monetary_sources": f"Missing monetary sources for: {', '.join(missing_sources)}."})
+        if self.commission_rate < 0 or self.withholding_rate < 0:
+            raise ValidationError("OTA percentage rates cannot be negative.")
+        if self.pk and self.settlement_lines.exists():
+            original = OTABookingSnapshot.objects.get(pk=self.pk)
+            guarded_fields = (
+                "provider_booking_id",
+                "partner_reference_number",
+                "provider_trip_id",
+                "currency",
+                *self.MONETARY_FIELDS,
+                "commission_rate",
+                "withholding_rate",
+            )
+            changed = [
+                field
+                for field in guarded_fields
+                if getattr(original, field) != getattr(self, field)
+            ]
+            if changed:
+                raise ValidationError(
+                    {
+                        "settlement_status": (
+                            "Settled OTA booking snapshots cannot change financial "
+                            f"boundary fields: {', '.join(changed)}."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.counterparty.code} booking {self.provider_booking_id} for Trip #{self.trip_id}"
+
+
+class OTASettlementBatch(models.Model):
+    counterparty = models.ForeignKey(OTACounterparty, related_name="settlement_batches", on_delete=models.PROTECT)
+    batch_reference = models.CharField(max_length=120)
+    currency = models.CharField(max_length=3, default="INR")
+    payout_beneficiary_name = models.CharField(max_length=150, blank=True)
+    payout_beneficiary_account = models.CharField(max_length=80, blank=True)
+    payout_date = models.DateField(null=True, blank=True)
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    withholding_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    net_expected = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    actual_payout_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    settlement_status = models.CharField(
+        max_length=24,
+        choices=OTASettlementStatus.choices,
+        default=OTASettlementStatus.PENDING,
+    )
+    monetary_sources = models.JSONField(default=dict, blank=True)
+    source_system = models.CharField(max_length=60, default="MANUAL")
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_ota_settlement_batches",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    issued_at = models.DateTimeField(null=True, blank=True)
+    reversed_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reversed_ota_settlement_batches",
+    )
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversal_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["counterparty", "batch_reference"],
+                name="unique_ota_settlement_batch_reference",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        self.currency = (self.currency or "INR").strip().upper()
+        if any(
+            value < 0
+            for value in (
+                self.gross_amount,
+                self.commission_amount,
+                self.withholding_amount,
+                self.net_expected,
+                self.actual_payout_amount,
+            )
+        ):
+            raise ValidationError("OTA settlement amounts cannot be negative.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.counterparty.code} settlement {self.batch_reference}"
+
+
+class OTASettlementLine(models.Model):
+    batch = models.ForeignKey(OTASettlementBatch, related_name="lines", on_delete=models.CASCADE)
+    booking_snapshot = models.ForeignKey(
+        OTABookingSnapshot,
+        null=True,
+        blank=True,
+        related_name="settlement_lines",
+        on_delete=models.PROTECT,
+    )
+    provider_booking_id = models.CharField(max_length=120, blank=True, db_index=True)
+    currency = models.CharField(max_length=3, default="INR")
+    expected_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    received_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    variance_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    classification = models.CharField(
+        max_length=24,
+        choices=OTASettlementLineClassification.choices,
+        default=OTASettlementLineClassification.PENDING,
+    )
+    settlement_status = models.CharField(
+        max_length=24,
+        choices=OTASettlementStatus.choices,
+        default=OTASettlementStatus.PENDING,
+    )
+    monetary_sources = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["batch_id", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["batch", "booking_snapshot"],
+                condition=models.Q(booking_snapshot__isnull=False),
+                name="unique_ota_settlement_line_booking",
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        self.currency = (self.currency or "INR").strip().upper()
+        self.provider_booking_id = (self.provider_booking_id or "").strip()
+        if self.booking_snapshot and not self.provider_booking_id:
+            self.provider_booking_id = self.booking_snapshot.provider_booking_id
+        if self.currency != self.batch.currency:
+            raise ValidationError({"currency": "Settlement line currency must match batch and booking snapshot."})
+        if self.booking_snapshot and self.currency != self.booking_snapshot.currency:
+            raise ValidationError({"currency": "Settlement line currency must match batch and booking snapshot."})
+        if not self.booking_snapshot and not self.provider_booking_id:
+            raise ValidationError({"provider_booking_id": "Provider booking reference is required for unmatched settlement lines."})
+        expected_variance = self.received_amount - self.expected_amount
+        if self.variance_amount != expected_variance:
+            raise ValidationError({"variance_amount": "Variance must equal received amount minus expected amount."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.batch.batch_reference} line for {self.provider_booking_id}"
+
+
+class OTAAuditEvent(models.Model):
+    action = models.CharField(max_length=60)
+    entity_type = models.CharField(max_length=60)
+    entity_id = models.CharField(max_length=60)
+    actor = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="ota_audit_events",
+    )
+    snapshot = models.JSONField(default=dict, blank=True)
+    reason = models.TextField(blank=True)
+    request_idempotency_key = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.action} {self.entity_type} #{self.entity_id}"
 
 
 class ExpenseCategory(models.TextChoices):

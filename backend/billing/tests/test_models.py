@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 from django.test import TestCase
 from django.core.exceptions import ValidationError
 from billing.models import (
@@ -7,6 +8,11 @@ from billing.models import (
     FiscalPeriod,
     DocumentSequence,
     DocumentType,
+    OTABookingSnapshot,
+    OTACounterparty,
+    OTASettlementBatch,
+    OTASettlementLine,
+    OTASettlementStatus,
 )
 
 
@@ -127,4 +133,170 @@ class BillingModelTests(TestCase):
             line_total=2520.00,
         )
         self.assertEqual(invoice.lines.count(), 1)
+
+    def _ota_trip(self, sequence=1):
+        from fleet.models import BookingType, PricingAmountStatus, Trip
+
+        return Trip.objects.create(
+            booking_type=BookingType.OTA,
+            ota_source="MMT",
+            ota_external_reference=f"MMT-{sequence}",
+            customer_name="OTA Passenger",
+            pickup_city="Mumbai",
+            drop_city="Pune",
+            pickup_at=datetime.datetime(2026, 8, sequence, 10, 0, tzinfo=datetime.timezone.utc),
+            estimated_drop_at=datetime.datetime(2026, 8, sequence, 14, 0, tzinfo=datetime.timezone.utc),
+            status="completed",
+            fare_amount=Decimal("1000.00"),
+            pricing_amount_status=PricingAmountStatus.QUOTED,
+            quoted_taxable_amount=Decimal("952.38"),
+            quoted_tax_amount=Decimal("47.62"),
+            quoted_total_amount=Decimal("1000.00"),
+            pricing_snapshot={"calculation_version": "ota-test-v1"},
+        )
+
+    def _mmt_counterparty(self):
+        return OTACounterparty.objects.create(
+            code="mmt",
+            name="MakeMyTrip",
+            payout_beneficiary_name="Index Fleet Operations",
+        )
+
+    def _monetary_sources(self, source="MMT_PAID_CALLBACK"):
+        return {
+            "gross_fare": source,
+            "fare_tax": source,
+            "commission_amount": source,
+            "commission_tax": source,
+            "withholding_amount": source,
+            "cancellation_amount": source,
+            "net_expected": source,
+        }
+
+    def test_ota_booking_snapshot_reconciles_expected_net_and_normalizes_counterparty(self):
+        counterparty = self._mmt_counterparty()
+        self.assertEqual(counterparty.code, "MMT")
+
+        snapshot = OTABookingSnapshot.objects.create(
+            trip=self._ota_trip(),
+            counterparty=counterparty,
+            provider_booking_id="MMT-ORDER-1",
+            partner_reference_number="IF-REF-1",
+            gross_fare=Decimal("1000.00"),
+            fare_tax=Decimal("47.62"),
+            commission_rate=Decimal("10.0000"),
+            commission_amount=Decimal("100.00"),
+            commission_tax=Decimal("18.00"),
+            withholding_rate=Decimal("2.0000"),
+            withholding_amount=Decimal("20.00"),
+            cancellation_amount=Decimal("0.00"),
+            net_expected=Decimal("862.00"),
+            monetary_sources=self._monetary_sources(),
+            source_payload_hash="a" * 64,
+        )
+
+        self.assertEqual(snapshot.currency, "INR")
+        self.assertEqual(snapshot.settlement_status, OTASettlementStatus.PENDING)
+
+    def test_ota_booking_snapshot_rejects_unreconciled_browser_total(self):
+        with self.assertRaisesMessage(ValidationError, "Net expected does not reconcile"):
+            OTABookingSnapshot.objects.create(
+                trip=self._ota_trip(),
+                counterparty=self._mmt_counterparty(),
+                provider_booking_id="MMT-ORDER-BAD",
+                gross_fare=Decimal("1000.00"),
+                fare_tax=Decimal("47.62"),
+                commission_amount=Decimal("100.00"),
+                commission_tax=Decimal("18.00"),
+                withholding_amount=Decimal("20.00"),
+                cancellation_amount=Decimal("0.00"),
+                net_expected=Decimal("900.00"),
+                monetary_sources=self._monetary_sources(),
+            )
+
+    def test_ota_booking_snapshot_requires_sources_for_money_fields(self):
+        with self.assertRaisesMessage(ValidationError, "Missing monetary sources"):
+            OTABookingSnapshot.objects.create(
+                trip=self._ota_trip(),
+                counterparty=self._mmt_counterparty(),
+                provider_booking_id="MMT-ORDER-SOURCE",
+                gross_fare=Decimal("1000.00"),
+                fare_tax=Decimal("47.62"),
+                commission_amount=Decimal("100.00"),
+                commission_tax=Decimal("18.00"),
+                withholding_amount=Decimal("20.00"),
+                cancellation_amount=Decimal("0.00"),
+                net_expected=Decimal("862.00"),
+                monetary_sources={"gross_fare": "MMT"},
+            )
+
+    def test_duplicate_provider_references_do_not_create_duplicate_ota_bookings(self):
+        counterparty = self._mmt_counterparty()
+        OTABookingSnapshot.objects.create(
+            trip=self._ota_trip(1),
+            counterparty=counterparty,
+            provider_booking_id="MMT-DUPLICATE",
+            partner_reference_number="IF-DUPLICATE",
+            gross_fare=Decimal("1000.00"),
+            fare_tax=Decimal("47.62"),
+            commission_amount=Decimal("100.00"),
+            commission_tax=Decimal("18.00"),
+            withholding_amount=Decimal("20.00"),
+            cancellation_amount=Decimal("0.00"),
+            net_expected=Decimal("862.00"),
+            monetary_sources=self._monetary_sources(),
+        )
+
+        with self.assertRaises(ValidationError):
+            OTABookingSnapshot.objects.create(
+                trip=self._ota_trip(2),
+                counterparty=counterparty,
+                provider_booking_id="MMT-DUPLICATE",
+                partner_reference_number="IF-OTHER",
+                gross_fare=Decimal("1000.00"),
+                fare_tax=Decimal("47.62"),
+                commission_amount=Decimal("100.00"),
+                commission_tax=Decimal("18.00"),
+                withholding_amount=Decimal("20.00"),
+                cancellation_amount=Decimal("0.00"),
+                net_expected=Decimal("862.00"),
+                monetary_sources=self._monetary_sources(),
+            )
+
+    def test_settlement_line_tracks_variance_and_locks_booking_snapshot_money(self):
+        counterparty = self._mmt_counterparty()
+        snapshot = OTABookingSnapshot.objects.create(
+            trip=self._ota_trip(),
+            counterparty=counterparty,
+            provider_booking_id="MMT-SETTLE-1",
+            gross_fare=Decimal("1000.00"),
+            fare_tax=Decimal("47.62"),
+            commission_amount=Decimal("100.00"),
+            commission_tax=Decimal("18.00"),
+            withholding_amount=Decimal("20.00"),
+            cancellation_amount=Decimal("0.00"),
+            net_expected=Decimal("862.00"),
+            monetary_sources=self._monetary_sources(),
+        )
+        batch = OTASettlementBatch.objects.create(
+            counterparty=counterparty,
+            batch_reference="MMT-BATCH-1",
+            net_expected=Decimal("862.00"),
+            actual_payout_amount=Decimal("850.00"),
+            monetary_sources={"net_expected": "MMT_REMITTANCE", "actual_payout_amount": "BANK_STATEMENT"},
+        )
+        OTASettlementLine.objects.create(
+            batch=batch,
+            booking_snapshot=snapshot,
+            expected_amount=Decimal("862.00"),
+            received_amount=Decimal("850.00"),
+            variance_amount=Decimal("-12.00"),
+            settlement_status=OTASettlementStatus.EXCEPTION,
+            monetary_sources={"expected_amount": "SNAPSHOT", "received_amount": "BANK_STATEMENT"},
+        )
+
+        snapshot.gross_fare = Decimal("1001.00")
+        snapshot.net_expected = Decimal("863.00")
+        with self.assertRaisesMessage(ValidationError, "cannot change financial boundary fields"):
+            snapshot.save()
 

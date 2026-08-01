@@ -6,6 +6,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -13,13 +14,15 @@ from django.utils import timezone
 from .models import (
     CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDeliveryAttempt, LegalEntity,
     TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus,
-    IdempotencyRegistry, FinancialAuditEvent, PaymentReceipt, PaymentAllocation, CreditNote
+    IdempotencyRegistry, FinancialAuditEvent, PaymentReceipt, PaymentAllocation, CreditNote,
+    OTASettlementBatch
 )
 from .serializers import (
     BillableTripSerializer, LegalEntitySerializer, TripCloseoutSerializer, TripChargeSerializer, InvoiceSerializer,
-    PaymentReceiptSerializer, PaymentAllocationSerializer, CreditNoteSerializer
+    PaymentReceiptSerializer, PaymentAllocationSerializer, CreditNoteSerializer,
+    OTASettlementBatchSerializer, OTASettlementImportSerializer
 )
-from .services import BillabilityService, CloseoutService, InvoiceService, check_period_lock, PostingEngine, AuditService
+from .services import BillabilityService, CloseoutService, InvoiceService, check_period_lock, PostingEngine, AuditService, OTASettlementImportService, OTAProfitabilityReportService
 from .reports import CloseoutReconciliationReport
 from fleet.models import PricingAmountStatus, Trip
 from fleet.permissions import IsCommercialAdmin
@@ -88,6 +91,43 @@ class LegalEntityViewSet(viewsets.ModelViewSet):
             if assigned.exists():
                 queryset = queryset.filter(id__in=assigned.values_list("id", flat=True))
         return queryset
+
+
+class OTASettlementBatchViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = OTASettlementBatch.objects.select_related("counterparty").prefetch_related("lines").all()
+    serializer_class = OTASettlementBatchSerializer
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission]
+
+    @action(detail=False, methods=["post"])
+    @idempotent_action()
+    def import_batch(self, request):
+        serializer = OTASettlementImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            result = OTASettlementImportService.import_batch(
+                counterparty_code=data["counterparty_code"],
+                batch_reference=data["batch_reference"],
+                lines=data.get("lines"),
+                csv_content=data.get("csv_content", ""),
+                currency=data.get("currency", "INR"),
+                payout_date=data.get("payout_date"),
+                source_system=data.get("source_system", "API"),
+                actor=request.user,
+                idempotency_key=request.headers.get("X-Idempotency-Key", ""),
+            )
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message_dict if hasattr(exc, "message_dict") else exc.messages)
+        return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"])
+    def profitability(self, request):
+        return Response(
+            OTAProfitabilityReportService.build(
+                counterparty_code=request.query_params.get("counterparty", ""),
+                status=request.query_params.get("status", ""),
+            )
+        )
 
 
 class TripCloseoutViewSet(viewsets.ModelViewSet):

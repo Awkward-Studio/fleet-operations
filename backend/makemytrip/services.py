@@ -19,6 +19,7 @@ from billing.models import OTABookingSnapshot, OTACounterparty, OTASettlementSta
 from fleet.models import BookingType, PricingAmountStatus, Trip, TripStatus
 from makemytrip.exceptions import MakeMyTripAPIException
 from makemytrip.models import MMTBookingLifecycle, MMTLifecycleEvent, MMTLifecycleEventType
+from typing import Optional
 
 logger = logging.getLogger("makemytrip")
 MONEY = Decimal("0.01")
@@ -142,7 +143,8 @@ def _money(value: Any) -> Decimal:
     return Decimal(str(value or "0")).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
-def _parse_mmt_datetime(value: str | None):
+def _parse_mmt_datetime(value: Optional[str]):
+
     if not value:
         return timezone.now()
     parsed = parse_datetime(value)
@@ -176,7 +178,7 @@ def _event_key(event_type: str, payload: Dict[str, Any], fallback_hash: str) -> 
     return f"{event_type}:{identifier}"
 
 
-def _location_facts(location: Dict[str, Any] | None) -> Dict[str, Any]:
+def _location_facts(location: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     location = location or {}
     return {
         "address": location.get("address", ""),

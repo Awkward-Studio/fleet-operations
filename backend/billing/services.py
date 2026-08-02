@@ -1823,7 +1823,7 @@ class OTASettlementImportService:
         *,
         counterparty_code: str,
         batch_reference: str,
-        lines: list[dict] | None = None,
+        lines: Optional[list[dict]] = None,
         csv_content: str = "",
         currency: str = "INR",
         payout_date=None,

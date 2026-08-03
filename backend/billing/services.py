@@ -31,6 +31,7 @@ from .models import (
 )
 from .tax_service import TaxService, money
 from fleet.models import MeteringPolicy, PricingAmountStatus, Trip, TripStatus
+from django.utils import timezone
 from typing import Optional
 
 
@@ -1311,20 +1312,107 @@ class PostingEngine:
                 narration=f"Collection on Receipt #{receipt.id}",
             )
 
-            # Cr AR
-            JournalLine.objects.create(
-                journal_entry=journal,
-                account=ar_account,
-                debit_amount=Decimal("0.00"),
-                credit_amount=receipt.amount,
-                narration=f"Collection on Receipt #{receipt.id}",
+    @staticmethod
+    def post_journal_reversal(original_journal, reason="") -> "JournalEntry":
+        from .models import JournalEntry
+
+        with transaction.atomic():
+            original_journal = JournalEntry.objects.select_for_update().prefetch_related("lines", "lines__account").get(pk=original_journal.pk)
+            today = datetime.date.today()
+            check_period_lock(today)
+            legal_entity, fy, period = PostingEngine._posting_context(today, original_journal.legal_entity)
+            entry_number = f"{original_journal.entry_number}/REV"
+            linkage = {
+                **(original_journal.linkage or {}),
+                "reverses_journal_entry_id": original_journal.id,
+                "reverses_entry_number": original_journal.entry_number,
+                "reversal_reason": reason,
+            }
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": today,
+                    "source_type": f"{original_journal.source_type}_REVERSAL",
+                    "source_id": original_journal.source_id,
+                    "narration": f"Reversal of {original_journal.entry_number}: {reason}",
+                    "linkage": linkage,
+                },
+            )
+            journal.linkage = linkage
+            journal.lines.all().delete()
+            for original_line in original_journal.lines.all():
+                PostingEngine._line(
+                    journal,
+                    original_line.account,
+                    original_line.credit_amount,
+                    original_line.debit_amount,
+                    f"Reversal: {original_line.narration}",
+                    {**(original_line.linkage or {}), "reverses_journal_line_id": original_line.id},
+                )
+            PostingEngine._assert_balanced(journal, entry_number)
+            journal.save(update_fields=["linkage"])
+            return journal
+
+    @staticmethod
+    def post_receipt_journal(receipt) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            date_val = receipt.receipt_date
+            check_period_lock(date_val)
+
+            fy = getattr(receipt, "financial_year", None)
+            if not fy:
+                fy = FinancialYear.objects.filter(start_date__lte=date_val, end_date__gte=date_val, is_closed=False).first()
+            if not fy:
+                fy = FinancialYear.objects.first()
+            period = getattr(receipt, "fiscal_period", None)
+            if not period:
+                period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=date_val, end_date__gte=date_val).first()
+
+            bank_account = PostingEngine._account("1000", "Bank & Cash Account", AccountType.ASSET, "CASH_1000")
+            unapplied_cash_account = PostingEngine._account("2360", "Unapplied Customer Cash", AccountType.LIABILITY, "UNAPPLIED_2360")
+
+            entry_number = f"JV/REC/{receipt.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": receipt.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": date_val,
+                    "source_type": "PAYMENT_RECEIPT",
+                    "source_id": str(receipt.id),
+                    "narration": f"Payment Receipt #{receipt.reference_number or receipt.id} from customer {receipt.customer.display_name}",
+                },
             )
 
-            total_debits = sum(line.debit_amount for line in journal.lines.all())
-            total_credits = sum(line.credit_amount for line in journal.lines.all())
-            if total_debits != total_credits:
-                raise ValidationError(f"Receipt journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+            journal.lines.all().delete()
 
+            # Dr Bank
+            PostingEngine._line(
+                journal,
+                bank_account,
+                receipt.amount,
+                0,
+                f"Collection on Receipt #{receipt.id}",
+                {}
+            )
+
+            # Cr Unapplied Cash Clearing (Liability)
+            PostingEngine._line(
+                journal,
+                unapplied_cash_account,
+                0,
+                receipt.amount,
+                f"Unapplied payment from customer on Receipt #{receipt.id}",
+                {}
+            )
+
+            PostingEngine._assert_balanced(journal, entry_number)
             return journal
 
     @staticmethod
@@ -1344,14 +1432,9 @@ class PostingEngine:
             if not period:
                 period = FiscalPeriod.objects.filter(financial_year=fy, start_date__lte=date_val, end_date__gte=date_val).first()
 
-            tds_account, _ = LedgerAccount.objects.get_or_create(
-                code="1300",
-                defaults={"name": "TDS Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "TDS_1300"},
-            )
-            ar_account, _ = LedgerAccount.objects.get_or_create(
-                code="1100",
-                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
-            )
+            unapplied_cash_account = PostingEngine._account("2360", "Unapplied Customer Cash", AccountType.LIABILITY, "UNAPPLIED_2360")
+            ar_account = PostingEngine._account("1100", "Accounts Receivable", AccountType.ASSET, "AR_1100")
+            tds_account = PostingEngine._account("1300", "TDS Receivable", AccountType.ASSET, "TDS_1300")
 
             entry_number = f"JV/ALLOC/{allocation.id}"
             journal, _ = JournalEntry.objects.get_or_create(
@@ -1363,35 +1446,54 @@ class PostingEngine:
                     "entry_date": date_val,
                     "source_type": "PAYMENT_ALLOCATION",
                     "source_id": str(allocation.id),
-                    "narration": f"TDS allocation for Invoice #{allocation.invoice.invoice_number} / Receipt #{allocation.receipt.id}",
+                    "narration": f"Payment allocation for Invoice #{allocation.invoice.invoice_number} / Receipt #{allocation.receipt.id}",
                 },
             )
 
             journal.lines.all().delete()
 
-            # Dr TDS Receivable
-            JournalLine.objects.create(
-                journal_entry=journal,
-                account=tds_account,
-                debit_amount=allocation.tds_amount,
-                credit_amount=Decimal("0.00"),
-                narration=f"TDS deducted on allocation {allocation.id}",
+            # Dr Unapplied Cash Clearing (Liability)
+            PostingEngine._line(
+                journal,
+                unapplied_cash_account,
+                allocation.allocated_amount,
+                0,
+                f"Allocation of payment {allocation.id} to Invoice #{allocation.invoice.invoice_number}",
+                {}
             )
 
-            # Cr AR
-            JournalLine.objects.create(
-                journal_entry=journal,
-                account=ar_account,
-                debit_amount=Decimal("0.00"),
-                credit_amount=allocation.tds_amount,
-                narration=f"AR credit for TDS on allocation {allocation.id}",
+            # Cr AR (Accounts Receivable) for allocated amount
+            PostingEngine._line(
+                journal,
+                ar_account,
+                0,
+                allocation.allocated_amount,
+                f"AR credit for allocation {allocation.id}",
+                {}
             )
 
-            total_debits = sum(line.debit_amount for line in journal.lines.all())
-            total_credits = sum(line.credit_amount for line in journal.lines.all())
-            if total_debits != total_credits:
-                raise ValidationError(f"Allocation journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+            if allocation.tds_amount > Decimal("0.00"):
+                # Dr TDS Receivable
+                PostingEngine._line(
+                    journal,
+                    tds_account,
+                    allocation.tds_amount,
+                    0,
+                    f"TDS deducted on allocation {allocation.id}",
+                    {}
+                )
 
+                # Cr AR (Accounts Receivable) for TDS amount
+                PostingEngine._line(
+                    journal,
+                    ar_account,
+                    0,
+                    allocation.tds_amount,
+                    f"AR credit for TDS on allocation {allocation.id}",
+                    {}
+                )
+
+            PostingEngine._assert_balanced(journal, entry_number)
             return journal
 
     @staticmethod
@@ -1405,14 +1507,11 @@ class PostingEngine:
             fy = credit_note.invoice.financial_year
             period = credit_note.invoice.fiscal_period
 
-            rev_account, _ = LedgerAccount.objects.get_or_create(
-                code="4000",
-                defaults={"name": "Passenger Transport Revenue", "account_type": AccountType.REVENUE, "external_mapping_code": "REV_4000"},
-            )
-            ar_account, _ = LedgerAccount.objects.get_or_create(
-                code="1100",
-                defaults={"name": "Accounts Receivable", "account_type": AccountType.ASSET, "external_mapping_code": "AR_1100"},
-            )
+            rev_account = PostingEngine._account("4000", "Passenger Transport Revenue", AccountType.REVENUE, "REV_4000")
+            ar_account = PostingEngine._account("1100", "Accounts Receivable", AccountType.ASSET, "AR_1100")
+            cgst_account = PostingEngine._account("2100", "Output CGST Payable", AccountType.LIABILITY, "TAX_2100")
+            sgst_account = PostingEngine._account("2200", "Output SGST Payable", AccountType.LIABILITY, "TAX_2200")
+            igst_account = PostingEngine._account("2250", "Output IGST Payable", AccountType.LIABILITY, "TAX_2250")
 
             entry_number = f"JV/CN/{credit_note.id}"
             journal, _ = JournalEntry.objects.get_or_create(
@@ -1430,29 +1529,149 @@ class PostingEngine:
 
             journal.lines.all().delete()
 
-            # Dr Revenue
-            JournalLine.objects.create(
-                journal_entry=journal,
-                account=rev_account,
-                debit_amount=credit_note.total_amount,
-                credit_amount=Decimal("0.00"),
-                narration=f"Adjustment arising from Credit Note {credit_note.credit_note_number}",
+            # Dr Revenue (taxable amount)
+            PostingEngine._line(
+                journal,
+                rev_account,
+                credit_note.taxable_amount,
+                0,
+                f"Revenue reduction from Credit Note {credit_note.credit_note_number}",
+                {}
             )
 
-            # Cr AR
-            JournalLine.objects.create(
-                journal_entry=journal,
-                account=ar_account,
-                debit_amount=Decimal("0.00"),
-                credit_amount=credit_note.total_amount,
-                narration=f"AR credit for Credit Note {credit_note.credit_note_number}",
+            # Dr CGST
+            if credit_note.cgst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    cgst_account,
+                    credit_note.cgst_amount,
+                    0,
+                    f"CGST reduction from Credit Note {credit_note.credit_note_number}",
+                    {}
+                )
+
+            # Dr SGST
+            if credit_note.sgst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    sgst_account,
+                    credit_note.sgst_amount,
+                    0,
+                    f"SGST reduction from Credit Note {credit_note.credit_note_number}",
+                    {}
+                )
+
+            # Dr IGST
+            if credit_note.igst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    igst_account,
+                    credit_note.igst_amount,
+                    0,
+                    f"IGST reduction from Credit Note {credit_note.credit_note_number}",
+                    {}
+                )
+
+            # Cr AR (total amount)
+            PostingEngine._line(
+                journal,
+                ar_account,
+                0,
+                credit_note.total_amount,
+                f"AR credit for Credit Note {credit_note.credit_note_number}",
+                {}
             )
 
-            total_debits = sum(line.debit_amount for line in journal.lines.all())
-            total_credits = sum(line.credit_amount for line in journal.lines.all())
-            if total_debits != total_credits:
-                raise ValidationError(f"Credit Note journal entry #{entry_number} is unbalanced: Dr ₹{total_debits} vs Cr ₹{total_credits}")
+            PostingEngine._assert_balanced(journal, entry_number)
+            return journal
 
+    @staticmethod
+    def post_debit_note_journal(debit_note) -> "JournalEntry":
+        from .models import LedgerAccount, AccountType, JournalEntry, JournalLine
+
+        with transaction.atomic():
+            date_val = debit_note.created_at.date() if debit_note.created_at else datetime.date.today()
+            check_period_lock(date_val)
+
+            fy = debit_note.invoice.financial_year
+            period = debit_note.invoice.fiscal_period
+
+            rev_account = PostingEngine._account("4000", "Passenger Transport Revenue", AccountType.REVENUE, "REV_4000")
+            ar_account = PostingEngine._account("1100", "Accounts Receivable", AccountType.ASSET, "AR_1100")
+            cgst_account = PostingEngine._account("2100", "Output CGST Payable", AccountType.LIABILITY, "TAX_2100")
+            sgst_account = PostingEngine._account("2200", "Output SGST Payable", AccountType.LIABILITY, "TAX_2200")
+            igst_account = PostingEngine._account("2250", "Output IGST Payable", AccountType.LIABILITY, "TAX_2250")
+
+            entry_number = f"JV/DN/{debit_note.id}"
+            journal, _ = JournalEntry.objects.get_or_create(
+                entry_number=entry_number,
+                defaults={
+                    "legal_entity": debit_note.legal_entity,
+                    "financial_year": fy,
+                    "fiscal_period": period,
+                    "entry_date": date_val,
+                    "source_type": "DEBIT_NOTE",
+                    "source_id": str(debit_note.id),
+                    "narration": f"Debit Note #{debit_note.debit_note_number} against Invoice #{debit_note.invoice.invoice_number}: {debit_note.reason}",
+                },
+            )
+
+            journal.lines.all().delete()
+
+            # Dr AR (total amount)
+            PostingEngine._line(
+                journal,
+                ar_account,
+                debit_note.total_amount,
+                0,
+                f"AR debit for Debit Note {debit_note.debit_note_number}",
+                {}
+            )
+
+            # Cr Revenue (taxable amount)
+            PostingEngine._line(
+                journal,
+                rev_account,
+                0,
+                debit_note.taxable_amount,
+                f"Revenue addition from Debit Note {debit_note.debit_note_number}",
+                {}
+            )
+
+            # Cr CGST
+            if debit_note.cgst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    cgst_account,
+                    0,
+                    debit_note.cgst_amount,
+                    f"CGST addition from Debit Note {debit_note.debit_note_number}",
+                    {}
+                )
+
+            # Cr SGST
+            if debit_note.sgst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    sgst_account,
+                    0,
+                    debit_note.sgst_amount,
+                    f"SGST addition from Debit Note {debit_note.debit_note_number}",
+                    {}
+                )
+
+            # Cr IGST
+            if debit_note.igst_amount > Decimal("0.00"):
+                PostingEngine._line(
+                    journal,
+                    igst_account,
+                    0,
+                    debit_note.igst_amount,
+                    f"IGST addition from Debit Note {debit_note.debit_note_number}",
+                    {}
+                )
+
+            PostingEngine._assert_balanced(journal, entry_number)
             return journal
 
     @staticmethod
@@ -1633,10 +1852,18 @@ class PostingEngine:
 
 class PaymentService:
     @staticmethod
-    def record_receipt(legal_entity, customer, amount, payment_method="BANK_TRANSFER", reference_number="", created_by=None):
+    def record_receipt(legal_entity, customer, amount, currency="INR", payment_method="BANK_TRANSFER", reference_number="", created_by=None, idempotency_key=None):
         from .models import PaymentReceipt
+        if amount <= 0:
+            raise ValidationError("Receipt amount must be greater than zero.")
+        
         with transaction.atomic():
             check_period_lock(datetime.date.today())
+            if idempotency_key:
+                existing = PaymentReceipt.objects.filter(idempotency_key=idempotency_key).first()
+                if existing:
+                    return existing
+
             fy = FinancialYear.objects.filter(is_closed=False).first()
             prefix = f"REC/{fy.name.replace(' ', '')}/" if fy else "REC/2026/"
             rec_num = DocumentSequence.get_next_number(
@@ -1651,8 +1878,10 @@ class PaymentService:
                 customer=customer,
                 amount=amount,
                 unapplied_amount=amount,
+                currency=currency,
                 payment_method=payment_method,
                 reference_number=reference_number,
+                idempotency_key=idempotency_key,
                 created_by=created_by,
             )
             PostingEngine.post_receipt_journal(receipt)
@@ -1661,6 +1890,20 @@ class PaymentService:
     @staticmethod
     def allocate_payment(receipt, invoice, amount, tds_amount=Decimal("0.00")):
         from .models import PaymentAllocation
+        if amount < 0 or tds_amount < 0:
+            raise ValidationError("Allocation and TDS amounts cannot be negative.")
+        if amount == 0 and tds_amount == 0:
+            raise ValidationError("Must allocate a positive amount or TDS amount.")
+        if receipt.is_reversed:
+            raise ValidationError("Cannot allocate from a reversed receipt.")
+        if invoice.status == InvoiceStatus.VOID:
+            raise ValidationError("Cannot allocate to a voided invoice.")
+        if receipt.legal_entity_id != invoice.legal_entity_id:
+            raise ValidationError("Receipt and invoice must belong to the same legal entity.")
+        if receipt.customer_id != invoice.customer_id:
+            raise ValidationError("Receipt and invoice must belong to the same customer.")
+        if receipt.currency != invoice.currency:
+            raise ValidationError("Receipt and invoice currency must match.")
         if amount > receipt.unapplied_amount:
             raise ValidationError("Allocation amount cannot exceed receipt unapplied balance.")
         if (amount + tds_amount) > invoice.balance_amount:
@@ -1668,27 +1911,106 @@ class PaymentService:
 
         with transaction.atomic():
             check_period_lock(datetime.date.today())
+            # Lock both receipt and invoice to prevent concurrent overallocation
+            receipt_db = receipt.__class__.objects.select_for_update().get(pk=receipt.pk)
+            invoice_db = invoice.__class__.objects.select_for_update().get(pk=invoice.pk)
+            
+            # Recheck balances after lock
+            if amount > receipt_db.unapplied_amount:
+                raise ValidationError("Allocation amount cannot exceed receipt unapplied balance.")
+            if (amount + tds_amount) > invoice_db.balance_amount:
+                raise ValidationError("Allocation amount cannot exceed invoice remaining balance.")
+
             allocation = PaymentAllocation.objects.create(
-                receipt=receipt,
-                invoice=invoice,
+                receipt=receipt_db,
+                invoice=invoice_db,
                 allocated_amount=amount,
                 tds_amount=tds_amount,
             )
 
-            receipt.unapplied_amount -= amount
-            receipt.save()
+            receipt_db.unapplied_amount -= amount
+            receipt_db.save()
 
             total_credit = amount + tds_amount
-            invoice.paid_amount += total_credit
+            invoice_db.paid_amount += total_credit
+            if invoice_db.paid_amount >= invoice_db.total_amount:
+                invoice_db.status = InvoiceStatus.PAID
+            elif invoice_db.paid_amount > Decimal("0.00"):
+                invoice_db.status = InvoiceStatus.PARTIALLY_PAID
+            invoice_db.save()
+
+            # Update the passed objects in-place
+            receipt.unapplied_amount = receipt_db.unapplied_amount
+            invoice.paid_amount = invoice_db.paid_amount
+            invoice.status = invoice_db.status
+            invoice.balance_amount = invoice_db.balance_amount
+
+            PostingEngine.post_allocation_journal(allocation)
+
+            return allocation
+
+    @staticmethod
+    def reverse_receipt(receipt, reason="", reversed_by=None):
+        from .models import JournalEntry
+        if receipt.is_reversed:
+            raise ValidationError("Receipt is already reversed.")
+        with transaction.atomic():
+            check_period_lock(datetime.date.today())
+            receipt = receipt.__class__.objects.select_for_update().get(pk=receipt.pk)
+            
+            # Reverse all active allocations associated with this receipt
+            for allocation in receipt.allocations.filter(is_reversed=False):
+                PaymentService.reverse_allocation(allocation)
+                
+            receipt.is_reversed = True
+            receipt.reversal_reason = reason
+            receipt.unapplied_amount = Decimal("0.00")
+            receipt.save()
+            
+            # Post reversal journal entry
+            orig_journal = JournalEntry.objects.filter(source_type="PAYMENT_RECEIPT", source_id=str(receipt.id)).first()
+            if orig_journal:
+                PostingEngine.post_journal_reversal(orig_journal, f"Reversal of Receipt #{receipt.receipt_number}: {reason}")
+                
+            return receipt
+
+    @staticmethod
+    def reverse_allocation(allocation):
+        from .models import JournalEntry
+        if allocation.is_reversed:
+            raise ValidationError("Allocation is already reversed.")
+        with transaction.atomic():
+            check_period_lock(datetime.date.today())
+            allocation = allocation.__class__.objects.select_for_update().get(pk=allocation.pk)
+            receipt = allocation.receipt.__class__.objects.select_for_update().get(pk=allocation.receipt.pk)
+            invoice = allocation.invoice.__class__.objects.select_for_update().get(pk=allocation.invoice.pk)
+            
+            allocation.is_reversed = True
+            allocation.save()
+            
+            # Put amount back into receipt unapplied balance
+            if not receipt.is_reversed:
+                receipt.unapplied_amount += allocation.allocated_amount
+                receipt.save()
+                
+            # Subtract from invoice paid amount
+            total_credit = allocation.allocated_amount + allocation.tds_amount
+            invoice.paid_amount -= total_credit
+            
+            # Recheck status of invoice
             if invoice.paid_amount >= invoice.total_amount:
                 invoice.status = InvoiceStatus.PAID
             elif invoice.paid_amount > Decimal("0.00"):
                 invoice.status = InvoiceStatus.PARTIALLY_PAID
+            else:
+                invoice.status = InvoiceStatus.ISSUED
             invoice.save()
-
-            if tds_amount > Decimal("0.00"):
-                PostingEngine.post_allocation_journal(allocation)
-
+            
+            # Post reversal journal entry
+            orig_journal = JournalEntry.objects.filter(source_type="PAYMENT_ALLOCATION", source_id=str(allocation.id)).first()
+            if orig_journal:
+                PostingEngine.post_journal_reversal(orig_journal, f"Reversal of allocation {allocation.id}")
+                
             return allocation
 
 
@@ -2221,3 +2543,356 @@ class AuditService:
             reason=reason,
             request_idempotency_key=request_idempotency_key,
         )
+
+
+class CreditNoteService:
+    @staticmethod
+    @transaction.atomic
+    def create_credit_note(invoice, reason, lines_data, created_by=None) -> "CreditNote":
+        from .models import CreditNote, CreditNoteLine, InvoiceStatus, CreditNoteStatus, FinancialYear
+        from django.db.models import Sum
+
+        if invoice.status not in [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID]:
+            raise ValidationError(f"Credit notes can only be created for ISSUED, SENT, or PARTIALLY_PAID invoices, not {invoice.status}.")
+
+        today = datetime.date.today()
+        fy = invoice.financial_year
+        if not fy:
+            fy = FinancialYear.objects.filter(start_date__lte=today, end_date__gte=today, is_closed=False).first()
+        if not fy:
+            raise ValidationError("No active financial year found to generate sequence.")
+        
+        from .models import DocumentSequence, DocumentType
+        seq, _ = DocumentSequence.objects.get_or_create(
+            legal_entity=invoice.legal_entity,
+            financial_year=fy,
+            document_type=DocumentType.CREDIT_NOTE,
+            defaults={"prefix": "CN/", "current_number": 0, "padding_digits": 5}
+        )
+        seq.current_number += 1
+        seq.save(update_fields=["current_number"])
+        cn_number = f"{seq.prefix}{fy.name.split()[-1]}/{str(seq.current_number).zfill(seq.padding_digits)}"
+
+        credit_note = CreditNote.objects.create(
+            credit_note_number=cn_number,
+            invoice=invoice,
+            legal_entity=invoice.legal_entity,
+            reason=reason,
+            total_amount=Decimal("0.00"),
+            taxable_amount=Decimal("0.00"),
+            cgst_amount=Decimal("0.00"),
+            sgst_amount=Decimal("0.00"),
+            igst_amount=Decimal("0.00"),
+            status=CreditNoteStatus.DRAFT,
+            created_by=created_by
+        )
+
+        total_amount = Decimal("0.00")
+        taxable_amount = Decimal("0.00")
+        cgst_amount = Decimal("0.00")
+        sgst_amount = Decimal("0.00")
+        igst_amount = Decimal("0.00")
+
+        for line_data in lines_data:
+            inv_line_id = line_data.get("invoice_line_id")
+            description = line_data.get("description", "")
+            qty = Decimal(str(line_data.get("quantity", 1)))
+            unit_rate = Decimal(str(line_data.get("unit_rate", 0)))
+
+            if not description and inv_line_id:
+                from .models import InvoiceLine
+                inv_line = InvoiceLine.objects.get(id=inv_line_id)
+                description = inv_line.description
+
+            line_taxable = qty * unit_rate
+            
+            cgst_rate = Decimal("0.00")
+            sgst_rate = Decimal("0.00")
+            igst_rate = Decimal("0.00")
+            
+            if inv_line_id:
+                from .models import InvoiceLine
+                inv_line = InvoiceLine.objects.get(id=inv_line_id)
+                cgst_rate = inv_line.cgst_rate
+                sgst_rate = inv_line.sgst_rate
+                igst_rate = inv_line.igst_rate
+                
+                already_credited_qty = CreditNoteLine.objects.filter(
+                    credit_note__invoice=invoice,
+                    credit_note__status=CreditNoteStatus.APPROVED,
+                    invoice_line=inv_line
+                ).aggregate(total=Sum("quantity"))["total"] or Decimal("0.00")
+                if already_credited_qty + qty > inv_line.quantity:
+                    raise ValidationError(f"Quantity to credit ({qty}) exceeds remaining invoiced quantity ({inv_line.quantity - already_credited_qty}).")
+
+            line_cgst = (line_taxable * cgst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_sgst = (line_taxable * sgst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_igst = (line_taxable * igst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_total = line_taxable + line_cgst + line_sgst + line_igst
+
+            CreditNoteLine.objects.create(
+                credit_note=credit_note,
+                invoice_line_id=inv_line_id,
+                description=description,
+                quantity=qty,
+                unit_rate=unit_rate,
+                taxable_value=line_taxable,
+                cgst_rate=cgst_rate,
+                cgst_amount=line_cgst,
+                sgst_rate=sgst_rate,
+                sgst_amount=line_sgst,
+                igst_rate=igst_rate,
+                igst_amount=line_igst,
+                line_total=line_total
+            )
+
+            total_amount += line_total
+            taxable_amount += line_taxable
+            cgst_amount += line_cgst
+            sgst_amount += line_sgst
+            igst_amount += line_igst
+
+        credit_note.total_amount = total_amount
+        credit_note.taxable_amount = taxable_amount
+        credit_note.cgst_amount = cgst_amount
+        credit_note.sgst_amount = sgst_amount
+        credit_note.igst_amount = igst_amount
+        credit_note.save(update_fields=["total_amount", "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount"])
+
+        if total_amount > invoice.balance_amount:
+            raise ValidationError(f"Credit note amount ({total_amount}) cannot exceed invoice remaining balance ({invoice.balance_amount}).")
+
+        AuditService.record_event(created_by, "CREATE_CREDIT_NOTE", credit_note)
+        return credit_note
+
+    @staticmethod
+    @transaction.atomic
+    def approve_credit_note(credit_note, approved_by=None) -> "CreditNote":
+        from .models import CreditNoteStatus, InvoiceStatus
+        if credit_note.status != CreditNoteStatus.DRAFT:
+            raise ValidationError(f"Only DRAFT credit notes can be approved, not {credit_note.status}.")
+
+        credit_note.status = CreditNoteStatus.APPROVED
+        credit_note.approved_by = approved_by
+        credit_note.approved_at = timezone.now()
+        credit_note.save(update_fields=["status", "approved_by", "approved_at"])
+
+        PostingEngine.post_credit_note_journal(credit_note)
+
+        invoice = credit_note.invoice
+        invoice.balance_amount -= credit_note.total_amount
+        if invoice.balance_amount <= Decimal("0.00"):
+            invoice.balance_amount = Decimal("0.00")
+            invoice.status = InvoiceStatus.PAID
+        elif invoice.balance_amount < invoice.total_amount:
+            invoice.status = InvoiceStatus.PARTIALLY_PAID
+        invoice.save(update_fields=["balance_amount", "status"])
+
+        AuditService.record_event(approved_by, "APPROVE_CREDIT_NOTE", credit_note)
+        return credit_note
+
+    @staticmethod
+    @transaction.atomic
+    def void_credit_note(credit_note, voided_by=None) -> "CreditNote":
+        from .models import CreditNoteStatus, InvoiceStatus, JournalEntry
+        if credit_note.status == CreditNoteStatus.VOID:
+            raise ValidationError("Credit note is already VOID.")
+
+        original_status = credit_note.status
+        credit_note.status = CreditNoteStatus.VOID
+        credit_note.save(update_fields=["status"])
+
+        if original_status == CreditNoteStatus.APPROVED:
+            journal = JournalEntry.objects.filter(source_type="CREDIT_NOTE", source_id=str(credit_note.id)).first()
+            if journal:
+                PostingEngine.post_journal_reversal(journal, "Voiding credit note")
+
+            invoice = credit_note.invoice
+            invoice.balance_amount += credit_note.total_amount
+            if invoice.balance_amount >= invoice.total_amount:
+                invoice.status = InvoiceStatus.ISSUED
+            else:
+                invoice.status = InvoiceStatus.PARTIALLY_PAID
+            invoice.save(update_fields=["balance_amount", "status"])
+
+        AuditService.record_event(voided_by, "VOID_CREDIT_NOTE", credit_note)
+        return credit_note
+
+
+class DebitNoteService:
+    @staticmethod
+    @transaction.atomic
+    def create_debit_note(invoice, reason, lines_data, created_by=None) -> "DebitNote":
+        from .models import DebitNote, DebitNoteLine, InvoiceStatus, DebitNoteStatus, FinancialYear
+        from django.db.models import Sum
+
+        if invoice.status not in [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID]:
+            raise ValidationError(f"Debit notes can only be created for valid invoices, not {invoice.status}.")
+
+        today = datetime.date.today()
+        fy = invoice.financial_year
+        if not fy:
+            fy = FinancialYear.objects.filter(start_date__lte=today, end_date__gte=today, is_closed=False).first()
+        if not fy:
+            raise ValidationError("No active financial year found to generate sequence.")
+        
+        from .models import DocumentSequence, DocumentType
+        seq, _ = DocumentSequence.objects.get_or_create(
+            legal_entity=invoice.legal_entity,
+            financial_year=fy,
+            document_type=DocumentType.DEBIT_NOTE,
+            defaults={"prefix": "DN/", "current_number": 0, "padding_digits": 5}
+        )
+        seq.current_number += 1
+        seq.save(update_fields=["current_number"])
+        dn_number = f"{seq.prefix}{fy.name.split()[-1]}/{str(seq.current_number).zfill(seq.padding_digits)}"
+
+        debit_note = DebitNote.objects.create(
+            debit_note_number=dn_number,
+            invoice=invoice,
+            legal_entity=invoice.legal_entity,
+            reason=reason,
+            total_amount=Decimal("0.00"),
+            taxable_amount=Decimal("0.00"),
+            cgst_amount=Decimal("0.00"),
+            sgst_amount=Decimal("0.00"),
+            igst_amount=Decimal("0.00"),
+            status=DebitNoteStatus.DRAFT,
+            created_by=created_by
+        )
+
+        total_amount = Decimal("0.00")
+        taxable_amount = Decimal("0.00")
+        cgst_amount = Decimal("0.00")
+        sgst_amount = Decimal("0.00")
+        igst_amount = Decimal("0.00")
+
+        for line_data in lines_data:
+            inv_line_id = line_data.get("invoice_line_id")
+            description = line_data.get("description", "")
+            qty = Decimal(str(line_data.get("quantity", 1)))
+            unit_rate = Decimal(str(line_data.get("unit_rate", 0)))
+
+            if not description and inv_line_id:
+                from .models import InvoiceLine
+                inv_line = InvoiceLine.objects.get(id=inv_line_id)
+                description = inv_line.description
+
+            line_taxable = qty * unit_rate
+            
+            cgst_rate = Decimal("0.00")
+            sgst_rate = Decimal("0.00")
+            igst_rate = Decimal("0.00")
+            
+            if inv_line_id:
+                from .models import InvoiceLine
+                inv_line = InvoiceLine.objects.get(id=inv_line_id)
+                cgst_rate = inv_line.cgst_rate
+                sgst_rate = inv_line.sgst_rate
+                igst_rate = inv_line.igst_rate
+
+            line_cgst = (line_taxable * cgst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_sgst = (line_taxable * sgst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_igst = (line_taxable * igst_rate / Decimal("100.00")).quantize(Decimal("0.01"))
+            line_total = line_taxable + line_cgst + line_sgst + line_igst
+
+            DebitNoteLine.objects.create(
+                debit_note=debit_note,
+                invoice_line_id=inv_line_id,
+                description=description,
+                quantity=qty,
+                unit_rate=unit_rate,
+                taxable_value=line_taxable,
+                cgst_rate=cgst_rate,
+                cgst_amount=line_cgst,
+                sgst_rate=sgst_rate,
+                sgst_amount=line_sgst,
+                igst_rate=igst_rate,
+                igst_amount=line_igst,
+                line_total=line_total
+            )
+
+            total_amount += line_total
+            taxable_amount += line_taxable
+            cgst_amount += line_cgst
+            sgst_amount += line_sgst
+            igst_amount += line_igst
+
+        debit_note.total_amount = total_amount
+        debit_note.taxable_amount = taxable_amount
+        debit_note.cgst_amount = cgst_amount
+        debit_note.sgst_amount = sgst_amount
+        debit_note.igst_amount = igst_amount
+        debit_note.save(update_fields=["total_amount", "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount"])
+
+        AuditService.record_event(created_by, "CREATE_DEBIT_NOTE", debit_note)
+        return debit_note
+
+    @staticmethod
+    @transaction.atomic
+    def approve_debit_note(debit_note, approved_by=None) -> "DebitNote":
+        from .models import DebitNoteStatus, InvoiceStatus
+        if debit_note.status != DebitNoteStatus.DRAFT:
+            raise ValidationError(f"Only DRAFT debit notes can be approved, not {debit_note.status}.")
+
+        debit_note.status = DebitNoteStatus.APPROVED
+        debit_note.approved_by = approved_by
+        debit_note.approved_at = timezone.now()
+        debit_note.save(update_fields=["status", "approved_by", "approved_at"])
+
+        PostingEngine.post_debit_note_journal(debit_note)
+
+        invoice = debit_note.invoice
+        invoice.balance_amount += debit_note.total_amount
+        invoice.total_amount += debit_note.total_amount
+        invoice.taxable_amount += debit_note.taxable_amount
+        invoice.cgst_amount += debit_note.cgst_amount
+        invoice.sgst_amount += debit_note.sgst_amount
+        invoice.igst_amount += debit_note.igst_amount
+
+        if invoice.balance_amount > Decimal("0.00"):
+            if invoice.balance_amount < invoice.total_amount:
+                invoice.status = InvoiceStatus.PARTIALLY_PAID
+            else:
+                invoice.status = InvoiceStatus.ISSUED
+        invoice.save(update_fields=["balance_amount", "total_amount", "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount", "status"])
+
+        AuditService.record_event(approved_by, "APPROVE_DEBIT_NOTE", debit_note)
+        return debit_note
+
+    @staticmethod
+    @transaction.atomic
+    def void_debit_note(debit_note, voided_by=None) -> "DebitNote":
+        from .models import DebitNoteStatus, InvoiceStatus, JournalEntry
+        if debit_note.status == DebitNoteStatus.VOID:
+            raise ValidationError("Debit note is already VOID.")
+
+        original_status = debit_note.status
+        debit_note.status = DebitNoteStatus.VOID
+        debit_note.save(update_fields=["status"])
+
+        if original_status == DebitNoteStatus.APPROVED:
+            journal = JournalEntry.objects.filter(source_type="DEBIT_NOTE", source_id=str(debit_note.id)).first()
+            if journal:
+                PostingEngine.post_journal_reversal(journal, "Voiding debit note")
+
+            invoice = debit_note.invoice
+            invoice.balance_amount -= debit_note.total_amount
+            invoice.total_amount -= debit_note.total_amount
+            invoice.taxable_amount -= debit_note.taxable_amount
+            invoice.cgst_amount -= debit_note.cgst_amount
+            invoice.sgst_amount -= debit_note.sgst_amount
+            invoice.igst_amount -= debit_note.igst_amount
+
+            if invoice.balance_amount <= Decimal("0.00"):
+                invoice.balance_amount = Decimal("0.00")
+                invoice.status = InvoiceStatus.PAID
+            elif invoice.balance_amount < invoice.total_amount:
+                invoice.status = InvoiceStatus.PARTIALLY_PAID
+            else:
+                invoice.status = InvoiceStatus.ISSUED
+
+            invoice.save(update_fields=["balance_amount", "total_amount", "taxable_amount", "cgst_amount", "sgst_amount", "igst_amount", "status"])
+
+        AuditService.record_event(voided_by, "VOID_DEBIT_NOTE", debit_note)
+        return debit_note

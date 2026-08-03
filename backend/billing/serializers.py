@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDocument, LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote, OTASettlementBatch, OTASettlementLine
+from .models import CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDocument, LegalEntity, FinancialYear, FiscalPeriod, TripCloseout, TripCharge, Invoice, InvoiceLine, InvoiceTrip, CreditNote, CreditNoteLine, DebitNote, DebitNoteLine, OTASettlementBatch, OTASettlementLine
 from fleet.serializers import TripSerializer
 from .services import BillabilityService
 
@@ -289,28 +289,100 @@ class BillableTripSerializer(TripSerializer):
 
 from .models import PaymentReceipt, PaymentAllocation
 
+class PaymentAllocationSerializer(serializers.ModelSerializer):
+    receipt_number = serializers.CharField(source="receipt.receipt_number", read_only=True)
+    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+    journal_entry_id = serializers.SerializerMethodField()
+    journal_entry_number = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PaymentAllocation
+        fields = "__all__"
+
+    def get_journal_entry_id(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="PAYMENT_ALLOCATION", source_id=str(obj.id)).first()
+        return je.id if je else None
+
+    def get_journal_entry_number(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="PAYMENT_ALLOCATION", source_id=str(obj.id)).first()
+        return je.entry_number if je else None
+
+
 class PaymentReceiptSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source="customer.display_name", read_only=True)
     legal_entity_name = serializers.CharField(source="legal_entity.legal_name", read_only=True)
+    allocations = PaymentAllocationSerializer(many=True, read_only=True)
+    journal_entry_id = serializers.SerializerMethodField()
+    journal_entry_number = serializers.SerializerMethodField()
 
     class Meta:
         model = PaymentReceipt
         fields = "__all__"
 
+    def get_journal_entry_id(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="PAYMENT_RECEIPT", source_id=str(obj.id)).first()
+        return je.id if je else None
 
-class PaymentAllocationSerializer(serializers.ModelSerializer):
-    receipt_number = serializers.CharField(source="receipt.receipt_number", read_only=True)
-    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+    def get_journal_entry_number(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="PAYMENT_RECEIPT", source_id=str(obj.id)).first()
+        return je.entry_number if je else None
 
+
+class CreditNoteLineSerializer(serializers.ModelSerializer):
     class Meta:
-        model = PaymentAllocation
+        model = CreditNoteLine
         fields = "__all__"
 
 
 class CreditNoteSerializer(serializers.ModelSerializer):
     invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
     legal_entity_name = serializers.CharField(source="legal_entity.legal_name", read_only=True)
+    lines = CreditNoteLineSerializer(many=True, read_only=True)
+    journal_entry_id = serializers.SerializerMethodField()
+    journal_entry_number = serializers.SerializerMethodField()
 
     class Meta:
         model = CreditNote
         fields = "__all__"
+
+    def get_journal_entry_id(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="CREDIT_NOTE", source_id=str(obj.id)).first()
+        return je.id if je else None
+
+    def get_journal_entry_number(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="CREDIT_NOTE", source_id=str(obj.id)).first()
+        return je.entry_number if je else None
+
+
+class DebitNoteLineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DebitNoteLine
+        fields = "__all__"
+
+
+class DebitNoteSerializer(serializers.ModelSerializer):
+    invoice_number = serializers.CharField(source="invoice.invoice_number", read_only=True)
+    legal_entity_name = serializers.CharField(source="legal_entity.legal_name", read_only=True)
+    lines = DebitNoteLineSerializer(many=True, read_only=True)
+    journal_entry_id = serializers.SerializerMethodField()
+    journal_entry_number = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DebitNote
+        fields = "__all__"
+
+    def get_journal_entry_id(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="DEBIT_NOTE", source_id=str(obj.id)).first()
+        return je.id if je else None
+
+    def get_journal_entry_number(self, obj):
+        from billing.models import JournalEntry
+        je = JournalEntry.objects.filter(source_type="DEBIT_NOTE", source_id=str(obj.id)).first()
+        return je.entry_number if je else None

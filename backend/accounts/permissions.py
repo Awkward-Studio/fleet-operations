@@ -65,7 +65,7 @@ class HasFinancialRolePermission(permissions.BasePermission):
                 
         # Invoice actions
         elif view_name == "InvoiceViewSet":
-            if action in ["list", "retrieve", "eligible_trips", "grouping_preview"]:
+            if action in ["list", "retrieve", "eligible_trips", "grouping_preview", "aging", "statement"]:
                 return role in [UserRole.COMMERCIAL, UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER, UserRole.AUDITOR]
             elif action in ["generate_draft", "submit_review", "issue", "record_delivery"]:
                 return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER]
@@ -74,11 +74,11 @@ class HasFinancialRolePermission(permissions.BasePermission):
             elif action in ["download_official_pdf", "download_duty_slip_pdf", "html_preview", "document", "tally_xml"]:
                 return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER, UserRole.AUDITOR]
                 
-        # Receipt, Allocation, CreditNote, TripExpense actions
-        elif view_name in ["PaymentReceiptViewSet", "PaymentAllocationViewSet", "CreditNoteViewSet", "TripExpenseViewSet"]:
+        # Receipt, Allocation, CreditNote, DebitNote, TripExpense actions
+        elif view_name in ["PaymentReceiptViewSet", "PaymentAllocationViewSet", "CreditNoteViewSet", "DebitNoteViewSet", "TripExpenseViewSet"]:
             if action in ["list", "retrieve"]:
                 return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER, UserRole.AUDITOR]
-            elif action in ["create", "update", "partial_update"]:
+            elif action in ["create", "update", "partial_update", "reverse", "approve", "void"]:
                 return role in [UserRole.ACCOUNTANT, UserRole.FINANCE_APPROVER]
             elif action == "destroy":
                 return role in [UserRole.FINANCE_APPROVER]

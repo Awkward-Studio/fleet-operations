@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Sum
@@ -575,3 +576,303 @@ class ReconciliationService:
                 })
 
         return exceptions
+
+
+class ARAgingReport:
+    @classmethod
+    def build(cls, as_of_date=None):
+        if as_of_date is None:
+            as_of_date = timezone.localdate()
+        elif isinstance(as_of_date, str):
+            as_of_date = datetime.date.fromisoformat(as_of_date)
+        elif isinstance(as_of_date, datetime.datetime):
+            as_of_date = as_of_date.date()
+
+        from fleet.models import CorporateCustomer
+        from billing.models import Invoice, PaymentReceipt, PaymentAllocation, CreditNote, DebitNote
+        from django.db.models import Q
+
+        customers = CorporateCustomer.objects.all().order_by("display_name")
+        report_data = []
+
+        grand_totals = {
+            "current": Decimal("0.00"),
+            "1_30": Decimal("0.00"),
+            "31_60": Decimal("0.00"),
+            "61_90": Decimal("0.00"),
+            "over_90": Decimal("0.00"),
+            "unapplied": Decimal("0.00"),
+            "net_outstanding": Decimal("0.00"),
+        }
+
+        for cust in customers:
+            cust_invoices = []
+            cust_unapplied = []
+
+            # 1. Historical Invoice outstanding balances
+            invoices = Invoice.objects.filter(
+                customer=cust,
+                issue_date__lte=as_of_date
+            ).exclude(status="VOID")
+
+            cust_totals = {
+                "current": Decimal("0.00"),
+                "1_30": Decimal("0.00"),
+                "31_60": Decimal("0.00"),
+                "61_90": Decimal("0.00"),
+                "over_90": Decimal("0.00"),
+                "unapplied": Decimal("0.00"),
+                "net_outstanding": Decimal("0.00"),
+            }
+
+            for inv in invoices:
+                # Sum allocations to this invoice on or before as_of_date
+                alloc_sum = PaymentAllocation.objects.filter(
+                    invoice=inv,
+                    created_at__date__lte=as_of_date,
+                    is_reversed=False
+                ).aggregate(
+                    total=Sum("allocated_amount"),
+                    tds=Sum("tds_amount")
+                )
+                allocated = (alloc_sum["total"] or Decimal("0.00")) + (alloc_sum["tds"] or Decimal("0.00"))
+
+                # Sum credit notes approved on or before as_of_date
+                cn_sum = CreditNote.objects.filter(
+                    invoice=inv,
+                    status="APPROVED",
+                    approved_at__date__lte=as_of_date
+                ).aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+
+                # Sum debit notes approved on or before as_of_date
+                dn_sum = DebitNote.objects.filter(
+                    invoice=inv,
+                    status="APPROVED",
+                    approved_at__date__lte=as_of_date
+                ).aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+
+                outstanding = inv.total_amount - allocated - cn_sum + dn_sum
+
+                if outstanding != Decimal("0.00"):
+                    # Calculate aging bucket
+                    days_overdue = (as_of_date - inv.due_date).days
+                    if days_overdue <= 0:
+                        bucket = "current"
+                    elif days_overdue <= 30:
+                        bucket = "1_30"
+                    elif days_overdue <= 60:
+                        bucket = "31_60"
+                    elif days_overdue <= 90:
+                        bucket = "61_90"
+                    else:
+                        bucket = "over_90"
+
+                    cust_totals[bucket] += outstanding
+                    cust_totals["net_outstanding"] += outstanding
+
+                    cust_invoices.append({
+                        "invoice_id": inv.id,
+                        "invoice_number": inv.invoice_number or f"DRAFT-{inv.id}",
+                        "issue_date": inv.issue_date.isoformat(),
+                        "due_date": inv.due_date.isoformat(),
+                        "days_overdue": days_overdue,
+                        "original_amount": str(inv.total_amount),
+                        "outstanding_balance": str(outstanding),
+                        "bucket": bucket,
+                    })
+
+            # 2. Historical Unapplied receipts
+            receipts = PaymentReceipt.objects.filter(
+                customer=cust,
+                created_at__date__lte=as_of_date
+            ).filter(
+                Q(is_reversed=False) | Q(is_reversed=True, updated_at__date__gt=as_of_date)
+            )
+
+            for rec in receipts:
+                # Sum allocations from this receipt on or before as_of_date
+                alloc_sum = PaymentAllocation.objects.filter(
+                    receipt=rec,
+                    created_at__date__lte=as_of_date,
+                    is_reversed=False
+                ).aggregate(total=Sum("allocated_amount"))["total"] or Decimal("0.00")
+
+                unapplied = rec.amount - alloc_sum
+
+                if unapplied > Decimal("0.00"):
+                    cust_totals["unapplied"] += unapplied
+                    cust_totals["net_outstanding"] -= unapplied
+
+                    cust_unapplied.append({
+                        "receipt_id": rec.id,
+                        "receipt_number": rec.receipt_number,
+                        "receipt_date": rec.created_at.date().isoformat(),
+                        "amount": str(rec.amount),
+                        "unapplied_amount": str(unapplied),
+                    })
+
+            # Format customer totals for JSON
+            cust_totals_str = {k: str(v) for k, v in cust_totals.items()}
+
+            # Accumulate grand totals
+            for k in grand_totals:
+                grand_totals[k] += cust_totals[k]
+
+            if cust_invoices or cust_unapplied:
+                report_data.append({
+                    "customer_id": cust.id,
+                    "customer_name": cust.display_name,
+                    "invoices": cust_invoices,
+                    "unapplied_receipts": cust_unapplied,
+                    "totals": cust_totals_str,
+                })
+
+        grand_totals_str = {k: str(v) for k, v in grand_totals.items()}
+
+        return {
+            "as_of_date": as_of_date.isoformat(),
+            "customers": report_data,
+            "grand_totals": grand_totals_str,
+        }
+
+
+class CustomerStatementReport:
+    @classmethod
+    def build(cls, customer, start_date, end_date):
+        if isinstance(start_date, str):
+            start_date = datetime.date.fromisoformat(start_date)
+        if isinstance(end_date, str):
+            end_date = datetime.date.fromisoformat(end_date)
+
+        from billing.models import Invoice, PaymentReceipt, PaymentAllocation, CreditNote, DebitNote
+        from django.db.models import Q
+
+        # Compute Opening Balance before start_date
+        inv_before = Invoice.objects.filter(
+            customer=customer,
+            issue_date__lt=start_date
+        ).exclude(status="VOID").aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+
+        dn_before = DebitNote.objects.filter(
+            invoice__customer=customer,
+            status="APPROVED",
+            approved_at__date__lt=start_date
+        ).aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+
+        rec_before = PaymentReceipt.objects.filter(
+            customer=customer,
+            created_at__date__lt=start_date
+        ).filter(
+            Q(is_reversed=False) | Q(is_reversed=True, updated_at__date__gte=start_date)
+        ).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+
+        cn_before = CreditNote.objects.filter(
+            invoice__customer=customer,
+            status="APPROVED",
+            approved_at__date__lt=start_date
+        ).aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+
+        opening_balance = inv_before + dn_before - rec_before - cn_before
+
+        # Gather transactions within range
+        transactions = []
+
+        # 1. Invoices
+        invoices = Invoice.objects.filter(
+            customer=customer,
+            issue_date__range=[start_date, end_date]
+        ).exclude(status="VOID")
+        for inv in invoices:
+            transactions.append({
+                "date": inv.issue_date,
+                "type": "INVOICE",
+                "reference": inv.invoice_number or f"DRAFT-{inv.id}",
+                "description": f"Tax Invoice #{inv.invoice_number}",
+                "debit": inv.total_amount,
+                "credit": Decimal("0.00"),
+            })
+
+        # 2. Payment Receipts
+        receipts = PaymentReceipt.objects.filter(
+            customer=customer,
+            created_at__date__range=[start_date, end_date]
+        )
+        for rec in receipts:
+            is_reversed_in_range = rec.is_reversed and rec.updated_at.date() <= end_date
+            transactions.append({
+                "date": rec.created_at.date(),
+                "type": "RECEIPT",
+                "reference": rec.receipt_number,
+                "description": f"Payment Receipt - {rec.payment_method} Ref {rec.reference_number}",
+                "debit": Decimal("0.00"),
+                "credit": rec.amount,
+            })
+            if is_reversed_in_range:
+                transactions.append({
+                    "date": rec.updated_at.date(),
+                    "type": "RECEIPT_REVERSAL",
+                    "reference": f"REV-{rec.receipt_number}",
+                    "description": f"Reversal: {rec.reversal_reason}",
+                    "debit": rec.amount,
+                    "credit": Decimal("0.00"),
+                })
+
+        # 3. Credit Notes
+        credit_notes = CreditNote.objects.filter(
+            invoice__customer=customer,
+            status="APPROVED",
+            approved_at__date__range=[start_date, end_date]
+        )
+        for cn in credit_notes:
+            transactions.append({
+                "date": cn.approved_at.date(),
+                "type": "CREDIT_NOTE",
+                "reference": cn.credit_note_number,
+                "description": f"Credit Note - Reason: {cn.reason}",
+                "debit": Decimal("0.00"),
+                "credit": cn.total_amount,
+            })
+
+        # 4. Debit Notes
+        debit_notes = DebitNote.objects.filter(
+            invoice__customer=customer,
+            status="APPROVED",
+            approved_at__date__range=[start_date, end_date]
+        )
+        for dn in debit_notes:
+            transactions.append({
+                "date": dn.approved_at.date(),
+                "type": "DEBIT_NOTE",
+                "reference": dn.debit_note_number,
+                "description": f"Debit Note - Reason: {dn.reason}",
+                "debit": dn.total_amount,
+                "credit": Decimal("0.00"),
+            })
+
+        # Sort transactions chronologically
+        transactions.sort(key=lambda x: (x["date"], x["type"]))
+
+        # Build running balance
+        running_balance = opening_balance
+        statement_lines = []
+        for tx in transactions:
+            running_balance += tx["debit"] - tx["credit"]
+            statement_lines.append({
+                "date": tx["date"].isoformat(),
+                "type": tx["type"],
+                "reference": tx["reference"],
+                "description": tx["description"],
+                "debit": str(tx["debit"]),
+                "credit": str(tx["credit"],),
+                "balance": str(running_balance),
+            })
+
+        return {
+            "customer_id": customer.id,
+            "customer_name": customer.display_name,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "opening_balance": str(opening_balance),
+            "closing_balance": str(running_balance),
+            "lines": statement_lines,
+        }

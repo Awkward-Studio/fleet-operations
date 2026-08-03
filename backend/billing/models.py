@@ -2,6 +2,7 @@ import datetime
 import uuid
 from django.db import models, transaction
 from django.core.exceptions import ValidationError
+from decimal import Decimal
 
 
 class LegalEntity(models.Model):
@@ -340,7 +341,22 @@ class Invoice(models.Model):
                         raise ValidationError("Monetary total on an issued invoice cannot be modified.")
 
     def save(self, *args, **kwargs):
-        self.balance_amount = self.total_amount - self.paid_amount
+        if self.pk:
+            from .models import CreditNote, CreditNoteStatus
+            from django.db.models import Sum
+            cn_total = self.credit_notes.filter(status=CreditNoteStatus.APPROVED).aggregate(total=Sum("total_amount"))["total"] or Decimal("0.00")
+            self.balance_amount = self.total_amount - self.paid_amount - cn_total
+            
+            if self.status in [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID, InvoiceStatus.PAID]:
+                if self.balance_amount <= Decimal("0.00"):
+                    self.status = InvoiceStatus.PAID
+                elif self.balance_amount < self.total_amount:
+                    self.status = InvoiceStatus.PARTIALLY_PAID
+                else:
+                    if self.status != InvoiceStatus.SENT:
+                        self.status = InvoiceStatus.ISSUED
+        else:
+            self.balance_amount = self.total_amount - self.paid_amount
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -448,17 +464,100 @@ class InvoiceTrip(models.Model):
         return f"Invoice #{self.invoice_id} -> Trip #{self.trip_id}"
 
 
+class CreditNoteStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    APPROVED = "APPROVED", "Approved"
+    VOID = "VOID", "Void"
+
+
 class CreditNote(models.Model):
     credit_note_number = models.CharField(max_length=50, unique=True)
     invoice = models.ForeignKey(Invoice, related_name="credit_notes", on_delete=models.PROTECT)
     legal_entity = models.ForeignKey(LegalEntity, related_name="credit_notes", on_delete=models.PROTECT)
     reason = models.CharField(max_length=250)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=30, choices=CreditNoteStatus.choices, default=CreditNoteStatus.DRAFT)
+    approved_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_credit_notes")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    idempotency_key = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    reverses_credit_note = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reversals")
+    is_reversed = models.BooleanField(default=False)
     created_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Credit Note {self.credit_note_number}: ₹{self.total_amount}"
+        return f"Credit Note {self.credit_note_number}: ₹{self.total_amount} ({self.status})"
+
+
+class CreditNoteLine(models.Model):
+    credit_note = models.ForeignKey(CreditNote, related_name="lines", on_delete=models.CASCADE)
+    invoice_line = models.ForeignKey(InvoiceLine, null=True, blank=True, on_delete=models.SET_NULL, related_name="credit_note_lines")
+    description = models.CharField(max_length=250)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    unit_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f"CN Line: {self.description} - ₹{self.line_total}"
+
+
+class DebitNoteStatus(models.TextChoices):
+    DRAFT = "DRAFT", "Draft"
+    APPROVED = "APPROVED", "Approved"
+    VOID = "VOID", "Void"
+
+
+class DebitNote(models.Model):
+    debit_note_number = models.CharField(max_length=50, unique=True)
+    invoice = models.ForeignKey(Invoice, related_name="debit_notes", on_delete=models.PROTECT)
+    legal_entity = models.ForeignKey(LegalEntity, related_name="debit_notes", on_delete=models.PROTECT)
+    reason = models.CharField(max_length=250)
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=30, choices=DebitNoteStatus.choices, default=DebitNoteStatus.DRAFT)
+    approved_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_debit_notes")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    idempotency_key = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    reverses_debit_note = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reversals")
+    is_reversed = models.BooleanField(default=False)
+    created_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="created_debit_notes")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Debit Note {self.debit_note_number}: ₹{self.total_amount} ({self.status})"
+
+
+class DebitNoteLine(models.Model):
+    debit_note = models.ForeignKey(DebitNote, related_name="lines", on_delete=models.CASCADE)
+    invoice_line = models.ForeignKey(InvoiceLine, null=True, blank=True, on_delete=models.SET_NULL, related_name="debit_note_lines")
+    description = models.CharField(max_length=250)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    unit_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    cgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sgst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    sgst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    igst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    igst_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f"DN Line: {self.description} - ₹{self.line_total}"
 
 
 class AccountType(models.TextChoices):
@@ -527,10 +626,16 @@ class PaymentReceipt(models.Model):
     receipt_date = models.DateField(default=datetime.date.today)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     unapplied_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default="INR")
     payment_method = models.CharField(max_length=30, choices=PaymentMethod.choices, default=PaymentMethod.BANK_TRANSFER)
     reference_number = models.CharField(max_length=100, blank=True)
+    idempotency_key = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    reverses_receipt = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reversals")
+    is_reversed = models.BooleanField(default=False)
+    reversal_reason = models.TextField(blank=True)
     created_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
         if not self.pk and self.unapplied_amount is None:
@@ -538,7 +643,7 @@ class PaymentReceipt(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Receipt {self.receipt_number}: ₹{self.amount} ({self.payment_method})"
+        return f"Receipt {self.receipt_number}: {self.currency} {self.amount} ({self.payment_method})"
 
 
 class PaymentAllocation(models.Model):
@@ -546,10 +651,12 @@ class PaymentAllocation(models.Model):
     invoice = models.ForeignKey(Invoice, related_name="allocations", on_delete=models.CASCADE)
     allocated_amount = models.DecimalField(max_digits=12, decimal_places=2)
     tds_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    is_reversed = models.BooleanField(default=False)
+    reverses_allocation = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reversals")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Allocated ₹{self.allocated_amount} from {self.receipt.receipt_number} to {self.invoice.invoice_number}"
+        return f"Allocated {self.allocated_amount} from {self.receipt.receipt_number} to {self.invoice.invoice_number}"
 
 
 class OTASettlementStatus(models.TextChoices):

@@ -514,3 +514,313 @@ export function getOTAProfitabilityReport(params: {
   return request<OTAProfitabilityReport>(`/billing/ota-settlements/profitability/${suffix}`);
 }
 
+
+// --- New Payment Receipts & Allocations APIs ---
+
+export type PaymentReceipt = {
+  id: number;
+  receipt_number: string;
+  legal_entity: number;
+  legal_entity_name: string;
+  receipt_date: string;
+  customer: number;
+  customer_name: string;
+  amount: string;
+  unapplied_amount: string;
+  currency: string;
+  payment_method: string;
+  reference_number: string;
+  is_reversed: boolean;
+  reversal_reason: string;
+  created_by: number | null;
+  created_at: string;
+  journal_entry_id?: number | null;
+  journal_entry_number?: string | null;
+  allocations?: PaymentAllocation[];
+};
+
+export type PaymentAllocation = {
+  id: number;
+  receipt: number;
+  receipt_number?: string;
+  invoice: number;
+  invoice_number?: string;
+  allocated_amount: string;
+  tds_amount: string;
+  is_reversed: boolean;
+  created_at: string;
+  journal_entry_id?: number | null;
+  journal_entry_number?: string | null;
+};
+
+export async function listPaymentReceipts(): Promise<PaymentReceipt[]> {
+  return unwrapList(await request<ApiList<PaymentReceipt>>("/billing/receipts/"));
+}
+
+export function createPaymentReceipt(payload: {
+  legal_entity: number;
+  customer: number;
+  amount: string | number;
+  currency?: string;
+  payment_method?: string;
+  reference_number?: string;
+}): Promise<PaymentReceipt> {
+  return request<PaymentReceipt>("/billing/receipts/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function reversePaymentReceipt(id: number, reason: string): Promise<PaymentReceipt> {
+  return request<PaymentReceipt>(`/billing/receipts/${id}/reverse/`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function createPaymentAllocation(payload: {
+  receipt: number;
+  invoice: number;
+  allocated_amount: string | number;
+  tds_amount?: string | number;
+}): Promise<PaymentAllocation> {
+  return request<PaymentAllocation>("/billing/allocations/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function reversePaymentAllocation(id: number): Promise<PaymentAllocation> {
+  return request<PaymentAllocation>(`/billing/allocations/${id}/reverse/`, {
+    method: "POST",
+  });
+}
+
+
+// --- New Credit Notes & Debit Notes APIs ---
+
+export type CreditNoteLine = {
+  id: number;
+  credit_note: number;
+  invoice_line: number | null;
+  description: string;
+  quantity: string;
+  unit_rate: string;
+  taxable_value: string;
+  cgst_rate: string;
+  cgst_amount: string;
+  sgst_rate: string;
+  sgst_amount: string;
+  igst_rate: string;
+  igst_amount: string;
+  line_total: string;
+};
+
+export type CreditNote = {
+  id: number;
+  credit_note_number: string;
+  invoice: number;
+  invoice_number?: string;
+  legal_entity: number;
+  legal_entity_name?: string;
+  reason: string;
+  status: "DRAFT" | "APPROVED" | "VOID";
+  total_amount: string;
+  taxable_amount: string;
+  cgst_amount: string;
+  sgst_amount: string;
+  igst_amount: string;
+  created_by: number | null;
+  created_at: string;
+  approved_by: number | null;
+  approved_at: string | null;
+  lines?: CreditNoteLine[];
+  journal_entry_id?: number | null;
+  journal_entry_number?: string | null;
+};
+
+export type DebitNoteLine = {
+  id: number;
+  debit_note: number;
+  invoice_line: number | null;
+  description: string;
+  quantity: string;
+  unit_rate: string;
+  taxable_value: string;
+  cgst_rate: string;
+  cgst_amount: string;
+  sgst_rate: string;
+  sgst_amount: string;
+  igst_rate: string;
+  igst_amount: string;
+  line_total: string;
+};
+
+export type DebitNote = {
+  id: number;
+  debit_note_number: string;
+  invoice: number;
+  invoice_number?: string;
+  legal_entity: number;
+  legal_entity_name?: string;
+  reason: string;
+  status: "DRAFT" | "APPROVED" | "VOID";
+  total_amount: string;
+  taxable_amount: string;
+  cgst_amount: string;
+  sgst_amount: string;
+  igst_amount: string;
+  created_by: number | null;
+  created_at: string;
+  approved_by: number | null;
+  approved_at: string | null;
+  lines?: DebitNoteLine[];
+  journal_entry_id?: number | null;
+  journal_entry_number?: string | null;
+};
+
+export async function listCreditNotes(): Promise<CreditNote[]> {
+  return unwrapList(await request<ApiList<CreditNote>>("/billing/credit-notes/"));
+}
+
+export function createCreditNote(payload: {
+  invoice: number;
+  reason: string;
+  lines: Array<{
+    invoice_line_id: number;
+    quantity: number | string;
+    unit_rate: number | string;
+  }>;
+}): Promise<CreditNote> {
+  return request<CreditNote>("/billing/credit-notes/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveCreditNote(id: number): Promise<CreditNote> {
+  return request<CreditNote>(`/billing/credit-notes/${id}/approve/`, {
+    method: "POST",
+  });
+}
+
+export function voidCreditNote(id: number): Promise<CreditNote> {
+  return request<CreditNote>(`/billing/credit-notes/${id}/void/`, {
+    method: "POST",
+  });
+}
+
+export async function listDebitNotes(): Promise<DebitNote[]> {
+  return unwrapList(await request<ApiList<DebitNote>>("/billing/debit-notes/"));
+}
+
+export function createDebitNote(payload: {
+  invoice: number;
+  reason: string;
+  lines: Array<{
+    invoice_line_id: number;
+    quantity: number | string;
+    unit_rate: number | string;
+  }>;
+}): Promise<DebitNote> {
+  return request<DebitNote>("/billing/debit-notes/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveDebitNote(id: number): Promise<DebitNote> {
+  return request<DebitNote>(`/billing/debit-notes/${id}/approve/`, {
+    method: "POST",
+  });
+}
+
+export function voidDebitNote(id: number): Promise<DebitNote> {
+  return request<DebitNote>(`/billing/debit-notes/${id}/void/`, {
+    method: "POST",
+  });
+}
+
+
+// --- New Reports & Statements APIs ---
+
+export type ARAgingCustomer = {
+  customer_id: number;
+  customer_name: string;
+  invoices: Array<{
+    invoice_id: number;
+    invoice_number: string;
+    issue_date: string;
+    due_date: string;
+    days_overdue: number;
+    original_amount: string;
+    outstanding_balance: string;
+    bucket: string;
+  }>;
+  unapplied_receipts: Array<{
+    receipt_id: number;
+    receipt_number: string;
+    receipt_date: string;
+    amount: string;
+    unapplied_amount: string;
+  }>;
+  totals: {
+    current: string;
+    "1_30": string;
+    "31_60": string;
+    "61_90": string;
+    over_90: string;
+    unapplied: string;
+    net_outstanding: string;
+  };
+};
+
+export type ARAgingReport = {
+  as_of_date: string;
+  customers: ARAgingCustomer[];
+  grand_totals: {
+    current: string;
+    "1_30": string;
+    "31_60": string;
+    "61_90": string;
+    over_90: string;
+    unapplied: string;
+    net_outstanding: string;
+  };
+};
+
+export type CustomerStatementLine = {
+  date: string;
+  type: string;
+  reference: string;
+  description: string;
+  debit: string;
+  credit: string;
+  balance: string;
+};
+
+export type CustomerStatementReport = {
+  customer_id: number;
+  customer_name: string;
+  start_date: string;
+  end_date: string;
+  opening_balance: string;
+  closing_balance: string;
+  lines: CustomerStatementLine[];
+};
+
+export function getARAgingReport(asOfDate?: string): Promise<ARAgingReport> {
+  const query = asOfDate ? `?as_of_date=${asOfDate}` : "";
+  return request<ARAgingReport>(`/billing/invoices/aging/${query}`);
+}
+
+export function getCustomerStatementReport(
+  customerId: number,
+  startDate: string,
+  endDate: string,
+): Promise<CustomerStatementReport> {
+  return request<CustomerStatementReport>(
+    `/billing/invoices/statement/?customer=${customerId}&start_date=${startDate}&end_date=${endDate}`,
+  );
+}
+

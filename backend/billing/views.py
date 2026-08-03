@@ -15,15 +15,15 @@ from .models import (
     CloseoutAuditEvent, InvoiceAuditEvent, InvoiceDeliveryAttempt, LegalEntity,
     TripCloseout, TripCharge, Invoice, InvoiceTrip, CloseoutStatus, InvoiceStatus,
     IdempotencyRegistry, FinancialAuditEvent, PaymentReceipt, PaymentAllocation, CreditNote,
-    OTASettlementBatch
+    CreditNoteStatus, DebitNote, DebitNoteStatus, OTASettlementBatch
 )
 from .serializers import (
     BillableTripSerializer, LegalEntitySerializer, TripCloseoutSerializer, TripChargeSerializer, InvoiceSerializer,
-    PaymentReceiptSerializer, PaymentAllocationSerializer, CreditNoteSerializer,
+    PaymentReceiptSerializer, PaymentAllocationSerializer, CreditNoteSerializer, DebitNoteSerializer,
     OTASettlementBatchSerializer, OTASettlementImportSerializer
 )
-from .services import BillabilityService, CloseoutService, InvoiceService, check_period_lock, PostingEngine, AuditService, OTASettlementImportService, OTAProfitabilityReportService
-from .reports import CloseoutReconciliationReport
+from .services import BillabilityService, CloseoutService, InvoiceService, check_period_lock, PostingEngine, AuditService, OTASettlementImportService, OTAProfitabilityReportService, PaymentService, CreditNoteService, DebitNoteService
+from .reports import CloseoutReconciliationReport, ARAgingReport, CustomerStatementReport
 from fleet.models import PricingAmountStatus, Trip
 from fleet.permissions import IsCommercialAdmin
 from accounts.permissions import HasFinancialRolePermission, HasLegalEntityScope, HasCustomerScope
@@ -628,6 +628,30 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             payload.append(group)
         return Response({"groups": payload})
 
+    @action(detail=False, methods=["get"])
+    def aging(self, request):
+        as_of_date = request.query_params.get("as_of_date")
+        report = ARAgingReport.build(as_of_date=as_of_date)
+        return Response(report)
+
+    @action(detail=False, methods=["get"])
+    def statement(self, request):
+        customer_id = request.query_params.get("customer")
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+
+        if not customer_id or not start_date or not end_date:
+            raise ValidationError("customer, start_date, and end_date are required query parameters.")
+
+        from fleet.models import CorporateCustomer
+        try:
+            customer = CorporateCustomer.objects.get(pk=customer_id)
+        except CorporateCustomer.DoesNotExist:
+            raise ValidationError("Corporate customer not found.")
+
+        report = CustomerStatementReport.build(customer, start_date, end_date)
+        return Response(report)
+
     @action(detail=False, methods=["post"])
     @idempotent_action()
     def generate_draft(self, request):
@@ -812,12 +836,42 @@ class PaymentReceiptViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         check_period_lock(timezone.now().date())
-        response = super().create(request, *args, **kwargs)
-        if response.status_code == status.HTTP_201_CREATED:
-            receipt = PaymentReceipt.objects.get(pk=response.data["id"])
-            PostingEngine.post_receipt_journal(receipt)
-            AuditService.record_event(request.user, "RECEIPT_CREATE", receipt, None, "", request.headers.get("X-Idempotency-Key", ""))
-        return response
+        legal_entity_id = request.data.get("legal_entity")
+        customer_id = request.data.get("customer")
+        amount = Decimal(str(request.data.get("amount", "0.00")))
+        currency = request.data.get("currency", "INR")
+        payment_method = request.data.get("payment_method", "BANK_TRANSFER")
+        reference_number = request.data.get("reference_number", "")
+        idempotency_key = request.headers.get("X-Idempotency-Key") or request.data.get("idempotency_key")
+
+        legal_entity = LegalEntity.objects.get(pk=legal_entity_id)
+        from fleet.models import CorporateCustomer
+        customer = CorporateCustomer.objects.get(pk=customer_id) if customer_id else None
+
+        receipt = PaymentService.record_receipt(
+            legal_entity=legal_entity,
+            customer=customer,
+            amount=amount,
+            currency=currency,
+            payment_method=payment_method,
+            reference_number=reference_number,
+            created_by=request.user,
+            idempotency_key=idempotency_key
+        )
+
+        AuditService.record_event(request.user, "RECEIPT_CREATE", receipt, None, "", idempotency_key or "")
+        return Response(PaymentReceiptSerializer(receipt).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def reverse(self, request, pk=None):
+        receipt = self.get_object()
+        reason = request.data.get("reason", "")
+        if not reason:
+            raise ValidationError("A reversal reason is required.")
+        reversed_receipt = PaymentService.reverse_receipt(receipt, reason=reason, reversed_by=request.user)
+        AuditService.record_event(request.user, "RECEIPT_REVERSE", reversed_receipt, None, reason, "")
+        return Response(PaymentReceiptSerializer(reversed_receipt).data)
 
 
 class PaymentAllocationViewSet(viewsets.ModelViewSet):
@@ -837,33 +891,18 @@ class PaymentAllocationViewSet(viewsets.ModelViewSet):
         receipt = PaymentReceipt.objects.get(pk=receipt_id)
         invoice = Invoice.objects.get(pk=invoice_id)
 
-        total_credit = amount + tds_amount
-        if total_credit > invoice.balance_amount:
-            raise ValidationError("Allocation amount cannot exceed invoice remaining balance.")
-        if amount > receipt.unapplied_amount:
-            raise ValidationError("Allocation amount cannot exceed receipt unapplied amount.")
-
-        allocation = PaymentAllocation.objects.create(
-            receipt=receipt,
-            invoice=invoice,
-            allocated_amount=amount,
-            tds_amount=tds_amount,
-        )
-        receipt.unapplied_amount -= amount
-        receipt.save()
-
-        invoice.paid_amount += total_credit
-        if invoice.paid_amount >= invoice.total_amount:
-            invoice.status = InvoiceStatus.PAID
-        elif invoice.paid_amount > Decimal("0.00"):
-            invoice.status = InvoiceStatus.PARTIALLY_PAID
-        invoice.save()
-
-        if tds_amount > Decimal("0.00"):
-            PostingEngine.post_allocation_journal(allocation)
+        allocation = PaymentService.allocate_payment(receipt, invoice, amount, tds_amount)
 
         AuditService.record_event(request.user, "ALLOCATION_CREATE", allocation, None, "", request.headers.get("X-Idempotency-Key", ""))
         return Response(PaymentAllocationSerializer(allocation).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def reverse(self, request, pk=None):
+        allocation = self.get_object()
+        reversed_alloc = PaymentService.reverse_allocation(allocation)
+        AuditService.record_event(request.user, "ALLOCATION_REVERSE", reversed_alloc, None, "Reversal via API", "")
+        return Response(PaymentAllocationSerializer(reversed_alloc).data)
 
 
 class CreditNoteViewSet(viewsets.ModelViewSet):
@@ -885,31 +924,73 @@ class CreditNoteViewSet(viewsets.ModelViewSet):
         check_period_lock(timezone.now().date())
         invoice_id = request.data.get("invoice")
         invoice = Invoice.objects.get(pk=invoice_id)
-        if invoice.status not in [InvoiceStatus.ISSUED, InvoiceStatus.SENT, InvoiceStatus.PARTIALLY_PAID]:
-            raise ValidationError("Credit notes can only be issued against Issued or Partially Paid invoices.")
-
-        amount = Decimal(str(request.data.get("amount", "0.00")))
         reason = request.data.get("reason", "")
-        if amount > invoice.balance_amount:
-            raise ValidationError("Credit note amount cannot exceed invoice remaining balance.")
+        lines = request.data.get("lines", [])
 
-        credit_note = CreditNote.objects.create(
+        credit_note = CreditNoteService.create_credit_note(
             invoice=invoice,
-            legal_entity=invoice.legal_entity,
-            credit_note_number=f"CN-{timezone.now().strftime('%Y%m%d%H%M%S')}",
-            total_amount=amount,
             reason=reason,
-            created_by=request.user,
+            lines_data=lines,
+            created_by=request.user
         )
-
-        PostingEngine.post_credit_note_journal(credit_note)
-        invoice.paid_amount += amount
-        if invoice.paid_amount >= invoice.total_amount:
-            invoice.status = InvoiceStatus.PAID
-        elif invoice.paid_amount > Decimal("0.00"):
-            invoice.status = InvoiceStatus.PARTIALLY_PAID
-        invoice.save()
-
-        AuditService.record_event(request.user, "CREDIT_NOTE_CREATE", credit_note, None, reason, request.headers.get("X-Idempotency-Key", ""))
         return Response(CreditNoteSerializer(credit_note).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def approve(self, request, pk=None):
+        credit_note = self.get_object()
+        approved = CreditNoteService.approve_credit_note(credit_note, approved_by=request.user)
+        return Response(CreditNoteSerializer(approved).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def void(self, request, pk=None):
+        credit_note = self.get_object()
+        voided = CreditNoteService.void_credit_note(credit_note, voided_by=request.user)
+        return Response(CreditNoteSerializer(voided).data)
+
+
+class DebitNoteViewSet(viewsets.ModelViewSet):
+    queryset = DebitNote.objects.select_related("invoice", "legal_entity").all().order_by("-created_at", "-id")
+    serializer_class = DebitNoteSerializer
+    permission_classes = [permissions.IsAuthenticated, HasFinancialRolePermission, HasLegalEntityScope]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser and self.request.user.role != UserRole.ADMIN:
+            assigned = self.request.user.assigned_legal_entities.all()
+            if assigned.exists():
+                queryset = queryset.filter(legal_entity__in=assigned)
+        return queryset
+
+    @idempotent_action()
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        check_period_lock(timezone.now().date())
+        invoice_id = request.data.get("invoice")
+        invoice = Invoice.objects.get(pk=invoice_id)
+        reason = request.data.get("reason", "")
+        lines = request.data.get("lines", [])
+
+        debit_note = DebitNoteService.create_debit_note(
+            invoice=invoice,
+            reason=reason,
+            lines_data=lines,
+            created_by=request.user
+        )
+        return Response(DebitNoteSerializer(debit_note).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def approve(self, request, pk=None):
+        debit_note = self.get_object()
+        approved = DebitNoteService.approve_debit_note(debit_note, approved_by=request.user)
+        return Response(DebitNoteSerializer(approved).data)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def void(self, request, pk=None):
+        debit_note = self.get_object()
+        voided = DebitNoteService.void_debit_note(debit_note, voided_by=request.user)
+        return Response(DebitNoteSerializer(voided).data)
 

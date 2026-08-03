@@ -14,27 +14,27 @@ class ServerUrlStore {
   static const _key = 'driver_app_server_url';
 
   static Future<String> get baseUrl async {
+    if (apiBaseUrl != 'http://10.0.2.2:8000') {
+      return cleanUrl(apiBaseUrl);
+    }
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString(_key);
-    if (apiBaseUrl != 'http://10.0.2.2:8000' && (stored == null || stored == 'http://10.0.2.2:8000')) {
-      return _cleanUrl(apiBaseUrl);
-    }
     if (stored != null && stored.trim().isNotEmpty) {
-      return _cleanUrl(stored);
+      return cleanUrl(stored);
     }
-    return _cleanUrl(apiBaseUrl);
+    return cleanUrl(apiBaseUrl);
   }
 
   static Future<void> save(String rawUrl) async {
     final prefs = await SharedPreferences.getInstance();
-    final cleaned = _cleanUrl(rawUrl);
+    final cleaned = cleanUrl(rawUrl);
     await prefs.setString(_key, cleaned);
   }
 
-  static String _cleanUrl(String raw) {
+  static String cleanUrl(String raw) {
     var cleaned = raw.trim();
-    if (cleaned.contains('.local')) {
-      cleaned = cleaned.replaceAll('.local', '');
+    if (cleaned.contains('omihome') && !cleaned.contains('omihome.local')) {
+      cleaned = cleaned.replaceAll('omihome', 'omihome.local');
     }
     if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
       cleaned = 'http://$cleaned';

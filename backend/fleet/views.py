@@ -283,15 +283,39 @@ class TripViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["get", "post"])
     def location(self, request, pk=None):
         trip = self.get_object()
-        permission_error = _assert_driver_can_operate_trip(request, trip)
-        if permission_error:
-            return permission_error
+        if request.method.lower() == "get":
+            logs = TripLocationLog.objects.filter(trip=trip).order_by("timestamp", "id")
+            serializer = TripLocationLogSerializer(logs, many=True)
+            latest = logs.last()
+            return Response(
+                {
+                    "trip_id": trip.id,
+                    "total_pings": logs.count(),
+                    "latest_ping": TripLocationLogSerializer(latest).data if latest else None,
+                    "logs": serializer.data,
+                    "trajectory": [
+                        [float(l.latitude), float(l.longitude)]
+                        for l in logs
+                        if l.latitude is not None and l.longitude is not None
+                    ],
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if trip.driver_id:
+            permission_error = _assert_driver_can_operate_trip(request, trip)
+            if permission_error:
+                return permission_error
 
         serializer = TripLocationLogSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            print("=== LOCATION LOG SERIALIZER ERROR ===")
+            print("Errors:", serializer.errors)
+            print("Received Payload:", request.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         idempotency_key = _get_idempotency_key(request, serializer)
         if idempotency_key:
             existing = TripLocationLog.objects.filter(idempotency_key=idempotency_key).first()

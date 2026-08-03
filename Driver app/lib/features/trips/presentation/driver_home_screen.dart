@@ -37,11 +37,11 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
         data: (trip) {
           if (trip?.status == TripStatus.active) {
             LocationTrackingService.ensureTrackingForActiveTrip(context, trip);
-          } else {
+          } else if (trip?.status == TripStatus.completed || trip?.status == TripStatus.cancelled) {
             LocationTrackingService.stop();
           }
         },
-        error: (_, _) => LocationTrackingService.stop(),
+        error: (_, _) {},
         loading: () {},
       );
     });
@@ -221,6 +221,34 @@ class ActiveTripCard extends ConsumerWidget {
               ],
             ),
           ),
+          if (trip.status == TripStatus.active || trip.status == TripStatus.enRoutePickup) ...[
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xffe8f5e9),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xffa5d6a7)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.gps_fixed, color: Color(0xff2e7d32), size: 16),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '🟢 LIVE GPS RECORDING ACTIVE — Streaming coordinates every 30s',
+                      style: TextStyle(
+                        color: Color(0xff1b5e20),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(16),

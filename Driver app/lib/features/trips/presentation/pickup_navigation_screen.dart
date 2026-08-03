@@ -183,13 +183,25 @@ class _PickupBanner extends StatelessWidget {
                   color: const Color(0xffe8f3ef),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.map_outlined, color: Color(0xff0f766e)),
+                child: const Icon(Icons.navigation, color: Color(0xff082f2d)),
               ),
               const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Pickup Location',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Ride #${trip.id}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
+                    Text(
+                      '${trip.pickupCity} to ${trip.dropCity}',
+                      style: const TextStyle(color: Color(0xff64736f)),
+                    ),
+                  ],
                 ),
               ),
               const _EtaBadge(),
@@ -341,6 +353,21 @@ class _GuestOtpVerificationModalState
     _localOtpCode = widget.initialLocalOtpCode;
     _digitControllers = List.generate(6, (_) => TextEditingController());
     _digitFocusNodes = List.generate(6, (_) => FocusNode());
+
+    if (_localOtpCode != null) {
+      _applyOtpCode(_localOtpCode!);
+    } else if (_isLocalOtp) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _resendLocalOtp();
+      });
+    }
+  }
+
+  void _applyOtpCode(String code) {
+    final chars = code.trim().split('');
+    for (var i = 0; i < chars.length && i < _digitControllers.length; i++) {
+      _digitControllers[i].text = chars[i];
+    }
   }
 
   @override
@@ -376,7 +403,6 @@ class _GuestOtpVerificationModalState
       await api.post('/fleet/trips/${widget.trip.id}/verify-otp/', {
         'otp_code': code,
       });
-      await _postCurrentLocation(api);
       await LocationTrackingService.startAfterOtpSuccess(widget.trip);
       ref.invalidate(currentDriverTripProvider);
       if (!mounted) return;
@@ -403,12 +429,16 @@ class _GuestOtpVerificationModalState
         '/fleet/trips/${widget.trip.id}/generate-otp/',
         {'digits': 4},
       );
+      final code = generated is Map<String, dynamic>
+          ? generated['code'] as String?
+          : null;
       setState(() {
-        _localOtpCode = generated is Map<String, dynamic>
-            ? generated['code'] as String?
-            : null;
-        _notice = 'Local OTP ready for testing.';
+        _localOtpCode = code;
+        _notice = 'Local OTP generated for testing.';
       });
+      if (code != null) {
+        _applyOtpCode(code);
+      }
     } catch (error) {
       setState(() => _error = error.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -584,14 +614,15 @@ class _LocalOtpPreview extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.sms_outlined, color: Color(0xffb45309)),
+          const Icon(Icons.key, color: Color(0xffb45309)),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Testing OTP: $code',
+              '🔑 TESTING PICKUP OTP: $code (AUTO-FILLED)',
               style: const TextStyle(
                 color: Color(0xff7c2d12),
                 fontWeight: FontWeight.w900,
+                fontSize: 13,
               ),
             ),
           ),

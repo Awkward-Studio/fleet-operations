@@ -205,7 +205,41 @@ class _LoginPageState extends State<LoginPage> {
                 height: 1.4,
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xffe6f4f1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xffb2dfdb)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Color(0xff00897b),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Connected to: ${ServerUrlStore.cleanUrl(_serverUrl.text.isEmpty ? apiBaseUrl : _serverUrl.text)}',
+                      style: const TextStyle(
+                        color: Color(0xff004d40),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -326,7 +360,7 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Server URL: ${_serverUrl.text.isEmpty ? apiBaseUrl : _serverUrl.text}',
+                            'Configure Server URL: ${ServerUrlStore.cleanUrl(_serverUrl.text.isEmpty ? apiBaseUrl : _serverUrl.text)}',
                             style: const TextStyle(
                               color: Color(0xff24524c),
                               fontWeight: FontWeight.w600,
@@ -353,6 +387,7 @@ class _LoginPageState extends State<LoginPage> {
                         prefixIcon: Icon(Icons.link_outlined),
                       ),
                       style: const TextStyle(fontSize: 14),
+                      onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -368,8 +403,8 @@ class _LoginPageState extends State<LoginPage> {
                           onPressed: () => setState(() => _serverUrl.text = 'http://192.168.1.34:8000'),
                         ),
                         ActionChip(
-                          label: const Text('omihome (Tailscale)', style: TextStyle(fontSize: 11)),
-                          onPressed: () => setState(() => _serverUrl.text = 'http://omihome:8000'),
+                          label: const Text('omihome.local (mDNS)', style: TextStyle(fontSize: 11)),
+                          onPressed: () => setState(() => _serverUrl.text = 'http://omihome.local:8000'),
                         ),
                       ],
                     ),

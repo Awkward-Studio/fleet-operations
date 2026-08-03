@@ -555,6 +555,20 @@ export function getTrips() {
   return request<Trip[]>("/trips/");
 }
 
+export function getTripDetails(tripId: number) {
+  return request<Trip>(`/trips/${tripId}/`);
+}
+
+export function getTripLocationLogs(tripId: number) {
+  return request<{
+    trip_id: number;
+    total_pings: number;
+    latest_ping: any;
+    logs: any[];
+    trajectory: [number, number][];
+  }>(`/fleet/trips/${tripId}/location/`);
+}
+
 export function getAvailability() {
   return request<Availability[]>("/availability/");
 }

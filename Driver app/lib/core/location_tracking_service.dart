@@ -16,7 +16,7 @@ import 'api_client.dart';
 const _trackingTripIdKey = 'activeLocationTrackingTripId';
 const _trackingLastLatitudeKey = 'activeLocationTrackingLastLatitude';
 const _trackingLastLongitudeKey = 'activeLocationTrackingLastLongitude';
-const _trackingPollInterval = Duration(seconds: 60);
+const _trackingPollInterval = Duration(seconds: 30);
 
 class LocationTrackingService {
   const LocationTrackingService._();
@@ -238,16 +238,6 @@ void locationTrackingServiceEntryPoint(ServiceInstance service) async {
       );
     }
 
-    final activeTrip = await _loadCurrentTrip();
-    if (activeTrip == null ||
-        activeTrip['id'] != tripId ||
-        activeTrip['status'] != TripStatus.active.value) {
-      await _clearTrackingPrefs();
-      timer.cancel();
-      service.stopSelf();
-      return;
-    }
-
     final position = await _readPosition();
     if (position == null) return;
 
@@ -258,6 +248,7 @@ void locationTrackingServiceEntryPoint(ServiceInstance service) async {
     if (posted) {
       await prefs.setDouble(_trackingLastLatitudeKey, position.latitude);
       await prefs.setDouble(_trackingLastLongitudeKey, position.longitude);
+      await prefs.setInt('activeLocationTrackingLastTime', DateTime.now().millisecondsSinceEpoch);
       service.invoke('trackingUpdate', {
         'trip_id': tripId,
         'timestamp': DateTime.now().toIso8601String(),
@@ -295,12 +286,19 @@ Future<Position?> _readPosition() async {
       return null;
     }
 
-    return Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
-      ),
-    );
+    try {
+      final current = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+      if (current != null) return current;
+    } catch (_) {
+      // Timeout or background GPS delay
+    }
+
+    return await Geolocator.getLastKnownPosition();
   } catch (_) {
     return null;
   }
@@ -310,6 +308,15 @@ Future<bool> _shouldPostPosition(
   SharedPreferences prefs,
   Position position,
 ) async {
+  final lastTimeMs = prefs.getInt('activeLocationTrackingLastTime') ?? 0;
+  final nowMs = DateTime.now().millisecondsSinceEpoch;
+  final elapsedMs = nowMs - lastTimeMs;
+
+  // Strict rate-limit guard: never post faster than 25s apart
+  if (lastTimeMs > 0 && elapsedMs < 25000) {
+    return false;
+  }
+
   final lastLat = prefs.getDouble(_trackingLastLatitudeKey);
   final lastLng = prefs.getDouble(_trackingLastLongitudeKey);
   if (lastLat == null || lastLng == null) return true;
@@ -320,12 +327,22 @@ Future<bool> _shouldPostPosition(
     position.latitude,
     position.longitude,
   );
-  return meters >= 50;
+
+  return meters >= 5 || elapsedMs >= 30000;
 }
 
 Future<bool> _postLocation(int tripId, Position position) async {
   final token = await _accessToken();
   if (token == null) return false;
+
+  final lat = double.parse(position.latitude.toStringAsFixed(6));
+  final lng = double.parse(position.longitude.toStringAsFixed(6));
+  final speed = (position.speed.isNaN || position.speed.isInfinite || position.speed < 0)
+      ? 0.0
+      : double.parse((position.speed * 3.6).toStringAsFixed(2));
+  final heading = (position.heading.isNaN || position.heading.isInfinite)
+      ? 0.0
+      : double.parse(position.heading.toStringAsFixed(2));
 
   try {
     final base = await ServerUrlStore.baseUrl;
@@ -336,10 +353,10 @@ Future<bool> _postLocation(int tripId, Position position) async {
         'Authorization': 'Bearer $token',
       },
       body: jsonEncode({
-        'latitude': position.latitude,
-        'longitude': position.longitude,
-        'speed_kmh': position.speed * 3.6,
-        'heading': position.heading,
+        'latitude': lat,
+        'longitude': lng,
+        'speed_kmh': speed,
+        'heading': heading,
         'timestamp': DateTime.now().toUtc().toIso8601String(),
       }),
     );

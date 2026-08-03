@@ -1047,7 +1047,23 @@ class TripCompleteSerializer(serializers.Serializer):
 
 
 class TripLocationLogSerializer(serializers.ModelSerializer):
-    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
+    latitude = serializers.FloatField(required=True)
+    longitude = serializers.FloatField(required=True)
+    idempotency_key = serializers.CharField(required=False, allow_null=True, allow_blank=True, max_length=120)
+    speed_kmh = serializers.FloatField(required=False, allow_null=True, default=0.0)
+    heading = serializers.FloatField(required=False, allow_null=True, default=0.0)
+
+    def validate_latitude(self, value):
+        return round(float(value), 6) if value is not None else value
+
+    def validate_longitude(self, value):
+        return round(float(value), 6) if value is not None else value
+
+    def validate_speed_kmh(self, value):
+        return round(float(value), 2) if value is not None else 0.0
+
+    def validate_heading(self, value):
+        return round(float(value), 2) if value is not None else 0.0
 
     class Meta:
         model = TripLocationLog

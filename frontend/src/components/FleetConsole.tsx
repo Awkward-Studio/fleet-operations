@@ -48,6 +48,7 @@ import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import dynamic from "next/dynamic";
+import { TripDetailModal } from "./TripDetailModal";
 import CustomerManager from "./CustomerManager";
 import ContractManager from "./ContractManager";
 import BillingManager from "./BillingManager";
@@ -162,6 +163,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [availability, setAvailability] = useState<Availability[]>([]);
   const [selectedTrip, setSelectedTrip] = useState<number | null>(null);
+  const [viewingTripId, setViewingTripId] = useState<number | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [selectedDriver, setSelectedDriver] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -794,6 +796,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                 onDriverChange={setSelectedDriver}
                 onAssign={handleAssignTrip}
                 onDelete={handleDeleteTrip}
+                onViewDetails={(id) => setViewingTripId(id)}
               />
             </>
           ) : null}
@@ -882,12 +885,16 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
             </>
           ) : null}
 
-          {section === "tracking" ? <TrackingView vehicles={vehicles} activeTrips={activeTrips} availability={availability} /> : null}
+          {section === "tracking" ? <TrackingView vehicles={vehicles} activeTrips={activeTrips} availability={availability} onViewDetails={(id) => setViewingTripId(id)} /> : null}
           {section === "availability" ? <AvailabilityView availability={availability} vehicles={vehicles} /> : null}
           {section === "compliance" ? <ComplianceView vehicles={vehicles} /> : null}
           {section === "ota" ? <OtaView availability={availability} vehicles={vehicles} unassignedTrips={unassignedTrips} /> : null}
         </main>
       </div>
+
+      {viewingTripId && (
+        <TripDetailModal tripId={viewingTripId} onClose={() => setViewingTripId(null)} />
+      )}
 
       {/* Add / Edit Vehicle Modal Overlay */}
       {(isAddingVehicle || editingVehicle) && (
@@ -1087,6 +1094,7 @@ function TripsView(props: {
   onDriverChange?: (value: number) => void;
   onAssign?: () => void;
   onDelete?: (tripId: number) => void;
+  onViewDetails?: (tripId: number) => void;
 }) {
   const [activeDropzone, setActiveDropzone] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
@@ -1311,6 +1319,8 @@ function TripsView(props: {
                         key={trip.id}
                         draggable={true}
                         onDragStart={(e) => handleDragStart(e, trip.id)}
+                        onClick={() => props.onViewDetails?.(trip.id)}
+                        style={{ cursor: "pointer" }}
                       >
                         <div className="kanban-card-header">
                           <div className={`kanban-card-icon-wrapper ${iconColorClass}`}>
@@ -2116,7 +2126,17 @@ function DriverForm({
   );
 }
 
-function TrackingView({ vehicles, activeTrips, availability }: { vehicles: Vehicle[]; activeTrips: Trip[]; availability: Availability[] }) {
+function TrackingView({
+  vehicles,
+  activeTrips,
+  availability,
+  onViewDetails,
+}: {
+  vehicles: Vehicle[];
+  activeTrips: Trip[];
+  availability: Availability[];
+  onViewDetails?: (tripId: number) => void;
+}) {
   return (
     <section className="grid">
       <Panel title="Vehicle Tracking Board">
@@ -2139,6 +2159,17 @@ function TrackingView({ vehicles, activeTrips, availability }: { vehicles: Vehic
                   <span>Next ready</span>
                   <strong>{next ? `${next.available_city} - ${formatDate(next.available_from)}` : "Unknown"}</strong>
                 </div>
+                {trip && (
+                  <div>
+                    <button
+                      className="button secondary"
+                      style={{ padding: "6px 12px", fontSize: 12, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--accent)" }}
+                      onClick={() => onViewDetails?.(trip.id)}
+                    >
+                      <MapPinned size={14} /> Live GPS Map
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -2147,9 +2178,9 @@ function TrackingView({ vehicles, activeTrips, availability }: { vehicles: Vehic
       <Panel title="How Tracking Works">
         <div className="explain-list">
           <p>Vehicle status changes when dispatch updates a trip: assigned, en route to pickup, active, completed, or cancelled.</p>
-          <p>The vehicle location is currently city-level. On trip completion the backend moves the vehicle to the drop city.</p>
+          <p>The vehicle location is updated dynamically whenever live GPS pings are received from the driver app during an active ride.</p>
+          <p>Clicking <strong>Live GPS Map</strong> on any active trip displays real-time breadcrumbs, vehicle position, and route trajectories on Leaflet maps.</p>
           <p>Predictive availability uses the estimated drop time plus a buffer to show where the car can take the next booking.</p>
-          <p>GPS tracking can be added next by saving periodic latitude and longitude pings per vehicle.</p>
         </div>
       </Panel>
     </section>

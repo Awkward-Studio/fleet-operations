@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
 
 import '../../../core/location_tracking_service.dart';
 import '../../../core/odometer_ocr_service.dart';
@@ -65,8 +66,27 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
       maxWidth: 1600,
     );
     if (image == null) return;
+
+    final croppedFile = await ImageCropper().cropImage(
+      sourcePath: image.path,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Crop Odometer',
+          toolbarColor: const Color(0xff0f766e),
+          toolbarWidgetColor: Colors.white,
+          initAspectRatio: CropAspectRatioPreset.ratio16x9,
+          lockAspectRatio: false,
+        ),
+        IOSUiSettings(
+          title: 'Crop Odometer',
+        ),
+      ],
+    );
+
+    if (croppedFile == null) return;
+
     setState(() {
-      _odometerPhoto = image;
+      _odometerPhoto = XFile(croppedFile.path);
       _ocrScanning = true;
       _ocrFailed = false;
       _ocrMessage = null;
@@ -76,10 +96,10 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
     try {
       final minimum = (_startOdometerKm ?? widget.trip.vehicleOdometerKm) + 1;
       final result = await OdometerOcrService.readOdometerKm(
-        image.path,
+        croppedFile.path,
         minimumKm: minimum,
       );
-      if (!mounted || _odometerPhoto?.path != image.path) return;
+      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
 
       setState(() {
         _ocrScanning = false;
@@ -94,7 +114,7 @@ class _EndRideScreenState extends ConsumerState<EndRideScreen> {
         _ocrMessage = 'Detected ${result.readingKm} KM. Please verify.';
       });
     } catch (_) {
-      if (!mounted || _odometerPhoto?.path != image.path) return;
+      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
       setState(() {
         _ocrScanning = false;
         _ocrFailed = true;

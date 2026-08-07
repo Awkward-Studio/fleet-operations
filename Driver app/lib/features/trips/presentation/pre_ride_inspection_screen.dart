@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:image_cropper/image_cropper.dart';
+
 import '../../../core/odometer_ocr_service.dart';
 import '../../../core/providers.dart';
 import '../data/trip_providers.dart';
@@ -48,8 +50,27 @@ class _PreRideInspectionScreenState
       maxWidth: 1600,
     );
     if (image == null) return;
+    
+    final croppedFile = await ImageCropper().cropImage(
+      sourcePath: image.path,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Crop Odometer',
+          toolbarColor: const Color(0xff0f766e),
+          toolbarWidgetColor: Colors.white,
+          initAspectRatio: CropAspectRatioPreset.ratio16x9,
+          lockAspectRatio: false,
+        ),
+        IOSUiSettings(
+          title: 'Crop Odometer',
+        ),
+      ],
+    );
+
+    if (croppedFile == null) return;
+
     setState(() {
-      _odometerPhoto = image;
+      _odometerPhoto = XFile(croppedFile.path);
       _ocrScanning = true;
       _ocrFailed = false;
       _ocrMessage = null;
@@ -58,10 +79,10 @@ class _PreRideInspectionScreenState
 
     try {
       final result = await OdometerOcrService.readOdometerKm(
-        image.path,
+        croppedFile.path,
         minimumKm: widget.trip.vehicleOdometerKm,
       );
-      if (!mounted || _odometerPhoto?.path != image.path) return;
+      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
 
       setState(() {
         _ocrScanning = false;
@@ -76,7 +97,7 @@ class _PreRideInspectionScreenState
         _ocrMessage = 'Detected ${result.readingKm} KM. Please verify.';
       });
     } catch (_) {
-      if (!mounted || _odometerPhoto?.path != image.path) return;
+      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
       setState(() {
         _ocrScanning = false;
         _ocrFailed = true;

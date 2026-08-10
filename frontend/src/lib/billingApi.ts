@@ -3,10 +3,21 @@ import { request, requestBlob, requestText } from "./api";
 export type BillingLegalEntity = {
   id: number;
   legal_name: string;
-  trade_name: string;
-  gstin: string;
-  state_code: string;
+  trade_name?: string;
+  pan?: string;
+  gstin?: string;
+  state_code?: string;
+  registered_address?: string;
+  billing_email?: string;
+  billing_phone?: string;
+  bank_name?: string;
+  bank_account_number?: string;
+  ifsc_code?: string;
+  bank_branch?: string;
+  invoice_notes?: string;
   is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type BillingTripSource = {
@@ -329,6 +340,13 @@ export async function listBillingInvoices(): Promise<BillingInvoice[]> {
 
 export async function listBillingEntities(): Promise<BillingLegalEntity[]> {
   return unwrapList(await request<ApiList<BillingLegalEntity>>("/billing/entities/"));
+}
+
+export function createBillingEntity(payload: Partial<BillingLegalEntity>): Promise<BillingLegalEntity> {
+  return request<BillingLegalEntity>("/billing/entities/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listBillableTrips(params: {

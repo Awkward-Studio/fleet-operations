@@ -43,6 +43,7 @@ import {
   FileText,
   Receipt,
   ShieldAlert,
+  Scale,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { useAuth } from "@/lib/AuthContext";
@@ -54,6 +55,7 @@ import ContractManager from "./ContractManager";
 import BillingManager from "./BillingManager";
 import FuelMileageManager from "./FuelMileageManager";
 import OtaSettlementManager from "./OtaSettlementManager";
+import LegalEntityManager from "./LegalEntityManager";
 
 const MapComponent = dynamic(() => import("./MapComponent"), { ssr: false });
 
@@ -92,7 +94,7 @@ import { DocumentUpload } from "@/components/DocumentUpload";
 
 
 type Role = "admin" | "dispatcher" | "accountant";
-export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "rentals" | "admin-panel";
+export type ConsoleSection = "dashboard" | "trips" | "create-trip" | "customers" | "contracts" | "billing" | "legal" | "fuel" | "vehicles" | "drivers" | "tracking" | "availability" | "compliance" | "ota" | "admin-panel";
 
 type NavItem = {
   href: string;
@@ -108,11 +110,11 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: "/", section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/trips", section: "trips", label: "Trips", icon: Route, allowedRoles: ["admin", "dispatcher", "accountant", "commercial"] },
-  { href: "/rentals", section: "rentals", label: "Rentals", icon: KeyRound, allowedRoles: ["admin", "dispatcher", "accountant", "commercial"] },
   { href: "/create-trip", section: "create-trip", label: "Create Trip", icon: Plus, allowedRoles: ["admin", "dispatcher", "commercial"], requiredPermission: "dispatch_trips" },
   { href: "/customers", section: "customers", label: "Customers", icon: Building2, allowedRoles: ["admin", "accountant", "commercial"], requiredPermission: "read_customers" },
   { href: "/contracts", section: "contracts", label: "Contracts", icon: FileText, allowedRoles: ["admin", "accountant", "commercial"], requiredPermission: "read_contracts" },
   { href: "/billing", section: "billing", label: "Fleet Billing", icon: Receipt, allowedRoles: ["admin", "accountant", "commercial"] },
+  { href: "/legal", section: "legal", label: "Legal Entities", icon: Scale, allowedRoles: ["admin", "accountant", "commercial"] },
   { href: "/fuel", section: "fuel", label: "Fuel & Mileage", icon: Fuel, allowedRoles: ["admin", "dispatcher", "accountant"] },
   { href: "/vehicles", section: "vehicles", label: "Vehicles", icon: Car, allowedRoles: ["admin", "dispatcher"] },
   { href: "/drivers", section: "drivers", label: "Drivers", icon: Users, allowedRoles: ["admin", "dispatcher"] },
@@ -642,6 +644,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
           {section === "customers" ? <CustomerManager /> : null}
           {section === "contracts" ? <ContractManager /> : null}
           {section === "billing" ? <BillingManager /> : null}
+          {section === "legal" ? <LegalEntityManager /> : null}
           {section === "fuel" ? <FuelMileageManager /> : null}
 
           {section === "dashboard" ? (
@@ -3121,7 +3124,6 @@ function pageTitle(section: ConsoleSection) {
   const titles: Record<ConsoleSection, string> = {
     dashboard: "Operations Dashboard",
     trips: "Trip Dispatch Board",
-    rentals: "Rental Module Console",
     "create-trip": "Create & Dispatch Trip",
     customers: "Corporate Customers",
     contracts: "Rate Contracts",
@@ -3133,6 +3135,7 @@ function pageTitle(section: ConsoleSection) {
     compliance: "Compliance",
     ota: "OTA Bidding",
     fuel: "Fuel & Mileage Log",
+    legal: "Legal Entities",
     "admin-panel": "Django Admin Panel"
   };
   return titles[section];
@@ -3142,7 +3145,6 @@ function pageSubtitle(section: ConsoleSection) {
   const subtitles: Record<ConsoleSection, string> = {
     dashboard: "A live view of fleet capacity, dispatch load, and operational exceptions",
     trips: "View trip cards, filter dispatches, and transition trip statuses",
-    rentals: "Manage corporate chauffeur rentals, package bookings, pricing, and driver checklists",
     "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
     customers: "Maintain corporate accounts, billing identities, and primary contacts",
     contracts: "Manage versioned rate cards, package matrices, taxes, and allowances",
@@ -3154,6 +3156,7 @@ function pageSubtitle(section: ConsoleSection) {
     compliance: "Prevent non-compliant cars from being used for outstation work",
     ota: "Prepare route acquisition decisions from OTA opportunities",
     fuel: "Log fuel refilling, track fuel receipts, analyze fuel consumption anomalies, and calculate true vehicle mileage",
+    legal: "Maintain internal legal entities, bank credentials, and tax settings",
     "admin-panel": "Access low-level Django database models, permissions, and system administration"
   };
   return subtitles[section];

@@ -59,8 +59,17 @@ class TripAdmin(admin.ModelAdmin):
 
 @admin.register(TripChecklist)
 class TripChecklistAdmin(admin.ModelAdmin):
-    list_display = ["trip", "start_odometer_km", "end_odometer_km", "fuel_level_percent", "created_at"]
+    list_display = [
+        "trip",
+        "start_odometer_km",
+        "start_reading_source",
+        "end_odometer_km",
+        "end_reading_source",
+        "fuel_level_percent",
+        "created_at",
+    ]
     search_fields = ["trip__customer_name", "trip__pickup_city", "trip__drop_city"]
+    list_filter = ["start_reading_source", "end_reading_source"]
 
 
 @admin.register(TripLocationLog)

@@ -1,0 +1,1403 @@
+{
+  "schema_version": 1,
+  "corpus_version": "2026-08-11.synthetic-observations.v1",
+  "description": "Privacy-safe synthetic ML Kit line observations for deterministic odometer parser and decision evaluation. These are not photographs and contain no production data.",
+  "baseline": {
+    "name": "legacy_text_fallback",
+    "scope": "Frozen approximation of the pre-fix text fallback and minimum-distance ranking; element geometry and device OCR latency are intentionally not claimed.",
+    "command": "dart run tool/odometer_ocr_evaluator.dart"
+  },
+  "cases": [
+    {
+      "id": "mechanical-clear-001",
+      "expected_km": 10234,
+      "reference_km": 10000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "ODO 010234 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-002",
+      "expected_km": 87654,
+      "reference_km": 87000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "87654 KM"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-003",
+      "expected_km": 123456,
+      "reference_km": 123000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "ODO 123 456 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-004",
+      "expected_km": 9999,
+      "reference_km": 9500,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "009999 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-005",
+      "expected_km": 456789,
+      "reference_km": 456000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "TOTAL 456,789 KM"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-006",
+      "expected_km": 42,
+      "reference_km": 40,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "000042 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-007",
+      "expected_km": 700001,
+      "reference_km": 699900,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "700001 ODO"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-008",
+      "expected_km": 31415,
+      "reference_km": 31000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "031415 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-009",
+      "expected_km": 80808,
+      "reference_km": 80000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "ODO 080808"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "mechanical-clear-010",
+      "expected_km": 2500000,
+      "reference_km": 2499000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "mechanical",
+      "tags": [
+        "mechanical",
+        "clear",
+        "rolling_digits"
+      ],
+      "recognized_lines": [
+        "2 500 000 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-001",
+      "expected_km": 541,
+      "reference_km": 500,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "ODO 541 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-002",
+      "expected_km": 87,
+      "reference_km": 80,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "87 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-003",
+      "expected_km": 999,
+      "reference_km": 950,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "ODO: 999"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-004",
+      "expected_km": 1005,
+      "reference_km": 1000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "1 005 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-005",
+      "expected_km": 15042,
+      "reference_km": 15000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "ODO 15042 KM"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-006",
+      "expected_km": 60001,
+      "reference_km": 59900,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "60001 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-007",
+      "expected_km": 7,
+      "reference_km": 5,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "ODO 7 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-008",
+      "expected_km": 320,
+      "reference_km": 300,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "TOTAL 320"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-009",
+      "expected_km": 8808,
+      "reference_km": 8700,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "8,808 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "lcd-clear-010",
+      "expected_km": 125000,
+      "reference_km": 124500,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "lcd",
+      "tags": [
+        "lcd",
+        "clear",
+        "backlit"
+      ],
+      "recognized_lines": [
+        "ODO 125000"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-001",
+      "expected_km": 125,
+      "reference_km": 100,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "ODO OI2S km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-002",
+      "expected_km": 8088,
+      "reference_km": 8000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "B0BB km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-003",
+      "expected_km": 51234,
+      "reference_km": 51000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "S1234 KM"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-004",
+      "expected_km": 2017,
+      "reference_km": 2000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "ZOI7 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-005",
+      "expected_km": 10001,
+      "reference_km": 9900,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "IOOOI km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-006",
+      "expected_km": 286,
+      "reference_km": 250,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "ZB6 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-007",
+      "expected_km": 6500,
+      "reference_km": 6400,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "6SOO KM"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-008",
+      "expected_km": 81818,
+      "reference_km": 81000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "BIBIB km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-009",
+      "expected_km": 20202,
+      "reference_km": 20000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "ZOZOZ"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "seven-segment-010",
+      "expected_km": 1515,
+      "reference_km": 1500,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "seven_segment",
+      "tags": [
+        "seven_segment",
+        "clear",
+        "glyph_confusion"
+      ],
+      "recognized_lines": [
+        "ISIS km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-001",
+      "expected_km": 12541,
+      "reference_km": 12500,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Range 846 km",
+        "ODO 12541 km",
+        "Avg 7.6 km/l",
+        "24 C"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-002",
+      "expected_km": 8808,
+      "reference_km": 8750,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "12:34",
+        "Trip A 123.4 km",
+        "ODO 8808 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "trip_meter_present",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-003",
+      "expected_km": 541,
+      "reference_km": 500,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Fuel economy 16.2",
+        "Range 310 km",
+        "ODO 541 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-004",
+      "expected_km": 45210,
+      "reference_km": 45000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Speed 0 km/h",
+        "ODO 45210 km",
+        "Range 600 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-005",
+      "expected_km": 100005,
+      "reference_km": 100000,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Trip B 45.6",
+        "100005 km",
+        "08:06"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "trip_meter_present",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-006",
+      "expected_km": 999,
+      "reference_km": 950,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Range 320 km",
+        "ODO 999 km",
+        "Clock 20:15"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-007",
+      "expected_km": 7201,
+      "reference_km": 7150,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Outside 24 C",
+        "ODO 7201",
+        "Range 92 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-008",
+      "expected_km": 250050,
+      "reference_km": 250000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "250050 km",
+        "Trip 50.0 km",
+        "Range 510"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "trip_meter_present",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-009",
+      "expected_km": 16000,
+      "reference_km": 15900,
+      "mode": "START",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "AVG 16.0 km/l",
+        "ODO 16000 km",
+        "Time 05:09"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "multi-number-010",
+      "expected_km": 314159,
+      "reference_km": 314000,
+      "mode": "END",
+      "expected_decision": "ACCEPTED",
+      "display_type": "multi_number",
+      "tags": [
+        "multi_number",
+        "clear",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "Trip 12.7",
+        "314159 KM",
+        "Range 541 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-001",
+      "expected_km": 12541,
+      "reference_km": 12500,
+      "mode": "START",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "blur"
+      ],
+      "recognized_lines": [
+        "OD? 12S4|"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-002",
+      "expected_km": 8808,
+      "reference_km": 8750,
+      "mode": "END",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "glare"
+      ],
+      "recognized_lines": [
+        "B O ? 8"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-003",
+      "expected_km": 541,
+      "reference_km": 500,
+      "mode": "START",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "clipped"
+      ],
+      "recognized_lines": [
+        "? 5 4 ?"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-004",
+      "expected_km": 45210,
+      "reference_km": 45000,
+      "mode": "END",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "low_contrast"
+      ],
+      "recognized_lines": [
+        "45Z?O"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-005",
+      "expected_km": 100005,
+      "reference_km": 100000,
+      "mode": "START",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "underexposed"
+      ],
+      "recognized_lines": [
+        "IOO?OS"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-006",
+      "expected_km": 999,
+      "reference_km": 950,
+      "mode": "END",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "motion_blur"
+      ],
+      "recognized_lines": [
+        "9 ? 9"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-007",
+      "expected_km": 7201,
+      "reference_km": 7150,
+      "mode": "START",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "skew"
+      ],
+      "recognized_lines": [
+        "7Z 0 ?"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-008",
+      "expected_km": 250050,
+      "reference_km": 250000,
+      "mode": "END",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "overexposed"
+      ],
+      "recognized_lines": [
+        "2S0O?O"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-009",
+      "expected_km": 16000,
+      "reference_km": 15900,
+      "mode": "START",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "glare",
+        "clipped"
+      ],
+      "recognized_lines": [
+        "I6?00"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "degraded-review-010",
+      "expected_km": 314159,
+      "reference_km": 314000,
+      "mode": "END",
+      "expected_decision": "NEEDS_REVIEW",
+      "display_type": "degraded",
+      "tags": [
+        "degraded",
+        "tiny_digits"
+      ],
+      "recognized_lines": [
+        "3I4?S9"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-001",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "START",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "no_odometer",
+        "competing_numbers"
+      ],
+      "recognized_lines": [
+        "12:34",
+        "Range 846 km",
+        "Avg 7.6 km/l"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-002",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "END",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "no_odometer",
+        "date"
+      ],
+      "recognized_lines": [
+        "20-07-2026",
+        "24 C"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-003",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "START",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "no_odometer",
+        "speed"
+      ],
+      "recognized_lines": [
+        "Speed 100 km/h",
+        "RPM 2500"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-004",
+      "expected_km": null,
+      "reference_km": 10000,
+      "mode": "END",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "trip_meter_only"
+      ],
+      "recognized_lines": [
+        "Trip A 123.4 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "trip_meter_only",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-005",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "START",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "fuel_economy_only"
+      ],
+      "recognized_lines": [
+        "Fuel economy 16.0 km/l"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-006",
+      "expected_km": null,
+      "reference_km": 50000,
+      "mode": "END",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "range_only"
+      ],
+      "recognized_lines": [
+        "Range 541 km"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-007",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "START",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "unreadable"
+      ],
+      "recognized_lines": [
+        "ODO ----"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "none"
+    },
+    {
+      "id": "negative-no-reading-008",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "END",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "unrelated_text"
+      ],
+      "recognized_lines": [
+        "12 345",
+        "invoice 2627"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-009",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "START",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "coordinates"
+      ],
+      "recognized_lines": [
+        "GPS 19.14475 72.85596"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "km"
+    },
+    {
+      "id": "negative-no-reading-010",
+      "expected_km": null,
+      "reference_km": 0,
+      "mode": "END",
+      "expected_decision": "NO_READING",
+      "display_type": "negative",
+      "tags": [
+        "negative",
+        "blank"
+      ],
+      "recognized_lines": [
+        "KM",
+        "blank display"
+      ],
+      "privacy": {
+        "classification": "synthetic",
+        "consent": "not_required",
+        "exif_stripped": true
+      },
+      "decimal_notation": "none",
+      "units": "none"
+    }
+  ]
+}

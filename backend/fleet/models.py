@@ -34,6 +34,18 @@ class TripStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class OdometerReadingSource(models.TextChoices):
+    MANUAL = "MANUAL", "Manual"
+    OCR_CONFIRMED = "OCR_CONFIRMED", "OCR confirmed"
+    OCR_CORRECTED = "OCR_CORRECTED", "OCR corrected"
+
+
+class OdometerClientDecision(models.TextChoices):
+    ACCEPTED = "ACCEPTED", "Accepted"
+    NEEDS_REVIEW = "NEEDS_REVIEW", "Needs review"
+    NO_READING = "NO_READING", "No reading"
+
+
 class CustomerStatus(models.TextChoices):
     ACTIVE = "ACTIVE", "Active"
     INACTIVE = "INACTIVE", "Inactive"
@@ -1006,6 +1018,52 @@ class TripChecklist(models.Model):
     notes = models.TextField(blank=True)
     start_idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
     complete_idempotency_key = models.CharField(max_length=120, unique=True, null=True, blank=True)
+    start_reading_source = models.CharField(
+        max_length=24,
+        choices=OdometerReadingSource.choices,
+        default=OdometerReadingSource.MANUAL,
+    )
+    start_driver_confirmed = models.BooleanField(default=False)
+    start_confirmed_at = models.DateTimeField(null=True, blank=True)
+    start_expected_reference_km = models.PositiveIntegerField(null=True, blank=True)
+    start_client_ocr_decision = models.CharField(
+        max_length=24,
+        choices=OdometerClientDecision.choices,
+        null=True,
+        blank=True,
+    )
+    start_client_version = models.CharField(max_length=64, blank=True)
+    start_override_reason = models.CharField(max_length=500, blank=True)
+    start_overridden_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="overridden_trip_start_odometers",
+    )
+    end_reading_source = models.CharField(
+        max_length=24,
+        choices=OdometerReadingSource.choices,
+        default=OdometerReadingSource.MANUAL,
+    )
+    end_driver_confirmed = models.BooleanField(default=False)
+    end_confirmed_at = models.DateTimeField(null=True, blank=True)
+    end_expected_reference_km = models.PositiveIntegerField(null=True, blank=True)
+    end_client_ocr_decision = models.CharField(
+        max_length=24,
+        choices=OdometerClientDecision.choices,
+        null=True,
+        blank=True,
+    )
+    end_client_version = models.CharField(max_length=64, blank=True)
+    end_override_reason = models.CharField(max_length=500, blank=True)
+    end_overridden_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="overridden_trip_end_odometers",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

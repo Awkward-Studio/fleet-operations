@@ -2,9 +2,12 @@ import random
 from decimal import Decimal
 from datetime import timedelta
 
+from accounts.models import UserRole
+from django.conf import settings
 from django.db import models
 from django.db.models import Count, Q
 from django.db import transaction
+from django.core.files.storage import default_storage
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view
@@ -82,6 +85,73 @@ def _store_private_trip_asset(upload, folder, request):
         request=request,
         metadata={"source": "fleet.trip_operation", "folder": folder},
     )
+
+
+def _delete_asset_blob(asset):
+    if asset and asset.storage_key:
+        default_storage.delete(asset.storage_key)
+
+
+def _can_override_odometer(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            user.is_superuser
+            or user.role in {UserRole.ADMIN, UserRole.OPERATIONS_APPROVER}
+        )
+    )
+
+
+def _odometer_guard_response(request, data, *, submitted_km, reference_km, maximum_delta_km, phase):
+    override_requested = data["odometer_override"]
+    if override_requested and not _can_override_odometer(request.user):
+        return Response(
+            {"detail": "Only an administrator or operations approver may override odometer safeguards."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    problems = []
+    stale_reference = data["expected_reference_km"] != reference_km
+    if stale_reference:
+        problems.append("The odometer reference changed after this screen was loaded.")
+    if phase == "start" and submitted_km < reference_km:
+        problems.append("Start odometer cannot be below the vehicle odometer.")
+    if phase == "end" and submitted_km <= reference_km:
+        problems.append("End odometer must be greater than the trip start odometer.")
+    if submitted_km > reference_km and submitted_km - reference_km > maximum_delta_km:
+        problems.append(
+            f"The reading exceeds the configured {phase} delta of {maximum_delta_km} km."
+        )
+
+    if problems and not override_requested:
+        return Response(
+            {
+                "detail": " ".join(problems),
+                "code": (
+                    "ODOMETER_REFERENCE_CONFLICT"
+                    if stale_reference
+                    else "ODOMETER_PLAUSIBILITY_REJECTED"
+                ),
+                "authoritative_reference_km": reference_km,
+            },
+            status=(status.HTTP_409_CONFLICT if stale_reference else status.HTTP_400_BAD_REQUEST),
+        )
+    return None
+
+
+def _odometer_provenance(data, *, prefix, user):
+    overridden_by = user if data["odometer_override"] and user.is_authenticated else None
+    return {
+        f"{prefix}_reading_source": data["reading_source"],
+        f"{prefix}_driver_confirmed": data["driver_confirmed"],
+        f"{prefix}_confirmed_at": timezone.now(),
+        f"{prefix}_expected_reference_km": data["expected_reference_km"],
+        f"{prefix}_client_ocr_decision": data.get("client_ocr_decision"),
+        f"{prefix}_client_version": data["client_version"],
+        f"{prefix}_override_reason": data["odometer_override_reason"],
+        f"{prefix}_overridden_by": overridden_by,
+    }
 
 
 def _assert_driver_can_operate_trip(request, trip):
@@ -244,43 +314,85 @@ class TripViewSet(viewsets.ModelViewSet):
         if idempotency_key:
             existing = TripChecklist.objects.filter(start_idempotency_key=idempotency_key).first()
             if existing:
+                if existing.trip_id != trip.id:
+                    return Response(
+                        {"detail": "The idempotency key is already bound to another trip."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 return Response(TripChecklistSerializer(existing, context={"request": request}).data, status=status.HTTP_200_OK)
 
-        compliance_error = _assert_trip_compliance(trip)
-        if compliance_error:
-            return compliance_error
+        created_asset = None
+        try:
+            with transaction.atomic():
+                trip = Trip.objects.select_for_update().select_related("driver", "vehicle").get(pk=trip.pk)
+                if idempotency_key:
+                    existing = TripChecklist.objects.select_for_update().filter(
+                        start_idempotency_key=idempotency_key
+                    ).first()
+                    if existing:
+                        if existing.trip_id != trip.id:
+                            return Response(
+                                {"detail": "The idempotency key is already bound to another trip."},
+                                status=status.HTTP_409_CONFLICT,
+                            )
+                        return Response(
+                            TripChecklistSerializer(existing, context={"request": request}).data,
+                            status=status.HTTP_200_OK,
+                        )
+                if TripChecklist.objects.select_for_update().filter(trip=trip).exists():
+                    return Response(
+                        {"detail": "The start checklist has already been submitted."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
-        start_asset = serializer.validated_data.get("start_odometer_asset")
-        upload = serializer.validated_data.get("start_odometer_photo")
-        if upload:
-            start_asset = _store_private_trip_asset(upload, "odometers/start", request)
+                compliance_error = _assert_trip_compliance(trip)
+                if compliance_error:
+                    return compliance_error
+                vehicle = Vehicle.objects.select_for_update().get(pk=trip.vehicle_id)
+                guard_error = _odometer_guard_response(
+                    request,
+                    serializer.validated_data,
+                    submitted_km=serializer.validated_data["start_odometer_km"],
+                    reference_km=vehicle.odometer_km,
+                    maximum_delta_km=getattr(settings, "ODOMETER_MAX_START_DELTA_KM", 500),
+                    phase="start",
+                )
+                if guard_error:
+                    return guard_error
 
-        with transaction.atomic():
-            checklist, created = TripChecklist.objects.update_or_create(
-                trip=trip,
-                defaults={
-                    "start_odometer_km": serializer.validated_data["start_odometer_km"],
-                    "start_odometer_asset": start_asset,
-                    "cleanliness_ok": serializer.validated_data["cleanliness_ok"],
-                    "fuel_level_percent": serializer.validated_data["fuel_level_percent"],
-                    "tire_pressure_ok": serializer.validated_data["tire_pressure_ok"],
-                    "notes": serializer.validated_data.get("notes", ""),
-                    "start_idempotency_key": idempotency_key,
-                    "created_by": request.user if request.user.is_authenticated else None,
-                },
-            )
-            trip.status = TripStatus.EN_ROUTE_PICKUP
-            trip.save(update_fields=["status", "updated_at"])
-            if trip.vehicle_id:
-                trip.vehicle.status = VehicleStatus.EN_ROUTE_PICKUP
-                trip.vehicle.save(update_fields=["status"])
-            if trip.driver_id:
-                trip.driver.status = DriverStatus.ON_TRIP
-                trip.driver.save(update_fields=["status"])
+                start_asset = serializer.validated_data.get("start_odometer_asset")
+                upload = serializer.validated_data.get("start_odometer_photo")
+                if upload:
+                    created_asset = _store_private_trip_asset(upload, "odometers/start", request)
+                    start_asset = created_asset
+
+                checklist = TripChecklist.objects.create(
+                    trip=trip,
+                    start_odometer_km=serializer.validated_data["start_odometer_km"],
+                    start_odometer_asset=start_asset,
+                    cleanliness_ok=serializer.validated_data["cleanliness_ok"],
+                    fuel_level_percent=serializer.validated_data["fuel_level_percent"],
+                    tire_pressure_ok=serializer.validated_data["tire_pressure_ok"],
+                    notes=serializer.validated_data.get("notes", ""),
+                    start_idempotency_key=idempotency_key,
+                    created_by=request.user if request.user.is_authenticated else None,
+                    **_odometer_provenance(serializer.validated_data, prefix="start", user=request.user),
+                )
+                trip.status = TripStatus.EN_ROUTE_PICKUP
+                trip.save(update_fields=["status", "updated_at"])
+                vehicle.status = VehicleStatus.EN_ROUTE_PICKUP
+                vehicle.save(update_fields=["status"])
+                if trip.driver_id:
+                    driver = Driver.objects.select_for_update().get(pk=trip.driver_id)
+                    driver.status = DriverStatus.ON_TRIP
+                    driver.save(update_fields=["status"])
+        except Exception:
+            _delete_asset_blob(created_asset)
+            raise
 
         return Response(
             TripChecklistSerializer(checklist, context={"request": request}).data,
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["get", "post"])
@@ -410,6 +522,11 @@ class TripViewSet(viewsets.ModelViewSet):
         if retry_key:
             existing = TripChecklist.objects.filter(complete_idempotency_key=retry_key).first()
             if existing:
+                if existing.trip_id != trip.id:
+                    return Response(
+                        {"detail": "The idempotency key is already bound to another trip."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 if existing.trip.status == TripStatus.COMPLETED:
                     from billing.services import CloseoutService
                     CloseoutService.create_from_trip_completion(existing.trip_id, retry_key)
@@ -424,50 +541,95 @@ class TripViewSet(viewsets.ModelViewSet):
         if idempotency_key:
             existing = TripChecklist.objects.filter(complete_idempotency_key=idempotency_key).first()
             if existing:
+                if existing.trip_id != trip.id:
+                    return Response(
+                        {"detail": "The idempotency key is already bound to another trip."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
                 if existing.trip.status == TripStatus.COMPLETED:
                     from billing.services import CloseoutService
                     CloseoutService.create_from_trip_completion(existing.trip_id, idempotency_key)
                 return Response(TripChecklistSerializer(existing, context={"request": request}).data, status=status.HTTP_200_OK)
 
-        try:
-            checklist = trip.checklist
-        except TripChecklist.DoesNotExist:
-            return Response({"detail": "Start checklist must be submitted before completing trip."}, status=status.HTTP_400_BAD_REQUEST)
-
         end_odometer_km = serializer.validated_data["end_odometer_km"]
-        if end_odometer_km <= checklist.start_odometer_km:
-            return Response(
-                {"detail": "End odometer must be greater than start odometer."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        created_asset = None
+        try:
+            with transaction.atomic():
+                trip = Trip.objects.select_for_update().select_related("driver", "vehicle").get(pk=trip.pk)
+                if idempotency_key:
+                    existing = TripChecklist.objects.select_for_update().filter(
+                        complete_idempotency_key=idempotency_key
+                    ).first()
+                    if existing:
+                        if existing.trip_id != trip.id:
+                            return Response(
+                                {"detail": "The idempotency key is already bound to another trip."},
+                                status=status.HTTP_409_CONFLICT,
+                            )
+                        return Response(
+                            TripChecklistSerializer(existing, context={"request": request}).data,
+                            status=status.HTTP_200_OK,
+                        )
+                try:
+                    checklist = TripChecklist.objects.select_for_update().get(trip=trip)
+                except TripChecklist.DoesNotExist:
+                    return Response(
+                        {"detail": "Start checklist must be submitted before completing trip."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if checklist.end_odometer_km is not None:
+                    return Response(
+                        {"detail": "The trip completion has already been submitted."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
-        end_asset = serializer.validated_data.get("end_odometer_asset")
-        upload = serializer.validated_data.get("end_odometer_photo")
-        if upload:
-            end_asset = _store_private_trip_asset(upload, "odometers/end", request)
+                guard_error = _odometer_guard_response(
+                    request,
+                    serializer.validated_data,
+                    submitted_km=end_odometer_km,
+                    reference_km=checklist.start_odometer_km,
+                    maximum_delta_km=getattr(settings, "ODOMETER_MAX_TRIP_DELTA_KM", 1000),
+                    phase="end",
+                )
+                if guard_error:
+                    return guard_error
 
-        with transaction.atomic():
-            checklist.end_odometer_km = end_odometer_km
-            checklist.end_odometer_asset = end_asset
-            checklist.complete_idempotency_key = idempotency_key
-            checklist.completed_by = request.user if request.user.is_authenticated else None
-            if serializer.validated_data.get("notes"):
-                checklist.notes = serializer.validated_data["notes"]
-            checklist.save()
+                end_asset = serializer.validated_data.get("end_odometer_asset")
+                upload = serializer.validated_data.get("end_odometer_photo")
+                if upload:
+                    created_asset = _store_private_trip_asset(upload, "odometers/end", request)
+                    end_asset = created_asset
 
-            trip.status = TripStatus.COMPLETED
-            trip.distance_km = Decimal(end_odometer_km - checklist.start_odometer_km)
-            trip.save(update_fields=["status", "distance_km", "updated_at"])
-            if trip.vehicle_id:
-                trip.vehicle.status = VehicleStatus.IDLE
-                trip.vehicle.current_city = trip.drop_city
-                trip.vehicle.odometer_km = end_odometer_km
-                trip.vehicle.save(update_fields=["status", "current_city", "odometer_km"])
-            if trip.driver_id:
-                trip.driver.status = DriverStatus.AVAILABLE
-                trip.driver.save(update_fields=["status"])
-            from billing.services import CloseoutService
-            CloseoutService.create_from_trip_completion(trip.id, idempotency_key)
+                checklist.end_odometer_km = end_odometer_km
+                checklist.end_odometer_asset = end_asset
+                checklist.complete_idempotency_key = idempotency_key
+                checklist.completed_by = request.user if request.user.is_authenticated else None
+                for field, value in _odometer_provenance(
+                    serializer.validated_data, prefix="end", user=request.user
+                ).items():
+                    setattr(checklist, field, value)
+                if serializer.validated_data.get("notes"):
+                    checklist.notes = serializer.validated_data["notes"]
+                checklist.save()
+
+                trip.status = TripStatus.COMPLETED
+                trip.distance_km = Decimal(end_odometer_km - checklist.start_odometer_km)
+                trip.save(update_fields=["status", "distance_km", "updated_at"])
+                if trip.vehicle_id:
+                    vehicle = Vehicle.objects.select_for_update().get(pk=trip.vehicle_id)
+                    vehicle.status = VehicleStatus.IDLE
+                    vehicle.current_city = trip.drop_city
+                    vehicle.odometer_km = end_odometer_km
+                    vehicle.save(update_fields=["status", "current_city", "odometer_km"])
+                if trip.driver_id:
+                    driver = Driver.objects.select_for_update().get(pk=trip.driver_id)
+                    driver.status = DriverStatus.AVAILABLE
+                    driver.save(update_fields=["status"])
+                from billing.services import CloseoutService
+                CloseoutService.create_from_trip_completion(trip.id, idempotency_key)
+        except Exception:
+            _delete_asset_blob(created_asset)
+            raise
 
         return Response(TripChecklistSerializer(checklist, context={"request": request}).data, status=status.HTTP_200_OK)
 

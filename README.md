@@ -46,6 +46,10 @@ App URL: `http://localhost:3001` or `http://YOUR-LAN-IP:3001`
 By default, the browser calls the backend on the same hostname at port `8001`.
 Set `NEXT_PUBLIC_API_BASE_URL` only if your backend is on a different host or port.
 
+## Driver odometer OCR
+
+The Flutter driver app contains an on-device, odometer-only OCR assistant with mandatory driver confirmation and server-side provenance/odometer safeguards. Operational and release guidance is in [`Driver app/docs/odometer_ocr_operations.md`](Driver%20app/docs/odometer_ocr_operations.md).
+
 ## Frontend Pages
 
 - `/` - operations dashboard

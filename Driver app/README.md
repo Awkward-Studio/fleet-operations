@@ -1,17 +1,21 @@
-# driver_app
+# Index Fleet driver app
 
-A new Flutter project.
+Flutter driver workflow for assigned trips, OTP verification, location tracking, inspections, and trip completion.
 
-## Getting Started
+## Odometer OCR
 
-This project is a starting point for a Flutter application.
+The app uses on-device ML Kit Text Recognition only for start/end odometer assistance. It has no number-plate recognizer and never treats OCR as authoritative: only a high-evidence result may prefill, and the driver must compare it with the photo and confirm it before submission.
 
-A few resources to get you started if this is your first Flutter project:
+See [docs/odometer_ocr_operations.md](docs/odometer_ocr_operations.md) for architecture, thresholds, testing, capture guidance, privacy, overrides, troubleshooting, and release gates. The evaluated Gemini Nano decision is in [docs/odometer_gemini_nano_feasibility.md](docs/odometer_gemini_nano_feasibility.md).
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Development
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```sh
+flutter pub get
+flutter analyze
+flutter test
+dart run tool/odometer_ocr_evaluator.dart
+flutter build apk --debug
+```
+
+The backend must be reachable at the API base configured by the app. Odometer submissions use provenance contract `driver-app/1.0.0+1`; update that value when the application version changes.

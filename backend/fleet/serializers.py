@@ -12,6 +12,8 @@ from .models import (
     CustomerContact,
     Driver,
     DriverStatus,
+    OdometerClientDecision,
+    OdometerReadingSource,
     BillToType,
     PricingAmountStatus,
     RateBook,
@@ -1001,13 +1003,85 @@ class TripChecklistSerializer(serializers.ModelSerializer):
             "notes",
             "start_idempotency_key",
             "complete_idempotency_key",
+            "start_reading_source",
+            "start_driver_confirmed",
+            "start_confirmed_at",
+            "start_expected_reference_km",
+            "start_client_ocr_decision",
+            "start_client_version",
+            "start_override_reason",
+            "start_overridden_by",
+            "end_reading_source",
+            "end_driver_confirmed",
+            "end_confirmed_at",
+            "end_expected_reference_km",
+            "end_client_ocr_decision",
+            "end_client_version",
+            "end_override_reason",
+            "end_overridden_by",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
 
 
-class TripChecklistSubmitSerializer(serializers.Serializer):
+class OdometerSubmissionSerializer(serializers.Serializer):
+    reading_source = serializers.ChoiceField(choices=OdometerReadingSource.choices)
+    driver_confirmed = serializers.BooleanField()
+    expected_reference_km = serializers.IntegerField(min_value=0)
+    client_ocr_decision = serializers.ChoiceField(
+        choices=OdometerClientDecision.choices,
+        required=False,
+        allow_null=True,
+    )
+    client_version = serializers.CharField(max_length=64, allow_blank=False)
+    odometer_override = serializers.BooleanField(default=False)
+    odometer_override_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=500,
+    )
+
+    def validate(self, attrs):
+        if not attrs["driver_confirmed"]:
+            raise serializers.ValidationError(
+                {"driver_confirmed": "The driver must verify the reading against the photo."}
+            )
+
+        source = attrs["reading_source"]
+        decision = attrs.get("client_ocr_decision")
+        expected_decision = {
+            OdometerReadingSource.OCR_CONFIRMED: OdometerClientDecision.ACCEPTED,
+            OdometerReadingSource.OCR_CORRECTED: OdometerClientDecision.NEEDS_REVIEW,
+        }.get(source)
+        if source == OdometerReadingSource.MANUAL and decision is not None:
+            raise serializers.ValidationError(
+                {"client_ocr_decision": "Manual readings must not include an OCR decision."}
+            )
+        if expected_decision is not None and decision != expected_decision:
+            raise serializers.ValidationError(
+                {
+                    "client_ocr_decision": (
+                        f"{source} readings require {expected_decision}."
+                    )
+                }
+            )
+
+        reason = attrs.get("odometer_override_reason", "").strip()
+        if attrs["odometer_override"] and len(reason) < 10:
+            raise serializers.ValidationError(
+                {"odometer_override_reason": "An override reason of at least 10 characters is required."}
+            )
+        if not attrs["odometer_override"] and reason:
+            raise serializers.ValidationError(
+                {"odometer_override_reason": "A reason is only valid when odometer_override is true."}
+            )
+        attrs["odometer_override_reason"] = reason
+        return attrs
+
+
+class TripChecklistSubmitSerializer(OdometerSubmissionSerializer):
     start_odometer_km = serializers.IntegerField(min_value=0)
     start_odometer_asset_id = serializers.PrimaryKeyRelatedField(
         queryset=UploadedAsset.objects.all(),
@@ -1023,12 +1097,13 @@ class TripChecklistSubmitSerializer(serializers.Serializer):
     idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
 
     def validate(self, attrs):
+        attrs = super().validate(attrs)
         if not attrs.get("start_odometer_asset") and not attrs.get("start_odometer_photo"):
             raise serializers.ValidationError("Provide start_odometer_asset_id or start_odometer_photo.")
         return attrs
 
 
-class TripCompleteSerializer(serializers.Serializer):
+class TripCompleteSerializer(OdometerSubmissionSerializer):
     end_odometer_km = serializers.IntegerField(min_value=0)
     end_odometer_asset_id = serializers.PrimaryKeyRelatedField(
         queryset=UploadedAsset.objects.all(),
@@ -1041,6 +1116,7 @@ class TripCompleteSerializer(serializers.Serializer):
     idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=120)
 
     def validate(self, attrs):
+        attrs = super().validate(attrs)
         if not attrs.get("end_odometer_asset") and not attrs.get("end_odometer_photo"):
             raise serializers.ValidationError("Provide end_odometer_asset_id or end_odometer_photo.")
         return attrs

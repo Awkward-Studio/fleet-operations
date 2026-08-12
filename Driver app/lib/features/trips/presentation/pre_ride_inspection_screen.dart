@@ -2,15 +2,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 
-import 'package:image_cropper/image_cropper.dart';
-
-import '../../../core/odometer_ocr_service.dart';
+import '../../../core/odometer_ocr_contract.dart';
 import '../../../core/providers.dart';
 import '../data/trip_providers.dart';
 import '../domain/trip.dart';
-import 'widgets/odometer_ocr_status.dart';
+import 'widgets/odometer_capture_field.dart';
 
 class PreRideInspectionScreen extends ConsumerStatefulWidget {
   const PreRideInspectionScreen({super.key, required this.trip});
@@ -26,15 +23,11 @@ class _PreRideInspectionScreenState
     extends ConsumerState<PreRideInspectionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _odometerController = TextEditingController();
-  final _picker = ImagePicker();
-  XFile? _odometerPhoto;
+  OdometerCaptureSnapshot _odometer = const OdometerCaptureSnapshot();
   bool _cleanlinessOk = true;
   bool _fuelLevelOk = true;
   bool _tirePressureOk = true;
-  bool _ocrScanning = false;
   bool _submitting = false;
-  bool _ocrFailed = false;
-  String? _ocrMessage;
   String? _error;
 
   @override
@@ -43,73 +36,12 @@ class _PreRideInspectionScreenState
     super.dispose();
   }
 
-  Future<void> _capturePhoto() async {
-    final image = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 85,
-      maxWidth: 1600,
-    );
-    if (image == null) return;
-    
-    final croppedFile = await ImageCropper().cropImage(
-      sourcePath: image.path,
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: 'Crop Odometer',
-          toolbarColor: const Color(0xff0f766e),
-          toolbarWidgetColor: Colors.white,
-          initAspectRatio: CropAspectRatioPreset.ratio16x9,
-          lockAspectRatio: false,
-        ),
-        IOSUiSettings(
-          title: 'Crop Odometer',
-        ),
-      ],
-    );
-
-    if (croppedFile == null) return;
-
-    setState(() {
-      _odometerPhoto = XFile(croppedFile.path);
-      _ocrScanning = true;
-      _ocrFailed = false;
-      _ocrMessage = null;
-      _error = null;
-    });
-
-    try {
-      final result = await OdometerOcrService.readOdometerKm(
-        croppedFile.path,
-        minimumKm: widget.trip.vehicleOdometerKm,
-      );
-      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
-
-      setState(() {
-        _ocrScanning = false;
-        if (result.readingKm == null) {
-          _ocrFailed = true;
-          _ocrMessage = 'No odometer reading detected. Enter it manually.';
-          return;
-        }
-
-        _ocrFailed = false;
-        _odometerController.text = result.readingKm.toString();
-        _ocrMessage = 'Detected ${result.readingKm} KM. Please verify.';
-      });
-    } catch (_) {
-      if (!mounted || _odometerPhoto?.path != croppedFile.path) return;
-      setState(() {
-        _ocrScanning = false;
-        _ocrFailed = true;
-        _ocrMessage = 'OCR failed. Enter the odometer reading manually.';
-      });
-    }
-  }
-
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_odometerPhoto == null) {
-      setState(() => _error = 'Capture the starting odometer photo.');
+    if (!_odometer.canSubmit) {
+      setState(
+        () => _error = 'Capture, verify, and confirm the odometer reading.',
+      );
       return;
     }
 
@@ -128,11 +60,18 @@ class _PreRideInspectionScreenState
           'fuel_level_percent': _fuelLevelOk ? '75' : '25',
           'tire_pressure_ok': _tirePressureOk.toString(),
           'notes': 'Submitted from driver mobile pre-ride inspection.',
+          'reading_source': _odometer.source.apiValue,
+          'driver_confirmed': _odometer.confirmed.toString(),
+          'expected_reference_km': widget.trip.vehicleOdometerKm.toString(),
+          'client_version': 'driver-app/1.0.0+1',
+          'odometer_override': _odometer.requiresOverrideReason.toString(),
+          'odometer_override_reason': _odometer.overrideReason.trim(),
+          'client_ocr_decision': ?_odometer.clientDecisionApiValue,
           'idempotency_key':
               'pre-ride-${widget.trip.id}-${DateTime.now().millisecondsSinceEpoch}',
         },
         fileField: 'start_odometer_photo',
-        file: File(_odometerPhoto!.path),
+        file: File(_odometer.photoPath!),
       );
 
       ref.invalidate(currentDriverTripProvider);
@@ -160,37 +99,11 @@ class _PreRideInspectionScreenState
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 12),
-              _PhotoCaptureCard(
-                photo: _odometerPhoto,
-                onCapture: _capturePhoto,
-              ),
-              OdometerOcrStatus(
-                scanning: _ocrScanning,
-                message: _ocrMessage,
-                isError: _ocrFailed,
-              ),
-              const SizedBox(height: 18),
-              TextFormField(
+              OdometerCaptureField(
                 controller: _odometerController,
-                keyboardType: TextInputType.number,
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(
-                  labelText: 'Odometer Reading (KM)*',
-                  hintText: 'e.g. ${widget.trip.vehicleOdometerKm}',
-                  prefixIcon: const Icon(Icons.speed_outlined),
-                  helperText:
-                      'Must be at least ${widget.trip.vehicleOdometerKm} KM.',
-                ),
-                validator: (value) {
-                  final parsed = int.tryParse((value ?? '').trim());
-                  if (parsed == null || parsed <= 0) {
-                    return 'Enter a positive odometer reading.';
-                  }
-                  if (parsed < widget.trip.vehicleOdometerKm) {
-                    return 'Reading cannot be below last recorded odometer.';
-                  }
-                  return null;
-                },
+                mode: OdometerScanMode.start,
+                referenceKm: widget.trip.vehicleOdometerKm,
+                onChanged: (snapshot) => setState(() => _odometer = snapshot),
               ),
               const SizedBox(height: 22),
               const Text(
@@ -230,7 +143,7 @@ class _PreRideInspectionScreenState
               ],
               const SizedBox(height: 22),
               FilledButton.icon(
-                onPressed: _submitting ? null : _submit,
+                onPressed: _submitting || !_odometer.canSubmit ? null : _submit,
                 icon: _submitting
                     ? const SizedBox(
                         width: 18,
@@ -249,73 +162,6 @@ class _PreRideInspectionScreenState
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _PhotoCaptureCard extends StatelessWidget {
-  const _PhotoCaptureCard({required this.photo, required this.onCapture});
-
-  final XFile? photo;
-  final VoidCallback onCapture;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onCapture,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        height: 190,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: photo == null
-                ? const Color(0xffd8e0dd)
-                : const Color(0xff0f766e),
-            width: photo == null ? 1 : 1.4,
-          ),
-        ),
-        child: photo == null
-            ? const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.photo_camera_outlined,
-                    size: 42,
-                    color: Color(0xff0f766e),
-                  ),
-                  SizedBox(height: 10),
-                  Text(
-                    'Tap to open camera',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Capture the starting odometer clearly.',
-                    style: TextStyle(color: Color(0xff64736f)),
-                  ),
-                ],
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(File(photo!.path), fit: BoxFit.cover),
-                  ),
-                  Positioned(
-                    right: 10,
-                    bottom: 10,
-                    child: FilledButton.tonalIcon(
-                      onPressed: onCapture,
-                      icon: const Icon(Icons.camera_alt),
-                      label: const Text('Retake Photo'),
-                    ),
-                  ),
-                ],
-              ),
       ),
     );
   }

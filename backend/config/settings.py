@@ -79,6 +79,10 @@ TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
+# Server-side odometer safeguards. Client OCR confidence is never authoritative.
+ODOMETER_MAX_START_DELTA_KM = int(os.getenv("ODOMETER_MAX_START_DELTA_KM", "500"))
+ODOMETER_MAX_TRIP_DELTA_KM = int(os.getenv("ODOMETER_MAX_TRIP_DELTA_KM", "1000"))
+
 STATIC_URL = "static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -164,5 +168,4 @@ AUTHENTICATION_BACKENDS = [
 # MakeMyTrip (Incabs) API Settings
 MAKEMYTRIP_MOCK_SERVER_URL = "https://private-7902fd-incabsapipartnerdocumentationv3.apiary-mock.com/tracking/pp2"
 MAKEMYTRIP_HEADERS = {}
-
 

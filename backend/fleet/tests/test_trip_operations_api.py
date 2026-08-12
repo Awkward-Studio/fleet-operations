@@ -1,8 +1,11 @@
 from datetime import timedelta
 from decimal import Decimal
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -16,20 +19,43 @@ from fleet.models import (
     RatePackage,
     Trip,
     TripLocationLog,
+    TripChecklist,
     TripStatus,
     Vehicle,
     VehicleStatus,
 )
+from accounts.models import UserRole
 from media_store.models import UploadedAsset
 
 
 class TripOperationsAPITest(APITestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._temporary_media = TemporaryDirectory()
+        cls._media_settings = override_settings(MEDIA_ROOT=cls._temporary_media.name)
+        cls._media_settings.enable()
+        try:
+            super().setUpClass()
+        except Exception:
+            cls._media_settings.disable()
+            cls._temporary_media.cleanup()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            super().tearDownClass()
+        finally:
+            cls._media_settings.disable()
+            cls._temporary_media.cleanup()
+
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
             username="driver-api",
             email="driver-api@example.com",
             password="driver123",
+            role=UserRole.DRIVER,
         )
         license_asset = UploadedAsset.objects.create(
             kind=UploadedAsset.KIND_IMAGE,
@@ -37,6 +63,7 @@ class TripOperationsAPITest(APITestCase):
             original_name="license.jpg",
             content_type="image/jpeg",
         )
+        self.evidence_asset = license_asset
         self.driver = Driver.objects.create(
             user=self.user,
             name="Driver API",
@@ -93,6 +120,48 @@ class TripOperationsAPITest(APITestCase):
             base_rate=Decimal("1200"),
         )
         self.client.force_authenticate(self.user)
+
+    def _odometer_provenance(self, reference_km, *, source="MANUAL", decision=None, override=False, reason=""):
+        payload = {
+            "reading_source": source,
+            "driver_confirmed": True,
+            "expected_reference_km": reference_km,
+            "client_version": "driver-app/test",
+            "odometer_override": override,
+            "odometer_override_reason": reason,
+        }
+        if decision is not None:
+            payload["client_ocr_decision"] = decision
+        return payload
+
+    def _submit_start(
+        self,
+        *,
+        reading=1005,
+        reference=1000,
+        key="start-helper",
+        source="MANUAL",
+        decision=None,
+        override=False,
+        reason="",
+        **extra,
+    ):
+        payload = {
+            "start_odometer_km": reading,
+            "start_odometer_asset_id": str(self.evidence_asset.id),
+            "idempotency_key": key,
+            **self._odometer_provenance(
+                reference,
+                source=source,
+                decision=decision,
+                override=override,
+                reason=reason,
+            ),
+            **extra,
+        }
+        return self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/checklist/", payload, format="json"
+        )
 
     def test_otp_generation_and_verification(self):
         response = self.client.post(
@@ -191,6 +260,7 @@ class TripOperationsAPITest(APITestCase):
                 "fuel_level_percent": 85,
                 "tire_pressure_ok": True,
                 "idempotency_key": "checklist-test-key",
+                **self._odometer_provenance(1000),
             },
             format="multipart",
         )
@@ -229,6 +299,7 @@ class TripOperationsAPITest(APITestCase):
                     content_type="image/jpeg",
                 ),
                 "idempotency_key": "complete-test-key",
+                **self._odometer_provenance(1005),
             },
             format="multipart",
         )
@@ -271,6 +342,7 @@ class TripOperationsAPITest(APITestCase):
                     content_type="image/jpeg",
                 ),
                 "idempotency_key": "equal-odo-checklist-key",
+                **self._odometer_provenance(1000),
             },
             format="multipart",
         )
@@ -286,10 +358,192 @@ class TripOperationsAPITest(APITestCase):
                     content_type="image/jpeg",
                 ),
                 "idempotency_key": "equal-odo-complete-key",
+                **self._odometer_provenance(1005),
             },
             format="multipart",
         )
         self.assertEqual(complete.status_code, 400)
+
+    def test_odometer_contract_requires_confirmation_and_consistent_ocr_provenance(self):
+        missing_confirmation = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/checklist/",
+            {
+                "start_odometer_km": 1005,
+                "start_odometer_asset_id": str(self.evidence_asset.id),
+                "reading_source": "MANUAL",
+                "expected_reference_km": 1000,
+                "client_version": "driver-app/test",
+            },
+            format="json",
+        )
+        self.assertEqual(missing_confirmation.status_code, 400)
+        self.assertIn("driver_confirmed", missing_confirmation.data)
+
+        inconsistent_ocr = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/checklist/",
+            {
+                "start_odometer_km": 1005,
+                "start_odometer_asset_id": str(self.evidence_asset.id),
+                **self._odometer_provenance(
+                    1000, source="OCR_CONFIRMED", decision="NEEDS_REVIEW"
+                ),
+            },
+            format="json",
+        )
+        self.assertEqual(inconsistent_ocr.status_code, 400)
+        self.assertIn("client_ocr_decision", inconsistent_ocr.data)
+        self.assertFalse(TripChecklist.objects.filter(trip=self.trip).exists())
+
+    def test_start_rejects_stale_reference_without_any_trip_mutation(self):
+        self.vehicle.odometer_km = 1002
+        self.vehicle.save(update_fields=["odometer_km"])
+
+        response = self._submit_start(reading=1005, reference=1000, key="stale-start")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "ODOMETER_REFERENCE_CONFLICT")
+        self.assertEqual(response.data["authoritative_reference_km"], 1002)
+        self.assertFalse(TripChecklist.objects.filter(trip=self.trip).exists())
+        self.trip.refresh_from_db()
+        self.vehicle.refresh_from_db()
+        self.driver.refresh_from_db()
+        self.assertEqual(self.trip.status, TripStatus.ASSIGNED)
+        self.assertEqual(self.vehicle.status, VehicleStatus.IDLE)
+        self.assertEqual(self.driver.status, DriverStatus.ASSIGNED)
+
+    def test_start_rejects_implausible_delta_and_unprivileged_override(self):
+        implausible = self._submit_start(reading=1501, key="implausible-start")
+        self.assertEqual(implausible.status_code, 400)
+        self.assertEqual(implausible.data["code"], "ODOMETER_PLAUSIBILITY_REJECTED")
+
+        unauthorized = self._submit_start(
+            reading=999,
+            key="unauthorized-override",
+            override=True,
+            reason="Verified maintenance replacement cluster.",
+        )
+        self.assertEqual(unauthorized.status_code, 403)
+        self.assertFalse(TripChecklist.objects.filter(trip=self.trip).exists())
+
+    def test_authorized_override_is_reasoned_and_audited(self):
+        self.user.role = UserRole.OPERATIONS_APPROVER
+        self.user.save(update_fields=["role"])
+        response = self._submit_start(
+            reading=999,
+            reference=998,
+            key="authorized-override",
+            override=True,
+            reason="Instrument cluster replaced after workshop repair.",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        checklist = TripChecklist.objects.get(trip=self.trip)
+        self.assertEqual(checklist.start_reading_source, "MANUAL")
+        self.assertTrue(checklist.start_driver_confirmed)
+        self.assertIsNotNone(checklist.start_confirmed_at)
+        self.assertEqual(checklist.start_expected_reference_km, 998)
+        self.assertEqual(checklist.start_client_version, "driver-app/test")
+        self.assertEqual(checklist.start_overridden_by, self.user)
+        self.assertIn("cluster replaced", checklist.start_override_reason)
+
+    def test_ocr_provenance_is_persisted_without_raw_recognizer_output(self):
+        response = self._submit_start(
+            source="OCR_CONFIRMED",
+            decision="ACCEPTED",
+        )
+        self.assertEqual(response.status_code, 201)
+        checklist = TripChecklist.objects.get(trip=self.trip)
+        self.assertEqual(checklist.start_reading_source, "OCR_CONFIRMED")
+        self.assertEqual(checklist.start_client_ocr_decision, "ACCEPTED")
+        serialized_keys = set(response.data.keys())
+        self.assertNotIn("raw_text", serialized_keys)
+        self.assertNotIn("confidence", serialized_keys)
+
+    def test_completion_rejects_stale_reference_without_partial_mutation(self):
+        self.assertEqual(self._submit_start().status_code, 201)
+        response = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/complete/",
+            {
+                "end_odometer_km": 1042,
+                "end_odometer_asset_id": str(self.evidence_asset.id),
+                "idempotency_key": "stale-complete",
+                **self._odometer_provenance(1004),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        checklist = TripChecklist.objects.get(trip=self.trip)
+        self.assertIsNone(checklist.end_odometer_km)
+        self.trip.refresh_from_db()
+        self.vehicle.refresh_from_db()
+        self.driver.refresh_from_db()
+        self.assertEqual(self.trip.status, TripStatus.EN_ROUTE_PICKUP)
+        self.assertEqual(self.vehicle.odometer_km, 1000)
+        self.assertEqual(self.driver.status, DriverStatus.ON_TRIP)
+
+    def test_completion_failure_rolls_back_asset_and_all_operational_state(self):
+        self.assertEqual(self._submit_start().status_code, 201)
+        asset_count = UploadedAsset.objects.count()
+        self.client.raise_request_exception = False
+        with patch(
+            "billing.services.CloseoutService.create_from_trip_completion",
+            side_effect=RuntimeError("forced closeout failure"),
+        ):
+            response = self.client.post(
+                f"/api/fleet/trips/{self.trip.id}/complete/",
+                {
+                    "end_odometer_km": 1042,
+                    "end_odometer_photo": SimpleUploadedFile(
+                        "rollback-end.jpg", b"rollback-photo", content_type="image/jpeg"
+                    ),
+                    "idempotency_key": "rollback-complete",
+                    **self._odometer_provenance(1005),
+                },
+                format="multipart",
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(UploadedAsset.objects.count(), asset_count)
+        checklist = TripChecklist.objects.get(trip=self.trip)
+        self.assertIsNone(checklist.end_odometer_km)
+        self.assertIsNone(checklist.end_odometer_asset_id)
+        self.assertIsNone(checklist.complete_idempotency_key)
+        self.trip.refresh_from_db()
+        self.vehicle.refresh_from_db()
+        self.driver.refresh_from_db()
+        self.assertEqual(self.trip.status, TripStatus.EN_ROUTE_PICKUP)
+        self.assertEqual(self.vehicle.status, VehicleStatus.EN_ROUTE_PICKUP)
+        self.assertEqual(self.vehicle.odometer_km, 1000)
+        self.assertEqual(self.driver.status, DriverStatus.ON_TRIP)
+
+    def test_idempotency_key_cannot_return_or_mutate_another_trip(self):
+        self.assertEqual(self._submit_start(key="trip-bound-key").status_code, 201)
+        other_trip = Trip.objects.create(
+            customer_name="Other passenger",
+            pickup_city="Delhi",
+            drop_city="Gurgaon",
+            pickup_at=timezone.now() + timedelta(hours=3),
+            estimated_drop_at=timezone.now() + timedelta(hours=5),
+            status=TripStatus.ASSIGNED,
+            vehicle=self.vehicle,
+            driver=self.driver,
+            fare_amount=1200,
+        )
+
+        response = self.client.post(
+            f"/api/fleet/trips/{other_trip.id}/checklist/",
+            {
+                "start_odometer_km": 1006,
+                "start_odometer_asset_id": str(self.evidence_asset.id),
+                "idempotency_key": "trip-bound-key",
+                **self._odometer_provenance(1000),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(TripChecklist.objects.filter(trip=other_trip).exists())
 
     def test_create_driver_with_email_and_password_creates_user(self):
         payload = {

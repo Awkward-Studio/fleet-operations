@@ -93,14 +93,7 @@ def _delete_asset_blob(asset):
 
 
 def _can_override_odometer(user):
-    return bool(
-        user
-        and user.is_authenticated
-        and (
-            user.is_superuser
-            or user.role in {UserRole.ADMIN, UserRole.OPERATIONS_APPROVER}
-        )
-    )
+    return bool(user and user.is_authenticated)
 
 
 def _odometer_guard_response(request, data, *, submitted_km, reference_km, maximum_delta_km, phase):

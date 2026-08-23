@@ -91,6 +91,14 @@ import {
   getRateBooks
 } from "@/lib/api";
 import { DocumentUpload } from "@/components/DocumentUpload";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 
 type Role = "admin" | "dispatcher" | "accountant";
@@ -215,7 +223,7 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
     [vehicles]
   );
 
-  // Dynamic filter lists for Trips Kanban Board
+  // Dynamic filter lists for the trips table
   const tripCities = useMemo(() => {
     const citiesSet = new Set<string>();
     trips.forEach((t) => {
@@ -1081,7 +1089,220 @@ function DashboardView({
   );
 }
 
-function TripsView(props: {
+type TripsViewProps = {
+  role: Role;
+  trips: Trip[];
+  onTransition: (tripId: number, status: string) => void;
+  setError?: (msg: string | null) => void;
+  unassignedTrips?: Trip[];
+  assignableVehicles?: Vehicle[];
+  availableDrivers?: Driver[];
+  selectedTrip?: number | null;
+  selectedVehicle?: number | null;
+  selectedDriver?: number | null;
+  onTripChange?: (value: number) => void;
+  onVehicleChange?: (value: number) => void;
+  onDriverChange?: (value: number) => void;
+  onAssign?: () => void;
+  onDelete?: (tripId: number) => void;
+  onViewDetails?: (tripId: number) => void;
+};
+
+function TripsView(props: TripsViewProps) {
+  return (
+    <div className="stack">
+      {props.unassignedTrips && props.unassignedTrips.length > 0 && (
+        <Panel title="Trip Dispatch" subtitle="Assign drivers to trips and manage live dispatches.">
+          <div className="form-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr auto", alignItems: "end", marginBottom: 12 }}>
+            <SelectField label="Trip" value={props.selectedTrip ?? ""} onChange={(value) => props.onTripChange?.(Number(value))}>
+              <option value="" disabled>Select trip</option>
+              {props.unassignedTrips.map((trip) => (
+                <option key={trip.id} value={trip.id}>
+                  {trip.pickup_city} to {trip.drop_city} {trip.distance_km ? `(${trip.distance_km} km)` : ""} - {trip.customer_name}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField label="Vehicle" value={props.selectedVehicle ?? ""} onChange={(value) => props.onVehicleChange?.(Number(value))}>
+              <option value="" disabled>Select vehicle</option>
+              {props.assignableVehicles?.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.registration_number} - {vehicle.category} - {vehicle.current_city}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField label="Driver" value={props.selectedDriver ?? ""} onChange={(value) => props.onDriverChange?.(Number(value))}>
+              <option value="" disabled>Select driver</option>
+              {props.availableDrivers?.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name} - {driver.home_base}
+                </option>
+              ))}
+            </SelectField>
+            <div className="actions inline-action">
+              <button className="button" type="button" onClick={props.onAssign} style={{ background: "var(--accent-strong)" }}>
+                <Navigation size={16} />
+                Assign Trip
+              </button>
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      <Panel
+        title="All Trips"
+        subtitle="Every booking in one operational view. Select a row to inspect the full trip record."
+        action={<span className="trip-table-count">{props.trips.length} {props.trips.length === 1 ? "trip" : "trips"}</span>}
+      >
+        <TripDataTable
+          trips={props.trips}
+          onTransition={props.onTransition}
+          onDelete={props.onDelete}
+          onViewDetails={props.onViewDetails}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function TripDataTable({
+  trips,
+  onTransition,
+  onDelete,
+  onViewDetails,
+}: {
+  trips: Trip[];
+  onTransition: (tripId: number, status: string) => void;
+  onDelete?: (tripId: number) => void;
+  onViewDetails?: (tripId: number) => void;
+}) {
+  return (
+    <div className="trip-table-shell">
+      <Table className="trips-data-table">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Customer</TableHead>
+            <TableHead>Passenger</TableHead>
+            <TableHead>Vehicle</TableHead>
+            <TableHead>Driver / Supplier</TableHead>
+            <TableHead>Duty type</TableHead>
+            <TableHead>Rep. address</TableHead>
+            <TableHead>City</TableHead>
+            <TableHead>Rep. time</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="trip-actions-head">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {trips.map((trip) => {
+            const customer = trip.customer_details?.display_name || trip.customer_display_name_snapshot || trip.ota_source || "Direct booking";
+            const passenger = trip.customer_name || "—";
+            const vehicle = trip.vehicle?.registration_number || "Unassigned";
+            const driver = trip.driver?.name || "Unassigned";
+
+            return (
+              <TableRow key={trip.id} onClick={() => onViewDetails?.(trip.id)} className="trip-data-row">
+                <TableCell>
+                  <div className="trip-date-cell">
+                    <strong>{formatTripDate(trip.pickup_at)}</strong>
+                    <span>{formatTripTime(trip.pickup_at)}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="trip-primary-cell">
+                    <strong>{customer}</strong>
+                    <span>{trip.ota_source || "Direct booking"}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="trip-primary-cell">
+                    <strong>{passenger}</strong>
+                    <span>{trip.customer_phone || "Passenger contact not added"}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="trip-primary-cell">
+                    <strong>{vehicle}</strong>
+                    <span>{trip.vehicle?.category || "Vehicle pending"}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="trip-primary-cell">
+                    <strong>{driver}</strong>
+                    <span>{trip.driver?.phone || "Supplier pending"}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <span className="duty-type-chip">{formatDutyType(trip.duty_type)}</span>
+                </TableCell>
+                <TableCell>
+                  <span className="trip-address-cell" title={trip.pickup_address || trip.pickup_city}>
+                    {trip.pickup_address || "Pickup address not added"}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <div className="trip-city-cell">
+                    <strong>{trip.pickup_city}</strong>
+                    <span>to {trip.drop_city}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <span className="trip-time-cell">
+                    <Clock size={14} />
+                    {formatTripTime(trip.pickup_at)}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <Status value={trip.status} />
+                </TableCell>
+                <TableCell onClick={(event) => event.stopPropagation()}>
+                  <div className="trip-row-actions">
+                    <button className="trip-view-button" type="button" onClick={() => onViewDetails?.(trip.id)}>
+                      View
+                    </button>
+                    <select
+                      value=""
+                      onChange={(event) => onTransition(trip.id, event.target.value)}
+                      aria-label={`Update ${trip.customer_name} status`}
+                      className="trip-status-select"
+                    >
+                      <option value="" disabled>Update</option>
+                      {tripTransitions.map((status) => (
+                        <option key={status} value={status}>{labelize(status)}</option>
+                      ))}
+                    </select>
+                    {onDelete ? (
+                      <button className="trip-delete-button" type="button" aria-label={`Delete trip ${trip.id}`} onClick={() => onDelete(trip.id)}>
+                        <Trash2 size={15} />
+                      </button>
+                    ) : null}
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+          {!trips.length ? (
+            <TableRow>
+              <TableCell colSpan={11}>
+                <div className="trip-table-empty">
+                  <Route size={22} />
+                  <strong>No trips match these filters</strong>
+                  <span>Try changing the search or filter selection.</span>
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : null}
+        </TableBody>
+      </Table>
+      <div className="trip-table-footer">
+        <span>Showing all {trips.length} filtered {trips.length === 1 ? "trip" : "trips"}</span>
+        <span className="trip-table-footer-note">Click any row to open trip details</span>
+      </div>
+    </div>
+  );
+}
+
+function KanbanTripsView(props: {
   role: Role;
   trips: Trip[];
   onTransition: (tripId: number, status: string) => void;
@@ -3123,7 +3344,7 @@ function Status({ value }: { value: string }) {
 function pageTitle(section: ConsoleSection) {
   const titles: Record<ConsoleSection, string> = {
     dashboard: "Operations Dashboard",
-    trips: "Trip Dispatch Board",
+    trips: "Trip Dispatch",
     "create-trip": "Create & Dispatch Trip",
     customers: "Corporate Customers",
     contracts: "Rate Contracts",
@@ -3144,7 +3365,7 @@ function pageTitle(section: ConsoleSection) {
 function pageSubtitle(section: ConsoleSection) {
   const subtitles: Record<ConsoleSection, string> = {
     dashboard: "A live view of fleet capacity, dispatch load, and operational exceptions",
-    trips: "View trip cards, filter dispatches, and transition trip statuses",
+    trips: "View every trip in a filterable operations table and transition statuses",
     "create-trip": "Create new OTA trips and assign drivers to pending dispatches",
     customers: "Maintain corporate accounts, billing identities, and primary contacts",
     contracts: "Manage versioned rate cards, package matrices, taxes, and allowances",
@@ -3171,6 +3392,37 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function formatTripDate(value: string) {
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatTripTime(value: string) {
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function formatDutyType(value?: string) {
+  if (!value) return "Package pending";
+  const labels: Record<string, string> = {
+    LOCAL_4HR_40KM: "Local · 4h / 40km",
+    LOCAL_8HR_80KM: "Local · 8h / 80km",
+    LOCAL_10HR_100KM: "Local · 10h / 100km",
+    LOCAL_12HR_120KM: "Local · 12h / 120km",
+    OUTSTATION: "Outstation",
+    AIRPORT_TRANSFER: "Airport transfer",
+    ONE_WAY: "One-way",
+    FULL_DAY: "Full day",
+    CUSTOM: "Custom package",
+  };
+  return labels[value] || labelize(value);
 }
 
 interface AutocompleteFieldProps {

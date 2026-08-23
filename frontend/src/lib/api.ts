@@ -49,9 +49,19 @@ export type Vehicle = {
 
 export type Trip = {
   id: number;
+  booking_type?: string;
+  duty_type?: string;
   customer_name: string;
+  customer_phone?: string;
+  customer_display_name_snapshot?: string;
+  customer_details?: {
+    display_name?: string;
+    legal_name?: string;
+  } | null;
   pickup_city: string;
   drop_city: string;
+  pickup_address?: string;
+  drop_address?: string;
   pickup_at: string;
   estimated_drop_at: string;
   status: string;

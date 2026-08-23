@@ -611,6 +611,234 @@ tbody tr:hover {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Trips data table */
+.trip-table-shell {
+  margin: 0 -20px -20px;
+}
+
+.trip-table-shell .table-wrap {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.trips-data-table {
+  min-width: 1480px;
+  table-layout: fixed;
+}
+
+.trips-data-table th:nth-child(1),
+.trips-data-table td:nth-child(1) { width: 92px; }
+.trips-data-table th:nth-child(2),
+.trips-data-table td:nth-child(2) { width: 170px; }
+.trips-data-table th:nth-child(3),
+.trips-data-table td:nth-child(3) { width: 170px; }
+.trips-data-table th:nth-child(4),
+.trips-data-table td:nth-child(4) { width: 145px; }
+.trips-data-table th:nth-child(5),
+.trips-data-table td:nth-child(5) { width: 165px; }
+.trips-data-table th:nth-child(6),
+.trips-data-table td:nth-child(6) { width: 150px; }
+.trips-data-table th:nth-child(7),
+.trips-data-table td:nth-child(7) { width: 185px; }
+.trips-data-table th:nth-child(8),
+.trips-data-table td:nth-child(8) { width: 105px; }
+.trips-data-table th:nth-child(9),
+.trips-data-table td:nth-child(9) { width: 105px; }
+.trips-data-table th:nth-child(10),
+.trips-data-table td:nth-child(10) { width: 122px; }
+.trips-data-table th:nth-child(11),
+.trips-data-table td:nth-child(11) { width: 190px; }
+
+.trips-data-table th,
+.trips-data-table td {
+  padding: 14px 12px;
+}
+
+.trips-data-table th:first-child,
+.trips-data-table td:first-child {
+  padding-left: 20px;
+}
+
+.trips-data-table th:last-child,
+.trips-data-table td:last-child {
+  padding-right: 20px;
+}
+
+.trips-data-table tbody tr:hover {
+  background: rgba(79, 70, 229, 0.08);
+}
+
+.trip-date-cell,
+.trip-primary-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trip-date-cell strong,
+.trip-primary-cell strong {
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trip-date-cell span,
+.trip-primary-cell span {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trip-date-cell strong {
+  color: #c7d2fe;
+  font-variant-numeric: tabular-nums;
+}
+
+.duty-type-chip {
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 5px;
+  color: #c7d2fe;
+  display: inline-flex;
+  font-size: 11px;
+  line-height: 1.3;
+  max-width: 132px;
+  padding: 5px 7px;
+}
+
+.trip-address-cell {
+  color: #cbd5e1;
+  display: block;
+  font-size: 12px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trip-city-cell {
+  display: grid;
+  gap: 3px;
+}
+
+.trip-city-cell strong {
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trip-city-cell span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trip-time-cell {
+  align-items: center;
+  color: #e2e8f0;
+  display: inline-flex;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.trip-time-cell svg {
+  color: var(--muted);
+}
+
+.trip-row-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.trip-view-button,
+.trip-status-select,
+.trip-delete-button {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 11px;
+  min-height: 30px;
+}
+
+.trip-view-button {
+  padding: 0 9px;
+}
+
+.trip-status-select {
+  max-width: 76px;
+  padding: 0 4px;
+}
+
+.trip-delete-button {
+  align-items: center;
+  color: var(--danger);
+  display: inline-flex;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.trip-view-button:hover,
+.trip-status-select:hover,
+.trip-delete-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.trip-table-count {
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 999px;
+  color: #c7d2fe;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.trip-table-footer {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  padding: 13px 20px;
+}
+
+.trip-table-footer-note {
+  color: #94a3b8;
+}
+
+.trip-table-empty {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  min-height: 180px;
+  text-align: center;
+}
+
+.trip-table-empty strong {
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.trip-table-empty span {
+  font-size: 12px;
+}
+
 /* Premium Status Pill Badges */
 .status {
   border-radius: 4px;

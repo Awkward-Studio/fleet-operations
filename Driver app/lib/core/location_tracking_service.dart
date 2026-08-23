@@ -16,7 +16,15 @@ import 'api_client.dart';
 const _trackingTripIdKey = 'activeLocationTrackingTripId';
 const _trackingLastLatitudeKey = 'activeLocationTrackingLastLatitude';
 const _trackingLastLongitudeKey = 'activeLocationTrackingLastLongitude';
+const _trackingLastTimeKey = 'activeLocationTrackingLastTime';
 const _trackingPollInterval = Duration(seconds: 30);
+
+class _CurrentTripLookup {
+  const _CurrentTripLookup({required this.succeeded, this.trip});
+
+  final bool succeeded;
+  final Map<String, dynamic>? trip;
+}
 
 class LocationTrackingService {
   const LocationTrackingService._();
@@ -28,9 +36,8 @@ class LocationTrackingService {
       final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
       const AndroidInitializationSettings initializationSettingsAndroid =
           AndroidInitializationSettings('@mipmap/ic_launcher');
-      const InitializationSettings initializationSettings = InitializationSettings(
-        android: initializationSettingsAndroid,
-      );
+      const InitializationSettings initializationSettings =
+          InitializationSettings(android: initializationSettingsAndroid);
       await flutterLocalNotificationsPlugin.initialize(
         settings: initializationSettings,
       );
@@ -44,12 +51,14 @@ class LocationTrackingService {
 
       await flutterLocalNotificationsPlugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.createNotificationChannel(channel);
 
       await flutterLocalNotificationsPlugin
           .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
+            AndroidFlutterLocalNotificationsPlugin
+          >()
           ?.requestNotificationsPermission();
     }
 
@@ -121,9 +130,15 @@ class LocationTrackingService {
     await prefs.remove(_trackingTripIdKey);
     await prefs.remove(_trackingLastLatitudeKey);
     await prefs.remove(_trackingLastLongitudeKey);
-    final service = FlutterBackgroundService();
-    if (await service.isRunning()) {
-      service.invoke('stopTracking');
+    await prefs.remove(_trackingLastTimeKey);
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      final service = FlutterBackgroundService();
+      if (await service.isRunning()) {
+        service.invoke('stopTracking');
+      }
+    } catch (error) {
+      debugPrint('Location tracking service stop failed: $error');
     }
   }
 
@@ -220,46 +235,66 @@ void locationTrackingServiceEntryPoint(ServiceInstance service) async {
     service.stopSelf();
   });
 
+  var pollInFlight = false;
   Timer.periodic(_trackingPollInterval, (timer) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final tripId = prefs.getInt(_trackingTripIdKey);
-    if (tripId == null) {
-      timer.cancel();
-      service.stopSelf();
-      return;
-    }
+    if (pollInFlight) return;
+    pollInFlight = true;
 
-    if (service is AndroidServiceInstance &&
-        await service.isForegroundService()) {
-      service.setForegroundNotificationInfo(
-        title: 'Live GPS Tracking Active',
-        content: 'Streaming trip #$tripId location to dispatch',
-      );
-    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final tripId = prefs.getInt(_trackingTripIdKey);
+      if (tripId == null) {
+        timer.cancel();
+        await service.stopSelf();
+        return;
+      }
 
-    final position = await _readPosition();
-    if (position == null) return;
+      final currentTrip = await _loadCurrentTrip();
+      if (currentTrip.succeeded &&
+          !_isActiveMatchingTrip(currentTrip.trip, tripId)) {
+        timer.cancel();
+        await _clearTrackingPrefs();
+        await service.stopSelf();
+        return;
+      }
 
-    final shouldPost = await _shouldPostPosition(prefs, position);
-    if (!shouldPost) return;
+      if (service is AndroidServiceInstance &&
+          await service.isForegroundService()) {
+        service.setForegroundNotificationInfo(
+          title: 'Live GPS Tracking Active',
+          content: 'Streaming trip #$tripId location to dispatch',
+        );
+      }
 
-    final posted = await _postLocation(tripId, position);
-    if (posted) {
-      await prefs.setDouble(_trackingLastLatitudeKey, position.latitude);
-      await prefs.setDouble(_trackingLastLongitudeKey, position.longitude);
-      await prefs.setInt('activeLocationTrackingLastTime', DateTime.now().millisecondsSinceEpoch);
-      service.invoke('trackingUpdate', {
-        'trip_id': tripId,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
+      final position = await _readPosition();
+      if (position == null) return;
+
+      final shouldPost = await _shouldPostPosition(prefs, position);
+      if (!shouldPost) return;
+
+      final posted = await _postLocation(tripId, position);
+      if (posted) {
+        await prefs.setDouble(_trackingLastLatitudeKey, position.latitude);
+        await prefs.setDouble(_trackingLastLongitudeKey, position.longitude);
+        await prefs.setInt(
+          _trackingLastTimeKey,
+          DateTime.now().millisecondsSinceEpoch,
+        );
+        service.invoke('trackingUpdate', {
+          'trip_id': tripId,
+          'timestamp': DateTime.now().toIso8601String(),
+        });
+      }
+    } finally {
+      pollInFlight = false;
     }
   });
 }
 
-Future<Map<String, dynamic>?> _loadCurrentTrip() async {
+Future<_CurrentTripLookup> _loadCurrentTrip() async {
   final token = await _accessToken();
-  if (token == null) return null;
+  if (token == null) return const _CurrentTripLookup(succeeded: true);
 
   try {
     final base = await ServerUrlStore.baseUrl;
@@ -270,12 +305,23 @@ Future<Map<String, dynamic>?> _loadCurrentTrip() async {
         'Authorization': 'Bearer $token',
       },
     );
-    if (response.statusCode < 200 || response.statusCode >= 300) return null;
-    if (response.body.isEmpty || response.body == 'null') return null;
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return const _CurrentTripLookup(succeeded: false);
+    }
+    if (response.body.isEmpty || response.body == 'null') {
+      return const _CurrentTripLookup(succeeded: true);
+    }
+    return _CurrentTripLookup(
+      succeeded: true,
+      trip: jsonDecode(response.body) as Map<String, dynamic>,
+    );
   } catch (_) {
-    return null;
+    return const _CurrentTripLookup(succeeded: false);
   }
+}
+
+bool _isActiveMatchingTrip(Map<String, dynamic>? trip, int tripId) {
+  return trip?['id'] == tripId && trip?['status'] == 'active';
 }
 
 Future<Position?> _readPosition() async {
@@ -293,7 +339,7 @@ Future<Position?> _readPosition() async {
           timeLimit: Duration(seconds: 5),
         ),
       );
-      if (current != null) return current;
+      return current;
     } catch (_) {
       // Timeout or background GPS delay
     }
@@ -308,7 +354,7 @@ Future<bool> _shouldPostPosition(
   SharedPreferences prefs,
   Position position,
 ) async {
-  final lastTimeMs = prefs.getInt('activeLocationTrackingLastTime') ?? 0;
+  final lastTimeMs = prefs.getInt(_trackingLastTimeKey) ?? 0;
   final nowMs = DateTime.now().millisecondsSinceEpoch;
   final elapsedMs = nowMs - lastTimeMs;
 
@@ -337,7 +383,8 @@ Future<bool> _postLocation(int tripId, Position position) async {
 
   final lat = double.parse(position.latitude.toStringAsFixed(6));
   final lng = double.parse(position.longitude.toStringAsFixed(6));
-  final speed = (position.speed.isNaN || position.speed.isInfinite || position.speed < 0)
+  final speed =
+      (position.speed.isNaN || position.speed.isInfinite || position.speed < 0)
       ? 0.0
       : double.parse((position.speed * 3.6).toStringAsFixed(2));
   final heading = (position.heading.isNaN || position.heading.isInfinite)
@@ -377,4 +424,5 @@ Future<void> _clearTrackingPrefs() async {
   await prefs.remove(_trackingTripIdKey);
   await prefs.remove(_trackingLastLatitudeKey);
   await prefs.remove(_trackingLastLongitudeKey);
+  await prefs.remove(_trackingLastTimeKey);
 }

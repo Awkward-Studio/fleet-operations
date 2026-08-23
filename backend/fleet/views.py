@@ -415,6 +415,16 @@ class TripViewSet(viewsets.ModelViewSet):
             if permission_error:
                 return permission_error
 
+        if trip.status not in [
+            TripStatus.EN_ROUTE_PICKUP,
+            TripStatus.ARRIVED_AT_PICKUP,
+            TripStatus.ACTIVE,
+        ]:
+            return Response(
+                {"detail": "Location streaming is only allowed for an in-progress trip."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         serializer = TripLocationLogSerializer(data=request.data)
         if not serializer.is_valid():
             print("=== LOCATION LOG SERIALIZER ERROR ===")

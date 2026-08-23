@@ -52,19 +52,27 @@ class ApiClient {
     return Uri.parse('$base/api$path');
   }
 
-  Future<http.Response> _safeNetworkCall(Future<http.Response> Function() call) async {
+  Future<http.Response> _safeNetworkCall(
+    Future<http.Response> Function() call,
+  ) async {
     try {
       return await call();
     } on SocketException catch (e) {
       final base = await ServerUrlStore.baseUrl;
-      throw Exception('Cannot connect to server at $base. Check host IP or server connection (${e.message}).');
+      throw Exception(
+        'Cannot connect to server at $base. Check host IP or server connection (${e.message}).',
+      );
     } on http.ClientException catch (e) {
       final base = await ServerUrlStore.baseUrl;
       throw Exception('Network error connecting to $base (${e.message}).');
     } catch (e) {
-      if (e.toString().contains('SocketException') || e.toString().contains('ClientException') || e.toString().contains('errno')) {
+      if (e.toString().contains('SocketException') ||
+          e.toString().contains('ClientException') ||
+          e.toString().contains('errno')) {
         final base = await ServerUrlStore.baseUrl;
-        throw Exception('Cannot connect to server at $base. Please check server IP or URL.');
+        throw Exception(
+          'Cannot connect to server at $base. Please check server IP or URL.',
+        );
       }
       rethrow;
     }
@@ -89,6 +97,11 @@ class ApiClient {
 
   Future<dynamic> get(String path) async {
     return decode(await _authorizedGet(path));
+  }
+
+  Future<bool> validateSession() async {
+    final response = await _authorizedGet('/fleet/drivers/me/');
+    return response.statusCode >= 200 && response.statusCode < 300;
   }
 
   Future<dynamic> post(String path, Map<String, dynamic> payload) async {
@@ -122,8 +135,7 @@ class ApiClient {
   }) async {
     final token = await TokenStore.accessToken;
     final uri = await _uri(path);
-    final request = http.MultipartRequest('POST', uri)
-      ..fields.addAll(fields);
+    final request = http.MultipartRequest('POST', uri)..fields.addAll(fields);
 
     for (final file in files) {
       request.files.add(

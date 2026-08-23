@@ -671,46 +671,36 @@ export function FleetConsole({ section }: { section: ConsoleSection }) {
                 <Metric 
                   icon={<Car size={16} />} 
                   label="TOTAL TRIPS" 
-                  value={summary?.trips.today ?? trips.length} 
-                  total="This month" 
-                  trend="18.2%" 
-                  trendUp={true} 
+                  value={trips.length}
+                  total="Loaded trips"
                   color="#3b82f6" 
                 />
                 <Metric 
                   icon={<Navigation size={16} />} 
                   label="EN ROUTE PICKUP" 
                   value={trips.filter((t) => t.status === "en_route_pickup").length} 
-                  total="In progress" 
-                  trend="Live"
-                  trendUp={true}
+                  total="Loaded trips"
                   color="#8b5cf6" 
                 />
                 <Metric 
                   icon={<RefreshCw size={16} />} 
                   label="ACTIVE" 
                   value={trips.filter((t) => t.status === "active").length} 
-                  total="On going" 
-                  trend="Live" 
-                  trendUp={true} 
+                  total="Loaded trips"
                   color="#3b82f6" 
                 />
                 <Metric 
                   icon={<CheckCircle size={16} />} 
                   label="COMPLETED" 
                   value={trips.filter((t) => t.status === "completed").length} 
-                  total="This month" 
-                  trend="25.6%" 
-                  trendUp={true} 
+                  total="Loaded trips"
                   color="#10b981" 
                 />
                 <Metric 
                   icon={<Ban size={16} />} 
                   label="CANCELLED" 
                   value={trips.filter((t) => t.status === "cancelled").length} 
-                  total="This month" 
-                  trend="12.5%" 
-                  trendUp={false} 
+                  total="Loaded trips"
                   color="#ef4444" 
                 />
               </section>

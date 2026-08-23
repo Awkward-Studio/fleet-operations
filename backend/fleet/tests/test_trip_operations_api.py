@@ -246,6 +246,24 @@ class TripOperationsAPITest(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data)
 
+    def test_location_rejects_completed_trip(self):
+        self.trip.status = TripStatus.COMPLETED
+        self.trip.save(update_fields=["status"])
+
+        response = self.client.post(
+            f"/api/fleet/trips/{self.trip.id}/location/",
+            {
+                "latitude": "28.48968000",
+                "longitude": "77.09224000",
+                "speed_kmh": 0,
+                "heading": 0,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(TripLocationLog.objects.filter(trip=self.trip).count(), 0)
+
     def test_checklist_location_and_completion_flow(self):
         checklist = self.client.post(
             f"/api/fleet/trips/{self.trip.id}/checklist/",

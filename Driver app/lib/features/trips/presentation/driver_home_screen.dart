@@ -25,6 +25,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
   int _currentIndex = 0;
 
   Future<void> _logout() async {
+    await LocationTrackingService.stop();
     await TokenStore.clear();
     widget.onLogout();
   }
@@ -37,7 +38,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
         data: (trip) {
           if (trip?.status == TripStatus.active) {
             LocationTrackingService.ensureTrackingForActiveTrip(context, trip);
-          } else if (trip?.status == TripStatus.completed || trip?.status == TripStatus.cancelled) {
+          } else {
             LocationTrackingService.stop();
           }
         },
@@ -51,7 +52,9 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_currentIndex == 0 ? 'Driver Dashboard' : 'Log Fuel Purchase'),
+        title: Text(
+          _currentIndex == 0 ? 'Driver Dashboard' : 'Log Fuel Purchase',
+        ),
         actions: [
           if (_currentIndex == 0)
             IconButton(
@@ -96,7 +99,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
               ),
             ),
           ),
-          
+
           // Fuel Tab
           const FuelLoggingScreen(),
         ],
@@ -107,10 +110,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
         selectedItemColor: const Color(0xff0f766e),
         unselectedItemColor: Colors.black54,
         items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.route),
-            label: 'Trips',
-          ),
+          BottomNavigationBarItem(icon: Icon(Icons.route), label: 'Trips'),
           BottomNavigationBarItem(
             icon: Icon(Icons.local_gas_station),
             label: 'Fuel',
@@ -221,7 +221,8 @@ class ActiveTripCard extends ConsumerWidget {
               ],
             ),
           ),
-          if (trip.status == TripStatus.active || trip.status == TripStatus.enRoutePickup) ...[
+          if (trip.status == TripStatus.active ||
+              trip.status == TripStatus.enRoutePickup) ...[
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -291,7 +292,10 @@ class ActiveTripCard extends ConsumerWidget {
                       builder: (_) => TripDetailsModal(trip: trip),
                     );
                   },
-                  icon: const Icon(Icons.info_outline, color: Color(0xff0f766e)),
+                  icon: const Icon(
+                    Icons.info_outline,
+                    color: Color(0xff0f766e),
+                  ),
                   label: const Text(
                     'View Trip Details',
                     style: TextStyle(
@@ -353,7 +357,8 @@ class ActiveTripCard extends ConsumerWidget {
                                   nextTrip?.status == TripStatus.active) {
                                 await Navigator.of(context).push<bool>(
                                   MaterialPageRoute(
-                                    builder: (_) => EndRideScreen(trip: nextTrip!),
+                                    builder: (_) =>
+                                        EndRideScreen(trip: nextTrip!),
                                   ),
                                 );
                               }
@@ -377,7 +382,8 @@ class ActiveTripCard extends ConsumerWidget {
                                   nextTrip?.status == TripStatus.active) {
                                 await Navigator.of(context).push<bool>(
                                   MaterialPageRoute(
-                                    builder: (_) => EndRideScreen(trip: nextTrip!),
+                                    builder: (_) =>
+                                        EndRideScreen(trip: nextTrip!),
                                   ),
                                 );
                               }

@@ -55,21 +55,68 @@ class SessionGate extends StatefulWidget {
   State<SessionGate> createState() => _SessionGateState();
 }
 
-class _SessionGateState extends State<SessionGate> {
+class _SessionGateState extends State<SessionGate> with WidgetsBindingObserver {
   bool _checking = true;
   bool _authenticated = false;
+  bool _restoring = false;
+  final _api = ApiClient();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _restoreSession();
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _restoreSession();
+    }
+  }
+
   Future<void> _restoreSession() async {
-    final token = await TokenStore.accessToken;
+    if (_restoring) return;
+    _restoring = true;
+
+    try {
+      final token = await TokenStore.accessToken;
+      if (token == null || token.trim().isEmpty) {
+        await TokenStore.clear();
+        await LocationTrackingService.stop();
+        _setSession(false);
+        return;
+      }
+
+      try {
+        final valid = await _api.validateSession();
+        if (!valid) {
+          await TokenStore.clear();
+          await LocationTrackingService.stop();
+          _setSession(false);
+          return;
+        }
+        _setSession(true);
+      } catch (_) {
+        // A stored token is not enough to grant access when its server-side
+        // status cannot be verified. Keep it for a retry, but show only login.
+        _setSession(false);
+      }
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  void _setSession(bool authenticated) {
     if (!mounted) return;
     setState(() {
-      _authenticated = token != null && token.isNotEmpty;
+      _authenticated = authenticated;
       _checking = false;
     });
   }
@@ -353,10 +400,15 @@ class _LoginPageState extends State<LoginPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   InkWell(
-                    onTap: () => setState(() => _showServerConfig = !_showServerConfig),
+                    onTap: () =>
+                        setState(() => _showServerConfig = !_showServerConfig),
                     child: Row(
                       children: [
-                        const Icon(Icons.dns_outlined, color: Color(0xff0f766e), size: 20),
+                        const Icon(
+                          Icons.dns_outlined,
+                          color: Color(0xff0f766e),
+                          size: 20,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -370,7 +422,9 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                         Icon(
-                          _showServerConfig ? Icons.expand_less : Icons.edit_outlined,
+                          _showServerConfig
+                              ? Icons.expand_less
+                              : Icons.edit_outlined,
                           color: const Color(0xff0f766e),
                           size: 18,
                         ),
@@ -383,7 +437,8 @@ class _LoginPageState extends State<LoginPage> {
                       controller: _serverUrl,
                       decoration: const InputDecoration(
                         labelText: 'Backend Server URL / IP',
-                        hintText: 'e.g. http://10.0.2.2:8000 or http://192.168.1.34:8000',
+                        hintText:
+                            'e.g. http://10.0.2.2:8000 or http://192.168.1.34:8000',
                         prefixIcon: Icon(Icons.link_outlined),
                       ),
                       style: const TextStyle(fontSize: 14),
@@ -395,16 +450,31 @@ class _LoginPageState extends State<LoginPage> {
                       runSpacing: 4,
                       children: [
                         ActionChip(
-                          label: const Text('10.0.2.2 (Emulator)', style: TextStyle(fontSize: 11)),
-                          onPressed: () => setState(() => _serverUrl.text = 'http://10.0.2.2:8000'),
+                          label: const Text(
+                            '10.0.2.2 (Emulator)',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          onPressed: () => setState(
+                            () => _serverUrl.text = 'http://10.0.2.2:8000',
+                          ),
                         ),
                         ActionChip(
-                          label: const Text('192.168.1.34 (LAN)', style: TextStyle(fontSize: 11)),
-                          onPressed: () => setState(() => _serverUrl.text = 'http://192.168.1.34:8000'),
+                          label: const Text(
+                            '192.168.1.34 (LAN)',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          onPressed: () => setState(
+                            () => _serverUrl.text = 'http://192.168.1.34:8000',
+                          ),
                         ),
                         ActionChip(
-                          label: const Text('omihome.local (mDNS)', style: TextStyle(fontSize: 11)),
-                          onPressed: () => setState(() => _serverUrl.text = 'http://omihome.local:8000'),
+                          label: const Text(
+                            'omihome.local (mDNS)',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          onPressed: () => setState(
+                            () => _serverUrl.text = 'http://omihome.local:8000',
+                          ),
                         ),
                       ],
                     ),
